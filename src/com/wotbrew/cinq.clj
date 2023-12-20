@@ -258,11 +258,11 @@
 (defn unique-col-map [rel]
   (reduce-kv
     (fn [m i col]
-               (if (m col)
-                 (assoc m (keyword "cinq" (str "col" (count m))) i)
-                 (assoc m col i)))
-             {}
-             (columns rel)))
+      (if (m col)
+        (assoc m (keyword "cinq" (str "col" (count m))) i)
+        (assoc m col i)))
+    {}
+    (columns rel)))
 
 (defn maps
   ([rel] (maps (unique-col-map rel) rel))
@@ -291,8 +291,8 @@
   (let [customers [{:id 0, :firstname "fred"}
                    {:id 1, :firstname "bob"}]]
     (q [c customers]
-      {:select
-       [c:id .
-        c:firstname .]}))
+       {:select
+        [c:id .
+         c:firstname .]}))
 
   )
