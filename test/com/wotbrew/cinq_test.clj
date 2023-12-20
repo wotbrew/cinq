@@ -38,4 +38,22 @@
       (-> customers
           (scan [:firstname :lastname])
           (where (fn [{ln 1}] (= ln "Doe"))))
-      [["Jane" "Doe"]])))
+      [["Jane" "Doe"]]
+
+
+      (q [c customers])
+      (map vector customers)
+
+      (q [c customers :where (= c:customer-id 0)])
+      [[{:customer-id 0, :firstname "Jane", :lastname "Doe"}]]
+
+
+      (q [c customers :where (= c:customer-id 0)]
+         {:select [c:firstname .]})
+      [["Jane"]]
+
+      (q [c customers :where (= c:customer-id 0)]
+         {:select [firstname c:firstname, id (:customer-id c)]})
+      [["Jane" 0]]
+
+      )))

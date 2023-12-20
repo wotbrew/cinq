@@ -1,4 +1,8 @@
 (ns com.wotbrew.cinq
+  (:require [clojure.pprint :as pp]
+            [clojure.set :as set]
+            [clojure.string :as str]
+            [clojure.walk :as walk])
   (:import (java.util ArrayList HashMap)))
 
 (defprotocol Relation
@@ -119,3 +123,176 @@
       (map tuple-f x)
       {`tuple-seq identity
        `columns (constantly (vec cols))})))
+
+(defn parse [[_ selection {select-binding :select
+                           order-by-binding :order-by
+                           limit-count :limit}]]
+  (letfn [(add-name [[names arity] binding]
+            [(assoc names binding arity) (inc arity)])
+          (plan-op
+            ([env op arg] (plan-op env op arg false))
+            ([env op arg first-op]
+             (case op
+               :from
+               (let [[binding x] arg]
+                 (if first-op
+                   (if (= {} binding)
+                     [env (list `scan [nil] [])]
+                     (do
+                       (assert (symbol? binding))
+                       [(add-name env binding) (list `scan x [:cinq/self])]))
+                   (plan-op env :join [binding x])))
+               :let
+               (let [bindings (partition 2 (destructure arg))
+                     rf (fn [[env fns] [binding expr]]
+                          [(add-name env binding) (conj fns (lambda env expr))])
+                     [env fns] (reduce rf [env []] bindings)]
+                 [env (list* `add fns)])
+               (:join :left-join)
+               (let [[binding expr & conditions] arg
+                     where-clause
+                     (case (count conditions)
+                       0 true
+                       1 (first conditions)
+                       (list* 'and conditions))]
+                 (if (= {} binding)
+                   [(add-name env binding)
+                    (list
+                      (case op
+                        :join `nested-loop-join
+                        :left-join `nested-loop-left-join)
+                      1
+                      (lambda env `(-> (scan ~expr [])
+                                       (where ~(lambda [{} 0] where-clause)))))]
+                   (do
+                     (assert (symbol? binding))
+                     [(add-name env binding)
+                      (list
+                        (case op
+                          :join `nested-loop-join
+                          :left-join `nested-loop-left-join)
+                        1
+                        (lambda env `(-> (scan ~expr [:cinq/self])
+                                         (where ~(lambda (add-name [{} 0] binding) where-clause)))))])))
+               :where
+               (let [expr arg]
+                 [env (list `where (lambda env expr))])
+               (if (keyword? op)
+                 (throw (ex-info "Unknown operation" {}))
+                 (plan-op env :from [op arg] first-op)))))
+
+          (plan-projection [env binding expr]
+            (if (= '. expr)
+              (if (lookup-sym? binding)
+                (let [[kw :as kw-lookup] (parse-lookup-sym binding)]
+                  (do
+                    (when-not (symbol? binding) (throw (ex-info "Automatic bindings are only supported if the binding is a symbol" {})))
+                    [(add-name env (symbol (name kw))) kw-lookup])))
+              [(add-name env binding) expr]))
+
+          (lookup-sym? [x]
+            (and (symbol? x)
+                 (= nil (namespace x))
+                 (str/includes? (name x) ":")))
+
+          (parse-lookup-sym [sym]
+            (let [[part-a part-b :as parts] (str/split (name sym) #":")]
+              (if (= 2 (count parts))
+                (list (keyword part-b) (symbol part-a))
+                (throw (ex-info "Invalid lookup sym" {})))))
+
+          (desugar [form]
+            (walk/postwalk (fn [x] (if (lookup-sym? x) (parse-lookup-sym x) x)) form))
+
+          (lambda [env expr]
+            (list `fn [(first env)] (desugar expr)))]
+    (let [selection (or (not-empty selection) [{} [nil]])
+
+          [selection-env selection-plan]
+          (reduce (fn [[env plan] [op arg]]
+                    (let [[new-env plan-form] (plan-op env op arg (= 0 (count plan)))]
+                      [new-env (conj plan plan-form)]))
+                  [[{} 0] []]
+                  (partition 2 selection))
+
+          [projection-env projection]
+          (if select-binding
+            (reduce (fn [[env proj] [binding expr]]
+                      (let [[new-env expr] (plan-projection env binding (desugar expr))]
+                        [new-env (conj proj (lambda selection-env expr))]))
+                    [selection-env []]
+                    (partition 2 select-binding))
+            [selection-env []])
+
+          projection-plan
+          (if (seq projection)
+            (conj selection-plan (list* `add projection))
+            selection-plan)
+
+          projection-vec (vec (range (second selection-env) (second projection-env)))
+          inverse-names (set/map-invert (first projection-env))]
+      {:names (if select-binding
+                (mapv (comp keyword inverse-names) projection-vec)
+                (mapv (comp keyword key) (sort-by val (first projection-env))))
+       :plan
+       (list* '->
+              (concat projection-plan
+                      (when order-by-binding
+                        [(list* `order (for [[expr dir] order-by-binding] [(lambda projection-env expr) dir]))])
+                      (when limit-count
+                        [(list `limit limit-count)])
+                      (when select-binding
+                        [(list* `select (map (fn [i] (lambda projection-env (inverse-names i))) projection-vec))])))})))
+
+(defmacro q
+  ([selection] `(q ~selection {}))
+  ([selection {:keys [select order-by limit]}]
+   (let [{:keys [names, plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])]
+     `(let [plan# ~plan]
+        (with-meta
+          plan#
+          {`columns (constantly ~names),
+           `tuple-seq (fn [_#] (tuple-seq plan#))
+           :type ::results})))))
+
+(defn unique-col-map [rel]
+  (reduce-kv
+    (fn [m i col]
+               (if (m col)
+                 (assoc m (keyword "cinq" (str "col" (count m))) i)
+                 (assoc m col i)))
+             {}
+             (columns rel)))
+
+(defn maps
+  ([rel] (maps (unique-col-map rel) rel))
+  ([col-map rel]
+   (map (fn [t] (update-vals col-map t)) rel)))
+
+(defmethod print-method ::results [o w]
+  (binding [*out* w]
+    (let [col-map (unique-col-map o)]
+      (pp/print-table (keys col-map) (maps col-map o)))))
+
+(comment
+
+  (parse '(q [n [1 2 3]]))
+  (parse '(q [n [1 2 3] :where (even? n)]))
+
+  (q [n [1 2 3]])
+  (q [n [1 2 3] :where (even? n)])
+
+  (parse '(q [c customers]))
+  (parse '(q [c customers :where (= c:customer-id 42)]))
+  (parse '(q [c customers :join [o orders (= o:customer-id c:customer-id)]]))
+
+  (q [c customers])
+
+  (let [customers [{:id 0, :firstname "fred"}
+                   {:id 1, :firstname "bob"}]]
+    (q [c customers]
+      {:select
+       [c:id .
+        c:firstname .]}))
+
+  )
