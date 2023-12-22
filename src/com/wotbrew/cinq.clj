@@ -39,6 +39,16 @@
     {`tuple-seq identity
      `columns (constantly (into (columns rel) (repeat added-col-count :cinq/anon)))}))
 
+(defn join [left right pred]
+  (with-meta
+    (for [l (tuple-seq left)
+          r (tuple-seq right)
+          :let [t (join-tuples l r)]
+          :when (pred t)]
+      t)
+    {`tuple-seq identity
+     `columns (constantly (into (columns left) (columns right)))}))
+
 (defn hash-equi-join
   [build
    build-key-fn
@@ -95,6 +105,16 @@
       (join-tuples l r added-col-count))
     {`tuple-seq identity
      `columns (constantly (into (columns rel) (repeat added-col-count :cinq/anon)))}))
+
+(defn left-join [left right pred]
+  (let [n (arity right)]
+    (with-meta
+      (for [l (tuple-seq left)
+            :let [rs (filter pred (map #(join-tuples l %) (tuple-seq right)))]
+            t (if (seq rs) rs [(into l (repeat n nil))])]
+        t)
+      {`tuple-seq identity
+       `columns (constantly (into (columns left) (columns right)))})))
 
 (defn where [rel f]
   (with-meta (lazy-seq (filter f (tuple-seq rel))) (meta rel)))

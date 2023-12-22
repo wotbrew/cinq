@@ -22,7 +22,7 @@
   (->> (tree-seq seqable? seq form)
        (filter symbol?)
        (remove namespace)
-       (remove *rw-env*)
+       (remove (or *rw-env* {}))
        (remove (if *rw-ns* #(ns-resolve *rw-ns* %) (constantly false)))))
 
 (defn arity [rel-form]
@@ -30,6 +30,12 @@
 
     (com.wotbrew.cinq/scan _ ?cols)
     (count ?cols)
+
+    (com.wotbrew.cinq/join ?left ?right _)
+    (+ (arity ?left) (arity ?right))
+
+    (com.wotbrew.cinq/left-join ?left ?right _)
+    (+ (arity ?left) (arity ?right))
 
     (com.wotbrew.cinq/dependent-join ?left ?added-col-count _)
     (+ (arity ?left) ?added-col-count)
@@ -54,7 +60,7 @@
 
     ))
 
-(def r-pass0
+(def pass0-rule
   (r/match
     ;; apply ->
     (-> & ?rest)
@@ -72,10 +78,10 @@
           used-syms (into #{} (filter symbol?) (tree-seq seqable? seq body))]
       (list `fn [(into {} (for [[s o] ?arg :when (used-syms (arg-smap s))] [(arg-smap s) o]))] body))))
 
-(def pass0
-  (r/bottom-up (r/attempt r-pass0)))
+(def pass0-strategy
+  (r/bottom-up (r/attempt pass0-rule)))
 
-(def r-pass1
+(def fusion-rule
   (r/match
 
     ;; fuse select into select*
@@ -140,13 +146,57 @@
 
       `(com.wotbrew.cinq/select* ~?rel ~?select-count (fn [~?add-arg] (let ~let-binding ~?select-expr))))))
 
-(def pass1
-  (r/fix (r/bottom-up (r/attempt r-pass1))))
+(def fusion-strategy
+  (r/fix (r/bottom-up (r/attempt fusion-rule))))
+
+(def join-rule-alpha
+  (r/match
+
+    ;; decor 0
+    (m/and
+
+      (com.wotbrew.cinq/dependent-join
+        ?left
+        ?n-cols
+        (clojure.core/fn [?args]
+          (com.wotbrew.cinq/where
+            ?right
+            (clojure.core/fn [?pred-args] ?pred-expr))))
+
+      (m/guard
+        (not-any? ?args (free-variables ?right))))
+
+    (let [left-arity (arity ?left)]
+      `(com.wotbrew.cinq/join
+         ~?left
+         ~?right
+         (fn [~(merge ?args (update-vals ?pred-args #(+ % left-arity)))] ~?pred-expr)))
+
+    #_
+    (com.wotbrew.cinq/dependent-join
+      ?left
+      ?n-cols
+      (clojure.core/fn [?args]
+        ?rel2))))
+
+(def join-strategy
+  (r/bottom-up (r/attempt join-rule-alpha)))
+
+(def where-rules
+  (r/match
+    (com.wotbrew.cinq/where ?rel (clojure.core/fn [_] true))
+    ?rel))
+
+(def where-strategy
+  (r/fix (r/bottom-up (r/attempt where-rules))))
 
 (defn rewrite [env ns plan]
-  (binding [*rw-env* env
+  (binding [*rw-env* (or env {})
             *rw-ns* ns
             *gensym-counter* (atom -1)]
     (-> plan
-        pass0
-        pass1)))
+        pass0-strategy
+        join-strategy
+        where-strategy
+        fusion-strategy
+        (->> (walk/postwalk (fn [x] (if (seq? x) (doall x) x)))))))

@@ -24,6 +24,47 @@
     (scan nil []) true
     (where (scan nil []) (fn [_])) true))
 
+(deftest join-test
+  (are [x expected] (= expected x)
+
+    (q [a []
+        b []])
+    []
+
+    (q [a [1]
+        b []])
+    []
+
+    (q [a [1]
+        b [1]])
+    [[1, 1]]
+
+    (q [a [1]
+        b [1, 2]])
+    [[1, 1] [1, 2]]
+
+    (q [a [1]
+        :join [b []]])
+    []
+
+    (q [a [1]
+        :join [b [1, 2] (= a b)]])
+    [[1, 1]]
+
+    (q [a [1]
+        :left-join [b []]])
+    [[1, nil]]
+
+    (q [a [1]
+        :left-join [b [1]]])
+    [[1, 1]]
+
+    (q [a [1]
+        :left-join [b [1] (not= a b)]])
+    [[1, nil]]
+
+    ))
+
 (deftest customers-example
   (let [customers [{:customer-id 0, :firstname "Jane", :lastname "Doe"}
                    {:customer-id 1, :firstname "John", :lastname "Smith"}]]
