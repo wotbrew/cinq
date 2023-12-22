@@ -2,7 +2,8 @@
   (:require [clojure.pprint :as pp]
             [clojure.set :as set]
             [clojure.string :as str]
-            [clojure.walk :as walk])
+            [clojure.walk :as walk]
+            [com.wotbrew.cinq.rewrite :refer [rewrite]])
   (:import (java.util ArrayList HashMap)))
 
 (defprotocol Relation
@@ -17,10 +18,20 @@
 
 (defn arity [rel] (count (columns rel)))
 
-(defn- join-tuples [l r added-col-count]
-  (into l (take added-col-count) (concat r (repeat nil))))
+(defn- join-tuples
+  ([l r] (into l r))
+  ([l r added-col-count]
+   (into l (take added-col-count) (concat r (repeat nil)))))
 
-(defn nested-loop-join [rel added-col-count f]
+(defn product [rel1 rel2]
+  (with-meta
+    (for [l (tuple-seq rel1)
+          r (tuple-seq rel2)]
+      (join-tuples l r))
+    {`tuple-seq identity
+     `columns (constantly (into (columns rel1) (columns rel2)))}))
+
+(defn dependent-join [rel added-col-count f]
   (with-meta
     (for [l (tuple-seq rel)
           r (tuple-seq (f l))]
@@ -76,7 +87,7 @@
         {`tuple-seq identity
          `columns (constantly (into (columns probe) (repeat added-col-count :cinq/anon)))})))
 
-(defn nested-loop-left-join [rel added-col-count f]
+(defn dependent-left-join [rel added-col-count f]
   (with-meta
     (for [l (tuple-seq rel)
           :let [rs (tuple-seq (f l))]
@@ -110,12 +121,28 @@
       {`tuple-seq identity
        `columns (constantly (into (columns rel) (repeat (count fns) :cinq/anon)))})))
 
+(defn add* [rel added-col-count f]
+  (with-meta
+    (lazy-seq (map #(join-tuples % (f %) added-col-count) (tuple-seq rel)))
+    {`tuple-seq identity
+     `columns (constantly (into (columns rel) (repeat added-col-count :cinq/anon)))}))
+
 (defn select [rel & fns]
   (let [f (if (seq fns) (apply juxt fns) (constantly []))]
     (with-meta
       (lazy-seq (map f (tuple-seq rel)))
       {`tuple-seq identity
        `columns (constantly (vec (repeat (count fns) :cinq/anon)))})))
+
+(defn ensure-tuple [v col-count]
+  (assert (= col-count (count v)))
+  v)
+
+(defn select* [rel col-count f]
+  (with-meta
+    (lazy-seq (map #(ensure-tuple (f %) col-count) (tuple-seq rel)))
+    {`tuple-seq identity
+     `columns (constantly (vec (repeat col-count :cinq/anon)))}))
 
 (defn scan [x cols]
   (let [tuple-f (if (seq cols) (apply juxt (map (fn [col] (if (= :cinq/self col) identity col)) cols)) (constantly []))]
@@ -138,9 +165,11 @@
                  (if first-op
                    (if (= {} binding)
                      [env (list `scan [nil] [])]
-                     (do
-                       (assert (symbol? binding))
-                       [(add-name env binding) (list `scan x [:cinq/self])]))
+                     (cond
+                       (symbol? binding)
+                       [(add-name env binding) (list `scan (desugar x) [:cinq/self])]
+
+                       :else (throw (ex-info "Unsupported binding form" {}))))
                    (plan-op env :join [binding x])))
                :let
                (let [bindings (partition 2 (destructure arg))
@@ -148,6 +177,7 @@
                           [(add-name env binding) (conj fns (lambda env expr))])
                      [env fns] (reduce rf [env []] bindings)]
                  [env (list* `add fns)])
+
                (:join :left-join)
                (let [[binding expr & conditions] arg
                      where-clause
@@ -155,25 +185,16 @@
                        0 true
                        1 (first conditions)
                        (list* 'and conditions))]
-                 (if (= {} binding)
+                 (do
+                   (assert (symbol? binding))
                    [(add-name env binding)
                     (list
                       (case op
-                        :join `nested-loop-join
-                        :left-join `nested-loop-left-join)
+                        :join `dependent-join
+                        :left-join `dependent-left-join)
                       1
-                      (lambda env `(-> (scan ~expr [])
-                                       (where ~(lambda [{} 0] where-clause)))))]
-                   (do
-                     (assert (symbol? binding))
-                     [(add-name env binding)
-                      (list
-                        (case op
-                          :join `nested-loop-join
-                          :left-join `nested-loop-left-join)
-                        1
-                        (lambda env `(-> (scan ~expr [:cinq/self])
-                                         (where ~(lambda (add-name [{} 0] binding) where-clause)))))])))
+                      (lambda env `(-> (scan ~(desugar expr) [:cinq/self])
+                                       (where ~(lambda (add-name [{} 0] binding) where-clause)))))]))
                :where
                (let [expr arg]
                  [env (list `where (lambda env expr))])
@@ -187,7 +208,8 @@
                 (let [[kw :as kw-lookup] (parse-lookup-sym binding)]
                   (do
                     (when-not (symbol? binding) (throw (ex-info "Automatic bindings are only supported if the binding is a symbol" {})))
-                    [(add-name env (symbol (name kw))) kw-lookup])))
+                    [(add-name env (symbol (name kw))) kw-lookup]))
+                [(add-name env binding) binding])
               [(add-name env binding) expr]))
 
           (lookup-sym? [x]
@@ -247,13 +269,21 @@
 (defmacro q
   ([selection] `(q ~selection {}))
   ([selection {:keys [select order-by limit]}]
-   (let [{:keys [names, plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])]
+   (let [{:keys [names, plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])
+         plan (rewrite &env *ns* plan)]
      `(let [plan# ~plan]
         (with-meta
           plan#
           {`columns (constantly ~names),
            `tuple-seq (fn [_#] (tuple-seq plan#))
            :type ::results})))))
+
+(defmacro qp
+  ([selection] `(qp ~selection {}))
+  ([selection {:keys [select order-by limit]}]
+   (let [{:keys [plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])
+         plan (rewrite &env *ns* plan)]
+     (list `quote plan))))
 
 (defn unique-col-map [rel]
   (reduce-kv
@@ -280,6 +310,7 @@
   (parse '(q [n [1 2 3] :where (even? n)]))
 
   (q [n [1 2 3]])
+  (q [n [1 2 3] n2 [1]])
   (q [n [1 2 3] :where (even? n)])
 
   (parse '(q [c customers]))
@@ -289,10 +320,37 @@
   (q [c customers])
 
   (let [customers [{:id 0, :firstname "fred"}
-                   {:id 1, :firstname "bob"}]]
-    (q [c customers]
+                   {:id 1, :firstname "bob"}]
+        orders [{:customer-id 0, :items {"EGG" 2, "BREAD" 1}}]
+        products [{:sku "EGG", :price 3.14M}, {:sku "BREAD", :price 1.49M}]]
+
+    ;; this works
+    (qp [o orders
+        :join [c customers (= o:customer-id c:id)]
+        oi o:items
+        :let [[sku qty] oi]
+        :join [p products (= p:sku sku)]]
        {:select
-        [c:id .
-         c:firstname .]}))
+        [customer-id c:id
+         c:firstname .
+         sku .
+         qty .
+         unit-price p:price
+         price (* p:price qty)]})
+
+    ;; however destructuring should work
+    #_(q [o orders
+          :join [c customers (= o:customer-id c:id)]
+          [sku qty] o:items
+          :join [p products (= p:sku sku)]]
+         {:select
+          [customer-id c:id
+           c:firstname .
+           sku .
+           qty .
+           unit-price p:price
+           price (* p:price qty)]})
+
+    )
 
   )

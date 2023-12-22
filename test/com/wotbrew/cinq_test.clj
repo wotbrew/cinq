@@ -9,7 +9,7 @@
     (scan nil [:foo]) 1
     (scan nil [:foo, :bar]) 2
 
-    (nested-loop-join (scan nil [:foo]) 2 (fn [_])) 3))
+    (dependent-join (scan nil [:foo]) 2 (fn [_])) 3))
 
 (deftest relation?-test
   (are [x expected] (= expected (relation? x))
