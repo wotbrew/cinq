@@ -49,12 +49,11 @@
     {`tuple-seq identity
      `columns (constantly (into (columns left) (columns right)))}))
 
-(defn hash-equi-join
+(defn equi-join
   [build
    build-key-fn
    probe
    probe-key-fn
-   added-col-count
    theta-condition]
   (-> (lazy-seq
         (let [hm (HashMap.)
@@ -68,34 +67,34 @@
           (for [p (tuple-seq probe)
                 b (.get hm (probe-key-fn p))
                 :when (theta-condition b p)]
-            (join-tuples b p added-col-count))))
+            (join-tuples b p))))
       (with-meta
         {`tuple-seq identity
-         `columns (constantly (into (columns build) (repeat added-col-count :cinq/anon)))})))
+         `columns (constantly (into (columns build) (columns probe)))})))
 
-(defn hash-equi-left-join
+(defn equi-left-join
   [probe
    probe-key-fn
    build
    build-key-fn
-   added-col-count
    theta-condition]
-  (-> (lazy-seq
-        (let [hm (HashMap.)
-              _ (doseq [b (tuple-seq build)]
-                  (let [k (build-key-fn b)
-                        nested-list (.get hm k)
-                        empty-nested-list (when-not nested-list (ArrayList.))
-                        _ (when empty-nested-list (.put hm k empty-nested-list))
-                        nested-list (or nested-list empty-nested-list)]
-                    (.add nested-list b)))]
-          (for [p (tuple-seq probe)
-                :let [bs (filter #(theta-condition p %) (.get hm (probe-key-fn p)))]
-                b (if (seq bs) bs (repeat added-col-count nil))]
-            (join-tuples p b added-col-count))))
-      (with-meta
-        {`tuple-seq identity
-         `columns (constantly (into (columns probe) (repeat added-col-count :cinq/anon)))})))
+  (let [build-arity (arity build)]
+    (-> (lazy-seq
+          (let [hm (HashMap.)
+                _ (doseq [b (tuple-seq build)]
+                    (let [k (build-key-fn b)
+                          nested-list (.get hm k)
+                          empty-nested-list (when-not nested-list (ArrayList.))
+                          _ (when empty-nested-list (.put hm k empty-nested-list))
+                          nested-list (or nested-list empty-nested-list)]
+                      (.add nested-list b)))]
+            (for [p (tuple-seq probe)
+                  :let [bs (filter #(theta-condition p %) (.get hm (probe-key-fn p)))]
+                  b (if (seq bs) bs (repeat build-arity nil))]
+              (join-tuples p b))))
+        (with-meta
+          {`tuple-seq identity
+           `columns (constantly (into (columns probe) (columns build)))}))))
 
 (defn dependent-left-join [rel added-col-count f]
   (with-meta
@@ -170,6 +169,11 @@
       (map tuple-f x)
       {`tuple-seq identity
        `columns (constantly (vec cols))})))
+
+(defmacro join-condition [equi-pairs theta]
+  `(and ~@(for [[a b] (partition 2 equi-pairs)]
+            `(= ~a ~b))
+        ~theta))
 
 (defn parse [[_ selection {select-binding :select
                            order-by-binding :order-by

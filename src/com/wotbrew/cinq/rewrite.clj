@@ -43,6 +43,12 @@
     (com.wotbrew.cinq/dependent-left-join ?left ?added-col-count _)
     (+ (arity ?left) ?added-col-count)
 
+    (com.wotbrew.cinq/equi-join ?build _ ?probe _ _)
+    (+ (arity ?build) (arity ?probe))
+
+    (com.wotbrew.cinq/equi-left-join ?probe _ ?build _ _)
+    (+ (arity ?build) (arity ?probe))
+
     (com.wotbrew.cinq/where ?rel _)
     (arity ?rel)
 
@@ -152,25 +158,112 @@
 (def join-rule-alpha
   (r/match
 
-    ;; decor 0
+    ;; de-correlate standard joins
     (m/and
-
-      (com.wotbrew.cinq/dependent-join
+      (?join-sym
         ?left
         ?n-cols
         (clojure.core/fn [?args]
           (com.wotbrew.cinq/where
             ?right
             (clojure.core/fn [?pred-args] ?pred-expr))))
-
+      (m/guard
+        (`#{com.wotbrew.cinq/dependent-join
+            com.wotbrew.cinq/dependent-left-join} ?join-sym))
       (m/guard
         (not-any? ?args (free-variables ?right))))
-
+    ;; =>
     (let [left-arity (arity ?left)]
-      `(com.wotbrew.cinq/join
+      `(~(condp = ?join-sym
+           `com.wotbrew.cinq/dependent-join `com.wotbrew.cinq/join
+           `com.wotbrew.cinq/dependent-left-join `com.wotbrew.cinq/left-join)
          ~?left
          ~?right
          (fn [~(merge ?args (update-vals ?pred-args #(+ % left-arity)))] ~?pred-expr)))
+
+    ;; rewrite join as equi-join
+    (m/and
+      (?join-sym
+        ?left ?right
+        (clojure.core/fn [?arg]
+          (com.wotbrew.cinq/join-condition ?pairs ?theta)))
+      (m/guard (seq ?pairs))
+      (m/guard (`#{com.wotbrew.cinq/join,
+                   com.wotbrew.cinq/left-join}
+                 ?join-sym)))
+    ;; =>
+    (let [left-arity (arity ?left)
+          left-args (into {} (for [[s i] ?arg :when (< i left-arity)] [s i]))
+          right-args (into {} (for [[s i] ?arg :when (<= left-arity i)] [s (- i left-arity)]))]
+      `(~(condp = ?join-sym
+           `com.wotbrew.cinq/left-join `com.wotbrew.cinq/equi-left-join
+           `com.wotbrew.cinq/join `com.wotbrew.cinq/equi-join)
+         ~?left
+         (fn [~left-args]
+           [~@(for [[a _] (partition 2 ?pairs)] a)])
+         ~?right
+         (fn [~right-args]
+           [~@(for [[_ b] (partition 2 ?pairs)] b)])
+         (fn [~left-args ~right-args] ~?theta)))
+
+    ;; normalise join conditions
+    (m/and
+      (?join-sym
+        ?left
+        ?right
+        (clojure.core/fn [?arg] ?cond))
+      (m/guard
+        (`#{com.wotbrew.cinq/join, com.wotbrew.cinq/left-join} ?join-sym)))
+    ;; =>
+    (let [left-arity (arity ?left)
+          equi-pairs (atom [])
+          theta (atom [true])
+
+          left-variables (set (for [[s i] ?arg :when (< i left-arity)] s))
+          right-variables (set (remove left-variables (keys ?arg)))
+
+          add-cond
+          (fn add-cond [c]
+            (m/match c
+
+              ;; flatten equi pairs
+              (com.wotbrew.cinq/join-condition ?pairs2 ?theta2)
+              (do (swap! equi-pairs into ?pairs2)
+                  (add-cond ?theta2))
+
+              ;; theta always contains nil when emitted by this rule
+              true
+              nil
+
+              ;; binary equality rule
+              (m/or (clojure.core/= ?a ?b)
+                    (= ?a ?b))
+              (let [free-a (free-variables ?a)
+                    free-b (free-variables ?b)
+                    a-left (every? left-variables free-a)
+                    a-right (and (not a-left) (every? right-variables free-a))
+                    b-left (every? left-variables free-b)
+                    b-right (and (not b-left) (every? right-variables free-b))]
+                (cond
+                  (and a-left b-right) (swap! equi-pairs conj ?a ?b)
+                  (and a-right b-left) (swap! equi-pairs conj ?b ?a)
+                  :else (swap! theta conj `(~'= ~?a ~?b))))
+
+              ;; append conjunctions
+              (m/or (and & ?cond2)
+                    (clojure.core/and & ?cond2))
+              (run! add-cond ?cond2)
+
+              _ (swap! theta conj c)))
+
+          _ (add-cond ?cond)
+
+          equi-pairs @equi-pairs
+          theta @theta]
+      `(~?join-sym
+         ~?left
+         ~?right
+         (clojure.core/fn [~?arg] (com.wotbrew.cinq/join-condition ~equi-pairs (and ~@theta)))))
 
     #_
     (com.wotbrew.cinq/dependent-join
@@ -179,8 +272,21 @@
       (clojure.core/fn [?args]
         ?rel2))))
 
+(defn fix-max
+  "Fixed point strategy combinator with a maximum iteration count.
+  See r/fix."
+  [n s]
+  (fn [t]
+    (loop [t t
+           i 0]
+      (let [t* (s t)]
+        (cond
+          (= t* t) t
+          (= i n) t
+          :else (recur t* (inc n)))))))
+
 (def join-strategy
-  (r/bottom-up (r/attempt join-rule-alpha)))
+  (fix-max 10 (r/bottom-up (r/attempt join-rule-alpha))))
 
 (def where-rules
   (r/match
@@ -188,7 +294,7 @@
     ?rel))
 
 (def where-strategy
-  (r/fix (r/bottom-up (r/attempt where-rules))))
+  (fix-max 10 (r/bottom-up (r/attempt where-rules))))
 
 (defn rewrite [env ns plan]
   (binding [*rw-env* (or env {})
