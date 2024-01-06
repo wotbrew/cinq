@@ -3,8 +3,8 @@
             [clojure.set :as set]
             [clojure.string :as str]
             [clojure.walk :as walk]
-            [com.wotbrew.cinq.rewrite :refer [rewrite]])
-  (:import (java.util ArrayList HashMap)))
+            [com.wotbrew.cinq.plan :as plan])
+  (:import (java.util ArrayList Comparator HashMap)))
 
 (defprotocol Relation
   :extend-via-metadata true
@@ -43,9 +43,8 @@
   (with-meta
     (for [l (tuple-seq left)
           r (tuple-seq right)
-          :let [t (join-tuples l r)]
-          :when (pred t)]
-      t)
+          :when (pred l r)]
+      (join-tuples l r))
     {`tuple-seq identity
      `columns (constantly (into (columns left) (columns right)))}))
 
@@ -109,8 +108,8 @@
   (let [n (arity right)]
     (with-meta
       (for [l (tuple-seq left)
-            :let [rs (filter pred (map #(join-tuples l %) (tuple-seq right)))]
-            t (if (seq rs) rs [(into l (repeat n nil))])]
+            :let [rs (filter #(pred l %) (tuple-seq right))]
+            t (if (seq rs) (map #(join-tuples l %) rs) [(into l (repeat n nil))])]
         t)
       {`tuple-seq identity
        `columns (constantly (into (columns left) (columns right)))})))
@@ -127,13 +126,27 @@
       {`tuple-seq identity
        `columns (constantly (into (columns rel) (repeat (count group-keys) :cinq/anon)))})))
 
-(defn order [rel & order-clauses]
-  rel)
+(defn order [rel order-clauses]
+  (let [order-clauses (object-array order-clauses)]
+    (with-meta
+      (lazy-seq
+        (sort (reify Comparator
+                (compare [_ t0 t1]
+                  (loop [i 0]
+                    (if (< i (alength order-clauses))
+                      (let [[f dir] (aget order-clauses i)
+                            res (compare (f t0) (f t1))]
+                        (if (= 0 res)
+                          (recur (inc i))
+                          (case dir :desc (* -1 res) res)))
+                      0))))
+              (tuple-seq rel)))
+      (meta rel))))
 
 (defn limit [rel n]
   (with-meta (lazy-seq (take n (tuple-seq rel))) (meta rel)))
 
-(defn add [rel & fns]
+(defn add [rel fns]
   (let [f (fn [t] (reduce (fn [t f] (conj t (f t))) t fns))]
     (with-meta
       (lazy-seq (map f (tuple-seq rel)))
@@ -146,7 +159,7 @@
     {`tuple-seq identity
      `columns (constantly (into (columns rel) (repeat added-col-count :cinq/anon)))}))
 
-(defn select [rel & fns]
+(defn select [rel fns]
   (let [f (if (seq fns) (apply juxt fns) (constantly []))]
     (with-meta
       (lazy-seq (map f (tuple-seq rel)))
@@ -175,6 +188,10 @@
             `(= ~a ~b))
         ~theta))
 
+(defmacro tfn [args body] `(clojure.core/fn [~args] ~body))
+
+(defmacro theta-tfn [args1 args2 body] `(clojure.core/fn [~args1 ~args2] ~body))
+
 (defn parse [[_ selection {select-binding :select
                            order-by-binding :order-by
                            limit-count :limit}]]
@@ -200,7 +217,7 @@
                      rf (fn [[env fns] [binding expr]]
                           [(add-name env binding) (conj fns (lambda env expr))])
                      [env fns] (reduce rf [env []] bindings)]
-                 [env (list* `add fns)])
+                 [env (list `add (vec fns))])
 
                (:join :left-join)
                (let [[binding expr & conditions] arg
@@ -227,7 +244,17 @@
                  (plan-op env :from [op arg] first-op)))))
 
           (plan-projection [env binding expr]
-            (if (= '. expr)
+            (assert (not-any? symbol? (tree-seq seqable? seq binding)) "Column names in :select must be compile-time constants")
+            [(add-name env binding) expr]
+
+            #_(cond
+              (and (lookup-sym? binding) (str/ends-with? (name binding) ":."))
+              (let [[kw :as kw-lookup] (parse-lookup-sym binding)]
+                (do
+                  (when-not (symbol? binding) (throw (ex-info "Automatic bindings are only supported if the binding is a symbol" {})))
+                  [(add-name env (symbol (name kw))) kw-lookup]))
+
+              (= '. expr)
               (if (lookup-sym? binding)
                 (let [[kw :as kw-lookup] (parse-lookup-sym binding)]
                   (do
@@ -251,7 +278,7 @@
             (walk/postwalk (fn [x] (if (lookup-sym? x) (parse-lookup-sym x) x)) form))
 
           (lambda [env expr]
-            (list `fn [(first env)] (desugar expr)))]
+            (list `tfn (first env) (desugar expr)))]
     (let [selection (or (not-empty selection) [{} [nil]])
 
           [selection-env selection-plan]
@@ -270,31 +297,34 @@
                     (partition 2 select-binding))
             [selection-env []])
 
-          projection-plan
-          (if (seq projection)
-            (conj selection-plan (list* `add projection))
-            selection-plan)
-
           projection-vec (vec (range (second selection-env) (second projection-env)))
           inverse-names (set/map-invert (first projection-env))]
+
+      (assert (even? (count select-binding)))
+      (assert (even? (count order-by-binding)))
+      (assert (or (nil? limit-count) (pos-int? limit-count)))
+
       {:names (if select-binding
-                (mapv (comp keyword inverse-names) projection-vec)
+                (mapv inverse-names projection-vec)
                 (mapv (comp keyword key) (sort-by val (first projection-env))))
        :plan
        (list* '->
-              (concat projection-plan
+              (concat selection-plan
                       (when order-by-binding
-                        [(list* `order (for [[expr dir] order-by-binding] [(lambda projection-env expr) dir]))])
+                        [(list `order (vec (for [[expr dir] (partition 2 order-by-binding)]
+                                             (do
+                                               (assert (#{:asc :desc} dir) ":order-by dir must be :asc or :desc")
+                                               [(lambda selection-env expr) dir]))))])
                       (when limit-count
                         [(list `limit limit-count)])
                       (when select-binding
-                        [(list* `select (map (fn [i] (lambda projection-env (inverse-names i))) projection-vec))])))})))
+                        [(list `select projection)])))})))
 
 (defmacro q
   ([selection] `(q ~selection {}))
   ([selection {:keys [select order-by limit]}]
    (let [{:keys [names, plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])
-         plan (rewrite &env *ns* plan)]
+         plan (plan/rewrite &env *ns* plan)]
      `(let [plan# ~plan]
         (with-meta
           plan#
@@ -304,9 +334,9 @@
 
 (defmacro qp
   ([selection] `(qp ~selection {}))
-  ([selection {:keys [select order-by limit]}]
+  ([selection {:keys [select order-by limit no-rewrite]}]
    (let [{:keys [plan]} (parse [nil selection {:select select, :order-by order-by, :limit limit}])
-         plan (rewrite &env *ns* plan)]
+         plan (if no-rewrite plan (plan/rewrite &env *ns* plan))]
      (list `quote plan))))
 
 (defn unique-col-map [rel]
@@ -341,6 +371,13 @@
   (parse '(q [c customers :where (= c:customer-id 42)]))
   (parse '(q [c customers :join [o orders (= o:customer-id c:customer-id)]]))
 
+  (qp [c customers :join [o orders (= o:customer-id c:customer-id)]])
+
+  (qp [o orders]
+      {:select [:order-id o:order-id
+                :customer (first (q [c customers
+                                     :where (= c:customer-id o:customer-id)]))]})
+
   (q [c customers])
 
   (let [customers [{:id 0, :firstname "fred"}
@@ -355,12 +392,12 @@
         :let [[sku qty] oi]
         :join [p products (= p:sku sku)]]
        {:select
-        [customer-id c:id
-         c:firstname .
-         sku .
-         qty .
-         unit-price p:price
-         price (* p:price qty)]})
+        [:customer-id c:id
+         :firstname c:firstname
+         :sku sku
+         :qty qty
+         :unit-price p:price
+         :price (* p:price qty)]})
 
     ;; however destructuring should work
     #_(q [o orders
@@ -378,3 +415,14 @@
     )
 
   )
+
+(defn vars []
+  (q [lib (loaded-libs)
+      public (ns-publics lib)
+      :let [[sym var] public]]
+     {:select
+      [:ns lib
+       :name (name sym)]
+      :order-by
+      [lib :asc,
+       (name sym) :asc]}))

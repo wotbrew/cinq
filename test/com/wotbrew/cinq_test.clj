@@ -90,11 +90,11 @@
 
 
       (q [c customers :where (= c:customer-id 0)]
-         {:select [c:firstname .]})
+         {:select [:firstname c:firstname]})
       [["Jane"]]
 
       (q [c customers :where (= c:customer-id 0)]
-         {:select [firstname c:firstname, id (:customer-id c)]})
+         {:select [:firstname c:firstname, :id (:customer-id c)]})
       [["Jane" 0]]
 
       )))

@@ -1,8 +1,22 @@
-(ns com.wotbrew.cinq.rewrite
+(ns com.wotbrew.cinq.plan
   (:require [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.walk :as walk]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]))
+
+(defn fix-max
+  "Fixed point strategy combinator with a maximum iteration count.
+  See r/fix."
+  [n s]
+  (fn [t]
+    (loop [t t
+           i 0]
+      (let [t* (s t)]
+        (cond
+          (= t* t) t*
+          (= i n) t*
+          :else (recur t* (inc i)))))))
 
 (defn tuple-destructure? [arg]
   (and (map? arg)
@@ -12,6 +26,9 @@
 (def ^:dynamic *rw-ns* nil)
 (def ^:dynamic *rw-env* {})
 (def ^:dynamic *gensym-counter* nil)
+(def ^:dynamic *rewrite* nil)
+
+(defn set-rewrite [s] (set! *rewrite* s))
 
 (defn unique-sym [sym]
   (if *gensym-counter*
@@ -30,6 +47,9 @@
 
     (com.wotbrew.cinq/scan _ ?cols)
     (count ?cols)
+
+    (com.wotbrew.cinq/product ?left ?right)
+    (+ (arity ?left) (arity ?right))
 
     (com.wotbrew.cinq/join ?left ?right _)
     (+ (arity ?left) (arity ?right))
@@ -52,47 +72,56 @@
     (com.wotbrew.cinq/where ?rel _)
     (arity ?rel)
 
-    (com.wotbrew.cinq/select _ & ?fns)
+    (com.wotbrew.cinq/order ?rel _)
+    (arity ?rel)
+
+    (com.wotbrew.cinq/select _ ?fns)
     (count ?fns)
 
     (com.wotbrew.cinq/select* _ ?col-count _)
     ?col-count
 
-    (com.wotbrew.cinq/add ?rel & ?fns)
+    (com.wotbrew.cinq/add ?rel ?fns)
     (+ (arity ?rel) (count ?fns))
 
     (com.wotbrew.cinq/add* ?rel ?col-count _)
     (+ (arity ?rel) ?col-count)
 
-    ))
+    _
+    (throw (ex-info "Unknown relation form" {:rel-form rel-form, :rewrite *rewrite*}))))
 
-(def pass0-rule
+(defn not-unique? [sym]
+  (not (str/includes? (name sym) "__cinq__")))
+
+(defn filter-keys [m pred]
+  (reduce-kv (fn [m k _] (if (pred k) m (dissoc m k))) m m))
+
+(def mega-rule
   (r/match
-    ;; apply ->
+
+    ;; region apply ->
     (-> & ?rest)
     (macroexpand-1 (list* `-> ?rest))
 
     (clojure.core/-> & ?rest)
     (macroexpand-1 (list* `-> ?rest))
+    ;; endregion
 
-    ;; strip unused col args, uniqueify args
-    (m/and (clojure.core/fn [?arg] ?body)
-           (m/guard (tuple-destructure? ?arg)))
-    (let [arg-syms (keys ?arg)
+    ;; region strip unused col args, uniqueify args
+    (m/and (com.wotbrew.cinq/tfn ?arg ?body)
+           (m/guard (some not-unique? (keys ?arg))))
+    (let [_ (set-rewrite "strip unused cols")
+          arg-syms (filter not-unique? (keys ?arg))
           arg-smap (zipmap arg-syms (map unique-sym arg-syms))
           body (walk/postwalk-replace arg-smap ?body)
           used-syms (into #{} (filter symbol?) (tree-seq seqable? seq body))]
-      (list `fn [(into {} (for [[s o] ?arg :when (used-syms (arg-smap s))] [(arg-smap s) o]))] body))))
+      (list `com.wotbrew.cinq/tfn (into {} (for [[s o] ?arg :when (used-syms (arg-smap s s))] [(arg-smap s s) o])) body))
+    ;; endregion
 
-(def pass0-strategy
-  (r/bottom-up (r/attempt pass0-rule)))
-
-(def fusion-rule
-  (r/match
-
-    ;; fuse select into select*
-    (com.wotbrew.cinq/select ?rel & ?fns)
-    (let [n (arity ?rel)
+    ;; region fuse select into select*
+    #_#_(com.wotbrew.cinq/select ?rel ?fns)
+    (let [_ (set-rewrite "fuse select")
+          n (arity ?rel)
 
           arg-map (atom {})
           let-binding (atom [])
@@ -110,10 +139,18 @@
          (fn [~(deref arg-map)]
            (let ~(deref let-binding)
              [~@(for [[_ sym] (sort-by key @let-map)] sym)]))))
+    ;; endregion
 
-    ;; fuse add into add*
-    (com.wotbrew.cinq/add ?rel & ?fns)
-    (let [n (arity ?rel)
+    ;; region fuse add.add
+    (com.wotbrew.cinq/add (com.wotbrew.cinq/add ?rel ?fns-a) ?fns-b)
+    (let [_ (set-rewrite "fuse add.add")]
+      `(com.wotbrew.cinq/add ~?rel ~(vec (concat ?fns-a ?fns-b))))
+    ;; endregion
+
+    ;; region fuse add into add*
+    #_#_(com.wotbrew.cinq/add ?rel ?fns)
+    (let [_ (set-rewrite "fuse add")
+          n (arity ?rel)
 
           arg-map (atom {})
           let-binding (atom [])
@@ -130,13 +167,15 @@
          (fn [~(deref arg-map)]
            (let ~(deref let-binding)
              [~@(for [[_ sym] (sort-by key @let-map)] sym)]))))
+    ;; endregion
 
-    ;; fuse add.select
-    (com.wotbrew.cinq/select*
+    ;; region fuse add.select
+    #_#_(com.wotbrew.cinq/select*
       (com.wotbrew.cinq/add* ?rel ?add-count (clojure.core/fn [?add-arg] (clojure.core/let ?add-binding ?add-expr)))
       ?select-count
       (clojure.core/fn [?select-arg] (clojure.core/let ?select-binding ?select-expr)))
-    (let [n (arity ?rel)
+    (let [_ (set-rewrite "fuse add.select")
+          n (arity ?rel)
           inverse-select-arg (set/map-invert ?select-arg)
 
           add-expr-bindings
@@ -150,77 +189,89 @@
           let-binding
           (into ?add-binding cat [add-expr-bindings, ?select-binding])]
 
-      `(com.wotbrew.cinq/select* ~?rel ~?select-count (fn [~?add-arg] (let ~let-binding ~?select-expr))))))
+      `(com.wotbrew.cinq/select* ~?rel ~?select-count (fn [~(merge ?add-arg ?select-arg)] (let ~let-binding ~?select-expr))))
+    ;; endregion
 
-(def fusion-strategy
-  (r/fix (r/bottom-up (r/attempt fusion-rule))))
+    ;; region boolean simplification
+    (clojure.core/and ?a)
+    ?a
 
-(def join-rule-alpha
-  (r/match
+    (and ?a)
+    ?a
+    ;; endregion
 
-    ;; de-correlate standard joins
+    ;; region de-correlate standard joins
     (m/and
       (?join-sym
         ?left
         ?n-cols
-        (clojure.core/fn [?args]
+        (com.wotbrew.cinq/tfn ?args
           (com.wotbrew.cinq/where
             ?right
-            (clojure.core/fn [?pred-args] ?pred-expr))))
+            (com.wotbrew.cinq/tfn ?pred-args ?pred-expr))))
       (m/guard
         (`#{com.wotbrew.cinq/dependent-join
             com.wotbrew.cinq/dependent-left-join} ?join-sym))
       (m/guard
-        (not-any? ?args (free-variables ?right))))
+        (not-any? ?args (free-variables ?right)))
+      (m/guard
+        (= ?n-cols (arity ?right))))
     ;; =>
-    (let [left-arity (arity ?left)]
+    (let [_ (set-rewrite "de-correlate standard joins")]
       `(~(condp = ?join-sym
            `com.wotbrew.cinq/dependent-join `com.wotbrew.cinq/join
            `com.wotbrew.cinq/dependent-left-join `com.wotbrew.cinq/left-join)
          ~?left
          ~?right
-         (fn [~(merge ?args (update-vals ?pred-args #(+ % left-arity)))] ~?pred-expr)))
+         (com.wotbrew.cinq/theta-tfn ~?args ~?pred-args ~?pred-expr)))
+    ;; endregion
 
-    ;; rewrite join as equi-join
+    ;; region rewrite join as equi-join
     (m/and
       (?join-sym
         ?left ?right
-        (clojure.core/fn [?arg]
+        (com.wotbrew.cinq/theta-tfn ?left-args ?right-args
           (com.wotbrew.cinq/join-condition ?pairs ?theta)))
       (m/guard (seq ?pairs))
       (m/guard (`#{com.wotbrew.cinq/join,
                    com.wotbrew.cinq/left-join}
                  ?join-sym)))
     ;; =>
-    (let [left-arity (arity ?left)
-          left-args (into {} (for [[s i] ?arg :when (< i left-arity)] [s i]))
-          right-args (into {} (for [[s i] ?arg :when (<= left-arity i)] [s (- i left-arity)]))]
+    (let [_ (set-rewrite "joins to equi-joins")
+          theta-variables (set (free-variables ?theta))]
       `(~(condp = ?join-sym
            `com.wotbrew.cinq/left-join `com.wotbrew.cinq/equi-left-join
            `com.wotbrew.cinq/join `com.wotbrew.cinq/equi-join)
          ~?left
-         (fn [~left-args]
+         (com.wotbrew.cinq/tfn ~?left-args
            [~@(for [[a _] (partition 2 ?pairs)] a)])
          ~?right
-         (fn [~right-args]
+         (com.wotbrew.cinq/tfn ~?right-args
            [~@(for [[_ b] (partition 2 ?pairs)] b)])
-         (fn [~left-args ~right-args] ~?theta)))
+         (com.wotbrew.cinq/theta-tfn ~(filter-keys ?left-args theta-variables) ~(filter-keys ?right-args theta-variables) ~?theta)))
+    ;; endregion
 
-    ;; normalise join conditions
+    ;; region normalise join conditions
     (m/and
       (?join-sym
         ?left
         ?right
-        (clojure.core/fn [?arg] ?cond))
+        (com.wotbrew.cinq/theta-tfn ?left-args ?right-args ?cond))
       (m/guard
-        (`#{com.wotbrew.cinq/join, com.wotbrew.cinq/left-join} ?join-sym)))
+        (`#{com.wotbrew.cinq/join, com.wotbrew.cinq/left-join} ?join-sym))
+      (m/guard
+        (m/match ?cond
+          (com.wotbrew.cinq/join-condition _ _)
+          false
+          _
+          true)))
     ;; =>
-    (let [left-arity (arity ?left)
+    (let [_ (set-rewrite "join pred to join-condition")
           equi-pairs (atom [])
           theta (atom [true])
 
-          left-variables (set (for [[s i] ?arg :when (< i left-arity)] s))
-          right-variables (set (remove left-variables (keys ?arg)))
+          left-variables (set (keys ?left-args))
+          right-variables (set (keys ?right-args))
 
           add-cond
           (fn add-cond [c]
@@ -263,46 +314,45 @@
       `(~?join-sym
          ~?left
          ~?right
-         (clojure.core/fn [~?arg] (com.wotbrew.cinq/join-condition ~equi-pairs (and ~@theta)))))
+         (com.wotbrew.cinq/theta-tfn ~?left-args ~?right-args (com.wotbrew.cinq/join-condition ~equi-pairs (and ~@theta)))))
+    ;; endregion
 
-    #_
-    (com.wotbrew.cinq/dependent-join
-      ?left
-      ?n-cols
-      (clojure.core/fn [?args]
-        ?rel2))))
+    ;; region remove redundant where
+    (com.wotbrew.cinq/where ?rel (com.wotbrew.cinq/tfn [_] true))
+    ?rel
+    ;; endregion
 
-(defn fix-max
-  "Fixed point strategy combinator with a maximum iteration count.
-  See r/fix."
-  [n s]
-  (fn [t]
-    (loop [t t
-           i 0]
-      (let [t* (s t)]
-        (cond
-          (= t* t) t
-          (= i n) t
-          :else (recur t* (inc n)))))))
+    ;; region simple join -> product
+    (com.wotbrew.cinq/join
+      ?a
+      ?b
+      (com.wotbrew.cinq/tfn _ (com.wotbrew.cinq/join-condition [] true)))
+    `(com.wotbrew.cinq/product ~?a ~?b)
+    ;; endregion
 
-(def join-strategy
-  (fix-max 10 (r/bottom-up (r/attempt join-rule-alpha))))
+    ;; region dependent join with no select -> product
+    (m/and
+      (com.wotbrew.cinq/dependent-join
+        ?rel-a
+        ?n-cols
+        (com.wotbrew.cinq/tfn ?args (com.wotbrew.cinq/scan ?scan-target ?scan-cols)))
+      (m/guard (= ?n-cols (count ?scan-cols)))
+      (m/guard (not-any? (set (free-variables ?scan-target)) (keys ?args))))
+    `(com.wotbrew.cinq/product ~?rel-a (com.wotbrew.cinq/scan ~?scan-target ~?scan-cols))
+    ;; endregion
 
-(def where-rules
-  (r/match
-    (com.wotbrew.cinq/where ?rel (clojure.core/fn [_] true))
-    ?rel))
+    ))
 
-(def where-strategy
-  (fix-max 10 (r/bottom-up (r/attempt where-rules))))
+(def mega-strat
+  (->> #'mega-rule
+       ((fn [s] (fn [x] (set! *rewrite* nil) (s x))))
+       r/attempt
+       r/bottom-up
+       (fix-max 1000)))
 
 (defn rewrite [env ns plan]
   (binding [*rw-env* (or env {})
             *rw-ns* ns
-            *gensym-counter* (atom -1)]
-    (-> plan
-        pass0-strategy
-        join-strategy
-        where-strategy
-        fusion-strategy
-        (->> (walk/postwalk (fn [x] (if (seq? x) (doall x) x)))))))
+            *gensym-counter* (atom -1)
+            *rewrite* nil]
+    (mega-strat plan)))
