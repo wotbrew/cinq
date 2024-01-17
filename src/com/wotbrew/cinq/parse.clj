@@ -65,33 +65,55 @@
     ;; sub query flavors
 
     ;; scalar valued
-    (S ?qry)
-    [::plan/scalar-sq (parse ?qry)]
+    (S ?qry ?expr)
+    [::plan/scalar-sq (parse ?qry ?expr)]
 
     ;; column valued
-    (C ?qry)
-    [::plan/column-sq (parse ?qry)]
+    (C ?qry ?expr)
+    [::plan/column-sq (parse ?qry ?expr)]
 
     ;; relation valued
-    (Q ?qry)
-    [::plan/sq (parse ?qry)]
+    (Q ?qry ?expr)
+    [::plan/sq (parse ?qry ?expr)]
 
     ;; lookup symbols, e.g foo:bar == (:bar foo)
     (m/and ?s (m/guard (lookup-sym? ?s)))
     (let [{:keys [kw, a]} (parse-lookup-sym ?s)]
-      [::plan/lookup kw a nil])
-
-    ;; kw lookup with default
-    (m/and (?kw ?s ?default)
-           (m/guard (keyword? ?kw))
-           (m/guard (simple-symbol? ?s)))
-    [::plan/lookup ?kw ?s ?default]
+      [::plan/lookup kw a])
 
     ;; kw lookup without default (therefore nil)
     (m/and (?kw ?s)
            (m/guard (keyword? ?kw))
            (m/guard (simple-symbol? ?s)))
-    [::plan/lookup ?kw ?s nil]
+    [::plan/lookup ?kw ?s]
+
+    ;; aggregates
+    ($sum ?expr)
+    [::plan/sum ?expr]
+    ($avg ?expr)
+    [::plan/avg ?expr]
+    ($min ?expr)
+    [::plan/min ?expr]
+    ($max ?expr)
+    [::plan/max ?expr]
+
+    ;; comparisons
+    (= ?a ?b)
+    [::plan/= ?a ?b]
+
+    (< ?a ?b)
+    [::plan/< ?a ?b]
+    (<= ?a ?b)
+    [::plan/<= ?a ?b]
+    (>= ?a ?b)
+    [::plan/>= ?a ?b]
+    (> ?a ?b)
+    [::plan/> ?a ?b]
+
+
+    ;; bools
+    (and & ?clause)
+    (into [::plan/and] ?clause)
 
     ?any ?any))
 
@@ -117,7 +139,7 @@
       {:op :let
        :bindings (mapv (fn [[a b]] [a (rewrite-exprs b)]) (partition 2 arg))}
 
-      (:join :left-join)
+      (:join :left-join :semi-join :anti-join)
       (let [[binding expr & [condition :as cseq]] arg]
         {:op op
          :bindings (normalize-binding binding)
@@ -138,112 +160,49 @@
 
       :select
       {:op :select
-       :projection (mapv (fn [[a b]] [a (rewrite-exprs b)]) (partition 2 arg))})))
+       :projection (mapv (fn [[a b]] [a (rewrite-exprs b)]) (partition 2 arg))}
 
-(defn parse-tree [q]
-  (let [statements (mapv parse-stmt (partition 2 q))]
+      :return
+      {:op :select
+       :projection [[:return (rewrite-exprs arg)]]})))
+
+(defn parse-tree [q expr]
+  (let [statements (mapv parse-stmt (concat (partition 2 q)
+                                            (m/match expr
+                                              ($select & ?bindings)
+                                              [[:select (vec ?bindings)]]
+                                              _ [[:select [(list `quote (gensym)) expr]]])))]
     (reduce (fn [acc stmt] (if acc (assoc stmt :prev acc) stmt)) nil statements)))
 
-(defn find-lookup-syms [expr]
-  #_(let [ret (atom #{})]
-    ((fn ! [expr]
-       (m/match expr
-         _
-         (cond
-           (symbol? expr) (when (lookup-sym? expr) (swap! ret conj expr))
-           (seq? expr) (run! ! expr)
-           (vector? expr) (run! ! expr)
-           (map? expr) (run! ! expr)
-           (set? expr) (run! ! expr)
-           (map-entry? expr) (run! ! expr)
-           :else nil))) expr)
-    ret)
-
-  (->> (tree-seq seqable? seq expr)
-       (filter lookup-sym?)
-       (set)))
-
-(defn find-binding [bindings val]
-  (first (last (filter #(= val (second %)) bindings))))
-
-(defn push-lookups [tree lookup-syms]
-  (when tree
-    (case (:op tree)
-      :select
-      (let [{:keys [projection]} tree
-            exprs (map second projection)
-            lookup-syms (find-lookup-syms exprs)]
-        (update tree :prev push-lookups lookup-syms))
-
-      :where
-      (let [{:keys [pred]} tree
-            new-lookups (find-lookup-syms pred)]
-        (update tree :prev push-lookups (into lookup-syms new-lookups)))
-
-      :let
-      (let [{:keys [bindings]} tree
-            new-lookups (find-lookup-syms (map second bindings))]
-        (update tree :prev push-lookups (into lookup-syms new-lookups)))
-
-      (:from :join :left-join)
-      (let [{:keys [bindings, condition, prev]} tree
-            self-sym (find-binding bindings :cinq/self)
-            already-bound (atom (set (map first bindings)))
-            lookup-syms (into lookup-syms (find-lookup-syms condition))
-            new-binding (reduce (fn [b s]
-                                  (let [{:keys [kw, a]} (parse-lookup-sym s)]
-                                    (cond
-                                      (@already-bound s) b
-
-                                      (= self-sym a)
-                                      (do (swap! already-bound conj s)
-                                          (conj b [s kw]))
-
-                                      :else b)))
-                                bindings
-                                lookup-syms)
-            left-syms (set/difference lookup-syms @already-bound)]
-        (assoc tree :prev (push-lookups prev left-syms)
-                    :bindings new-binding))
-
-      :group-by
-      (let [{:keys [bindings, prev]} tree
-            ;; todo filter shadowed, destructuring
-            left-syms (find-lookup-syms (map second bindings))]
-        (assoc tree :prev (push-lookups prev (into lookup-syms left-syms))
-                    :bindings bindings))
-
-      :order-by
-      (let [{:keys [clauses]} tree]
-        (update tree :prev push-lookups (into lookup-syms (find-lookup-syms clauses))))
-
-      :limit
-      (update tree :prev push-lookups lookup-syms))))
-
-(defn parse [q]
-  (let [tree (parse-tree q)
-        #_#_ tree (push-lookups tree #{})]
+(defn parse [q expr]
+  (let [tree (parse-tree q expr)]
     ((fn ! [tree]
        (case (:op tree)
          :from
          (if (:prev tree)
-           [::plan/dependent-join
+           [::plan/apply
+            :cross-join
             (! (:prev tree))
             [::plan/where [::plan/scan (:expr tree) (:bindings tree)] true]]
            [::plan/scan (:expr tree) (:bindings tree)])
 
          :join
-         [::plan/dependent-join
+         [::plan/apply
+          :cross-join
           (! (:prev tree))
           [::plan/where [::plan/scan (:expr tree) (:bindings tree)] (:condition tree)]]
 
          :left-join
-         [::plan/dependent-left-join
+         [::plan/apply
+          :left-join
           (! (:prev tree))
           [::plan/where [::plan/scan (:expr tree) (:bindings tree)] (:condition tree)]]
 
          :where
          [::plan/where (! (:prev tree)) (:pred tree)]
+
+         :let
+         [::plan/let (! (:prev tree)) (:bindings tree)]
 
          :select
          [::plan/select (! (:prev tree)) (:projection tree)]
@@ -254,5 +213,6 @@
          :order-by
          [::plan/order-by (! (:prev tree)) (:clauses tree)]
 
-         ))
+         :limit
+         [::plan/limit (! (:prev tree)) (:n tree)]))
      tree)))
