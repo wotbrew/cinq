@@ -343,9 +343,7 @@
                                     `(let [~@(for [[sym expr] ?bindings
                                                    form [sym expr]]
                                                form)]
-                                       ~(case (count ?bindings)
-                                          1 (ffirst ?bindings)
-                                          (mapv first ?bindings)))))]
+                                       ~(mapv first ?bindings))))]
 
     [::plan/order-by ?ra ?order-clauses]
     `[(order ~(compile-plan ?ra)
