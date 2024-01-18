@@ -133,7 +133,7 @@
 (comment
 
   (time (count (q1 @sf-005)))
-  (check-answer #'q1 @sf-005)
+  (check-answer #'q1 @sf-001)
   )
 
 (deftest q1-test (check-answer #'q1 @sf-005))
@@ -153,17 +153,17 @@
         (= s:nationkey n:nationkey)
         (= n:regionkey r:regionkey)
         (= r:name "EUROPE")
-        (= ps:supplycost (double (S [ps partsupp
-                                     s supplier
-                                     n nation
-                                     r region
-                                     :where (and (= p:partkey ps:partkey)
-                                                 (= s:suppkey ps:suppkey)
-                                                 (= s:nationkey n:nationkey)
-                                                 (= n:regionkey r:regionkey)
-                                                 (= "EUROPE" r:name))
-                                     :group-by []]
-                                    ($min ps:supplycost)))))
+        (= ps:supplycost (S [ps partsupp
+                             s supplier
+                             n nation
+                             r region
+                             :where (and (= p:partkey ps:partkey)
+                                         (= s:suppkey ps:suppkey)
+                                         (= s:nationkey n:nationkey)
+                                         (= n:regionkey r:regionkey)
+                                         (= "EUROPE" r:name))
+                             :group-by []]
+                            ($min ps:supplycost))))
       :order-by [s:acctbal :desc
                  n:name :asc
                  s:name :asc
@@ -178,9 +178,9 @@
               :s_comment s:comment)))
 
 (comment
-  (time (count (q2 @sf-005)))
+  (time (count (q2 @sf-001)))
 
-  (check-answer #'q2 @sf-005)
+  (check-answer #'q2 @sf-001)
 
   )
 
@@ -207,8 +207,8 @@
        :o_shippriority shippriority)))
 
 (comment
-  (time (count (q3 @sf-005)))
-  (check-answer #'q3 @sf-005))
+  (time (count (q3 @sf-001)))
+  (check-answer #'q3 @sf-001))
 
 (defn q4 [{:keys [orders, lineitem]}]
   ;; needs decor + semijoin
