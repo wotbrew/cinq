@@ -66,15 +66,7 @@
 
     ;; scalar valued
     (S ?qry ?expr)
-    [::plan/scalar-sq (parse ?qry ?expr)]
-
-    ;; column valued
-    (C ?qry ?expr)
-    [::plan/column-sq (parse ?qry ?expr)]
-
-    ;; relation valued
-    (Q ?qry ?expr)
-    [::plan/sq (parse ?qry ?expr)]
+    [::plan/scalar-sq (parse (list 'q ?qry ?expr))]
 
     ;; lookup symbols, e.g foo:bar == (:bar foo)
     (m/and ?s (m/guard (lookup-sym? ?s)))
@@ -156,26 +148,14 @@
 
       :limit
       {:op :limit
-       :n arg}
+       :n arg})))
 
-      :select
-      {:op :select
-       :projection (mapv (fn [[a b]] [a (rewrite-exprs b)]) (partition 2 arg))}
-
-      :return
-      {:op :select
-       :projection [[:return (rewrite-exprs arg)]]})))
-
-(defn parse-tree [q expr]
-  (let [statements (mapv parse-stmt (concat (partition 2 q)
-                                            (m/match expr
-                                              ($select & ?bindings)
-                                              [[:select (vec ?bindings)]]
-                                              _ [[:select [(list `quote (gensym)) expr]]])))]
+(defn parse-tree [q]
+  (let [statements (mapv parse-stmt (partition 2 q))]
     (reduce (fn [acc stmt] (if acc (assoc stmt :prev acc) stmt)) nil statements)))
 
-(defn parse [q expr]
-  (let [tree (parse-tree q expr)]
+(defn parse-selection [selection-binding]
+  (let [tree (parse-tree selection-binding)]
     ((fn ! [tree]
        (case (:op tree)
          :from
@@ -205,7 +185,7 @@
          [::plan/let (! (:prev tree)) (:bindings tree)]
 
          :select
-         [::plan/select (! (:prev tree)) (:projection tree)]
+         [::plan/project (! (:prev tree)) (:projection tree)]
 
          :group-by
          [::plan/group-by (! (:prev tree)) (:bindings tree)]
@@ -216,3 +196,31 @@
          :limit
          [::plan/limit (! (:prev tree)) (:n tree)]))
      tree)))
+
+(defn parse-projection [selection expr]
+  (m/match expr
+    :cinq/*
+    (let [cols (plan/columns selection)]
+      [::plan/project selection [[(plan/*gensym* "col") (into {} (for [col cols] [(keyword (name col)) (rewrite-exprs col)]))]]])
+
+    ;; todo tuple type?
+    ($select & ?projection)
+    [::plan/project selection [[(plan/*gensym* "col") (mapv (fn [[_ e]] (rewrite-exprs e)) (partition 2 ?projection))]]]
+
+    ?expr
+    [::plan/project selection [[(plan/*gensym* "col") (rewrite-exprs ?expr)]]]))
+
+(defn parse [[_ binding :as query]]
+  (-> (parse-selection binding)
+      (parse-projection (nth query 2 :cinq/*))))
+
+(comment
+
+  (parse '(q [a [1, 2, 3]]))
+  (parse '(q [a [1, 2, 3]] a))
+  (parse '(q [a [1, 2, 3]] {:foo a, :bar (inc a)}))
+  (parse '(q [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
+
+
+
+  )

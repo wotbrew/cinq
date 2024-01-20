@@ -26,9 +26,9 @@
     (let [[ra smap] (unique-ify* ?ra)]
       [[::where ra (walk/postwalk-replace smap ?pred)] smap])
 
-    [::select ?ra ?binding]
+    [::project ?ra ?binding]
     (let [[ra smap] (unique-ify* ?ra)]
-      [[::select ra (walk/postwalk-replace smap ?binding)] smap])
+      [[::project ra (walk/postwalk-replace smap ?binding)] smap])
 
     [::apply ?mode ?left ?right]
     (let [[left left-smap] (unique-ify* ?left)
@@ -79,15 +79,17 @@
     [::where ?ra _]
     (columns ?ra)
 
-    [::select ?ra _]
-    []
+    [::project ?ra ?bindings]
+    (mapv first ?bindings)
 
-    (m/and [::apply ?mode ?left ?right]
-           (m/guard (#{:cross-join :left-join} ?mode)))
+    [::apply ?mode ?left ?right]
     (into (columns ?left) (columns ?right))
 
     [::join ?left ?right _]
     (into (columns ?left) (columns ?right))
+
+    [::semi-join ?left ?right _]
+    (columns ?left)
 
     [::left-join ?left ?right _]
     (into (columns ?left) (columns ?right))
@@ -106,9 +108,8 @@
     (let [cols (columns ?ra)]
       (into cols (map first ?bindings)))))
 
-(defn dependent-cols [ra expr]
-  (let [cmap (column-map ra)
-        dmap (atom {})]
+(defn dependent-cols* [cmap expr]
+  (let [dmap (atom {})]
     ((fn ! [expr]
        (m/match expr
          [::scan ?expr ?bindings]
@@ -127,6 +128,8 @@
            :else nil))) expr)
     @dmap))
 
+(defn dependent-cols [ra expr] (dependent-cols* (column-map ra) expr))
+
 (defn dependent? [ra expr]
   (boolean (seq (dependent-cols ra expr))))
 
@@ -139,16 +142,45 @@
   [ra pred]
   (m/match ra
     (m/or [::cross-join ?a ?b]
-          [::join ?a ?b _]
-          [::left-join ?a ?b _])
+          [::join ?a ?b _])
     (cond
       (not-dependent? ?b pred) 1
       (not-dependent? ?a pred) 2
       :else nil)
 
+    [::left-join ?a ?b _]
+    (cond
+      (not-dependent? ?b pred) 1
+      :else nil)
+
+    (m/and [::apply ?mode ?a ?b]
+           (m/guard (= ?mode :cross-join)))
+    (cond
+      (not-dependent? ?b pred) 2
+      (not-dependent? ?a pred) 3
+      :else nil)
+
+    [::apply ?mode ?a ?b]
+    (cond
+      (not-dependent? ?b pred) 2
+      :else nil)
+
     [::where ?ra _]
     (when (pushable-side ?ra pred)
       1)
+
+    [::let ?ra ?bindings]
+    (when (empty? (dependent-cols* (into {} ?bindings) pred))
+      1)
+
+    [::group-by ?ra ?bindings]
+    (let [group-cols (dependent-cols ?ra pred)
+          binding-set (set (map first ?bindings))]
+      (when (->> group-cols
+                 keys
+                 (remove binding-set)
+                 empty?)
+        1))
 
     _ nil))
 
@@ -217,15 +249,22 @@
           [ra smap] (push-lookups* ?ra (into lookups expr-lookups))]
       [[::where ra (walk/postwalk-replace smap ?pred)] smap])
 
-    [::select ?ra ?bindings]
+    [::project ?ra ?bindings]
     (let [expr-lookups (mapcat #(find-lookups (second %)) ?bindings)
           [ra smap] (push-lookups* ?ra (into lookups expr-lookups))]
-      [[::select ra (mapv (fn [[k e]] [k (walk/postwalk-replace smap e)]) ?bindings)] smap])
+      [[::project ra (mapv (fn [[k e]] [k (walk/postwalk-replace smap e)]) ?bindings)] smap])
 
     [::apply ?mode ?left ?right]
     (let [[right-ra right-smap] (push-lookups* ?right lookups)
           [left-ra left-smap] (push-lookups* ?left (set/difference lookups (set (keys right-smap))))]
       [[::apply ?mode left-ra right-ra] (merge left-smap right-smap)])
+
+    [::semi-join ?left ?right ?pred]
+    (let [expr-lookups (find-lookups ?pred)
+          lookups (into lookups expr-lookups)
+          [right-ra right-smap] (push-lookups* ?right (set expr-lookups))
+          [left-ra left-smap] (push-lookups* ?left lookups)]
+      [[::semi-join left-ra right-ra (walk/postwalk-replace (merge left-smap right-smap) ?pred)] left-smap])
 
     [::join ?left ?right ?pred]
     (let [expr-lookups (find-lookups ?pred)
@@ -246,8 +285,12 @@
     [::group-by ?ra ?bindings]
     (let [expr-lookups (find-lookups (map second ?bindings))
           lookups (into lookups expr-lookups)
-          [ra smap] (push-lookups* ?ra lookups)]
-      [[::group-by ra (mapv (fn [[sym e]] [sym (walk/postwalk-replace smap e)]) ?bindings)] smap])
+          [ra smap] (push-lookups* ?ra lookups)
+          binding-syms (set (map first ?bindings))
+          matching-lookups (filter (fn [[_ kw s]] (binding-syms s)) lookups)
+          extra-bindings (mapv (fn [lookup] [(smap lookup) (smap lookup)]) matching-lookups)
+          new-bindings (mapv (fn [[sym e]] [sym (walk/postwalk-replace smap e)]) ?bindings)]
+      [[::group-by ra (into new-bindings extra-bindings)] smap])
 
     [::order-by ?ra ?clauses]
     (let [expr-lookups (find-lookups (map first ?clauses))
@@ -276,12 +319,13 @@
     ;; apply(T, R, E) = join(T, E, true)
     ;; if E not correlated with R
     (m/and [::apply ?mode ?left ?right]
-           (m/guard (#{:cross-join :left-join} ?mode))
+           (m/guard (#{:cross-join :left-join :single-join} ?mode))
            (m/guard (not-dependent? ?left ?right)))
     ;; =>
     [(case ?mode
        :cross-join ::join
-       :left-join ::left-join)
+       :left-join ::left-join
+       :single-join ::single-join)
      ?left
      ?right
      true]
@@ -291,12 +335,13 @@
     ;; apply(T, R, select(E, p)) = join(T, E, p)
     ;; if E not correlated with R
     (m/and [::apply ?mode ?left [::where ?right ?pred]]
-           (m/guard (#{:cross-join :left-join} ?mode))
+           (m/guard (#{:cross-join :left-join :single-join} ?mode))
            (m/guard (not-dependent? ?left ?right)))
     ;; =>
     [(case ?mode
        :cross-join ::join
-       :left-join ::left-join)
+       :left-join ::left-join
+       :single-join ::single-join)
      ?left
      ?right
      ?pred]
@@ -307,6 +352,23 @@
     [::apply :cross-join ?a [::where ?b ?pred]]
     [::where [::join ?a ?b true] ?pred]
     ;; endregion
+
+    ;; region de-correlation rule 9
+    [::apply :single-join ?left [::project [::group-by ?right ?group-binding] [[?sym ?expr]]]]
+    [::let
+     [::group-by
+      [::apply :left-join ?left ?right]
+      (do
+        (def l ?left)
+        (into (vec (for [sym (columns ?left)] [sym sym])) ?group-binding))]
+     [[?sym ?expr]]]
+
+    ;; endregion
+
+    ;; poor mans semi join
+    (m/and [::where [::apply :single-join ?left [::project [::where ?right ?pred] [[?sym true]]]] ?sym]
+           (m/guard (not-dependent? ?left ?right)))
+    [::semi-join ?left ?right ?pred]
 
     ;; region non dependent pred past join
     (m/and [::join ?left ?right ?pred]
@@ -373,7 +435,7 @@
 (def rewrite-logical
   (-> #'rewrites
       r/attempt
-      r/bottom-up
+      r/top-down
       (fix-max 100)))
 
 (defn conjoin-predicate-list [pred-list pred]
@@ -416,17 +478,17 @@
   (-> (r/match
         [::join* ?rels ?preds]
         (do (assert (seq ?rels))
-          ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
-          (loop [unsatisfied-predicates ?preds
-                 pending-relations (set ?rels)
-                 ra nil
-                 outer-where []]
-            (if (seq unsatisfied-predicates)
-              (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
-                    cost (fn [pred] (count (dependent-relations pred)))
-                    [pred & unsatisfied-predicates] (sort-by cost unsatisfied-predicates)
-                    add-relations (dependent-relations pred)]
-                (if (seq add-relations)
+            ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
+            (loop [unsatisfied-predicates ?preds
+                   pending-relations (set ?rels)
+                   ra nil
+                   ;; todo not sure if we need outer-where, check the loop
+                   outer-where []]
+              (if (seq unsatisfied-predicates)
+                (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
+                      cost (fn [pred] (count (dependent-relations pred)))
+                      [pred & unsatisfied-predicates] (sort-by cost unsatisfied-predicates)
+                      add-relations (dependent-relations pred)]
                   (recur unsatisfied-predicates
                          (reduce disj pending-relations add-relations)
                          (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra add-relations)]
@@ -439,15 +501,11 @@
 
                              ?ra
                              [::where ?ra pred]))
-                         outer-where)
-                  (recur unsatisfied-predicates
-                         pending-relations
-                         ra
-                         (conj outer-where pred))))
-              (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra pending-relations)]
-                (if (seq outer-where)
-                  [::where ra (reduce conjoin-predicates (first outer-where) (rest outer-where))]
-                  ra))))))
+                         outer-where))
+                (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra pending-relations)]
+                  (if (seq outer-where)
+                    [::where ra (reduce conjoin-predicates (first outer-where) (rest outer-where))]
+                    ra))))))
       r/attempt
       r/bottom-up))
 
@@ -461,10 +519,84 @@
       r/attempt
       r/bottom-up))
 
+(def substitute-sub-queries
+  ;; walk ra, replace sub queries with symbols, wrap with apply
+  ;; PROBLEM: local envs let/fn/reify clauses over sub queries in expressions would cause sub queries to capture different scopes
+  ;; SOLUTION 1: disallow let? disallow fn? ...
+  ;; SOLUTION 2: detect new scopes, let, fn and reify. subqueries within these scopes cannot be turned into joins
+  ;;             e.g rewrite let as [::plan/local-let ...] etc.
+  ;;             problem: macros introducing variables - this is already an issue for column shadowing, but actually you could normally use these
+  (r/match
+    [::where ?ra ?pred]
+    (let [replacement-syms (atom {})
+          replacement-sym (fn [sq]
+                            (or (@replacement-syms sq)
+                                (let [sym (*gensym* "scalar-subquery")]
+                                  (swap! replacement-syms assoc sq sym)
+                                  sym)))
+          all (-> (r/match
+                    (m/and [::scalar-sq [::project ?ra [[?col ?expr]]]] ?sq)
+                    (replacement-sym ?sq))
+                  r/attempt
+                  r/top-down)
+          pred (all ?pred)
+          ra (reduce
+               (fn [ra [sq sym]]
+                 (m/match sq
+                   [::scalar-sq [::project ?sq [[?col ?expr]]]]
+                   [::apply :single-join ra [::project ?sq [[sym ?expr]]]]))
+               ?ra
+               @replacement-syms)]
+      [::where ra pred])))
+
+(def rewrite-sub-queries
+  (-> #'substitute-sub-queries
+      r/attempt
+      r/top-down))
+
+(def ^:dynamic *pull-correlated-relation*)
+
+(defn correlated*? [expr]
+  (dependent? *pull-correlated-relation* expr))
+
+(def pull-correlated-selects
+  (r/match
+    (m/and
+      [::where [::where ?ra ?pred2] ?pred1]
+      (m/guard (and (correlated*? ?pred2)
+                    (not (correlated*? ?pred1)))))
+    [::where [::where ?ra ?pred1] ?pred2]
+
+    (m/and [::join [::where ?left ?pred] ?right ?join-pred]
+           (m/guard (correlated*? ?pred)))
+    [::where [::join ?left ?right ?join-pred] ?pred]
+
+    (m/and [::join ?left [::where ?right ?pred] ?join-pred]
+           (m/guard (correlated*? ?pred)))
+    [::where [::join ?left ?right ?join-pred] ?pred]
+
+    ))
+
+(def rewrite-pull-correlated-select
+  (-> (r/match
+        [::apply ?mode ?left ?right]
+        (binding [*pull-correlated-relation* ?left]
+          [::apply ?mode ?left
+           ((-> pull-correlated-selects
+                r/attempt
+                r/bottom-up
+                (fix-max 100))
+            ?right)]))
+      r/attempt
+      r/top-down))
+
 (defn rewrite [ra]
   (-> ra
       unique-ify-sub-queries
       unique-ify
+      rewrite-sub-queries
+      rewrite-logical
+      rewrite-pull-correlated-select
       rewrite-logical
       rewrite-fuse
       rewrite-join-collect
@@ -515,7 +647,7 @@
 (defn equi-theta [left right pred]
   (m/match pred
     [::and & ?clauses]
-    (apply merge-with into (map equi-theta ?clauses))
+    (apply merge-with into (map #(equi-theta left right %) ?clauses))
 
     [::= ?a ?b]
     (m/match [(dependent? left ?a) (dependent? right ?a)

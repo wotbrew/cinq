@@ -7,6 +7,8 @@
             [com.wotbrew.cinq.vector-seq :refer [q]])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)))
 
+(set! *warn-on-reflection* true)
+
 (comment
   (for [t (TpchTable/getTables)]
     (list 'defrecord (symbol (str/capitalize (.getTableName t)))
@@ -82,7 +84,7 @@
            (str/split s #"\|")))))
 
 (defn check-answer [qvar all-tables]
-  (let [result (parse-result-file (io/resource (format "io/airlift/tpch/queries/%s.result" (name (.toSymbol qvar)))))
+  (let [result (parse-result-file (io/resource (format "io/airlift/tpch/queries/%s.result" (name (.toSymbol ^clojure.lang.Var qvar)))))
         rs (qvar all-tables)]
     (testing (str qvar)
       (->> "row counts should match"
@@ -136,7 +138,7 @@
   (check-answer #'q1 @sf-001)
   )
 
-(deftest q1-test (check-answer #'q1 @sf-005))
+(deftest q1-test (check-answer #'q1 @sf-001))
 
 (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
   (q [p part
@@ -179,10 +181,11 @@
 
 (comment
   (time (count (q2 @sf-001)))
-
   (check-answer #'q2 @sf-001)
 
   )
+
+(deftest q2-test (check-answer #'q2 @sf-001))
 
 (defn q3 [{:keys [customer orders lineitem]}]
   (q [c customer
@@ -208,7 +211,10 @@
 
 (comment
   (time (count (q3 @sf-001)))
-  (check-answer #'q3 @sf-001))
+  (check-answer #'q3 @sf-001)
+  )
+
+(deftest q3-test (check-answer #'q3 @sf-001))
 
 (defn q4 [{:keys [orders, lineitem]}]
   ;; needs decor + semijoin
@@ -218,19 +224,49 @@
                   ;; todo $exists
                   (S [l lineitem
                       :where (and (= l:orderkey o:orderkey)
-                                  (= l:commitdate l:receiptdate))]
+                                  (< l:commitdate l:receiptdate))]
                      true))
       :group-by [orderpriority o:orderpriority]
       :order-by [orderpriority :asc]]
      ($select
-       :o_orderpriority o:orderpriority
+       :o_orderpriority orderpriority
        :order_count %count)))
 
 (comment
 
-  (time (count (q4 @sf-005)))
-  (check-answer #'q4 @sf-005)
+  (time (count (q4 @sf-001)))
+  (check-answer #'q4 @sf-001)
 
+  )
+
+(deftest q4-test (check-answer #'q4 @sf-001))
+
+(defn q5 [{:keys [customer, orders, lineitem, supplier, nation, region]}]
+  (q [c customer
+      o orders
+      l lineitem
+      s supplier
+      n nation
+      r region
+      :where (and (= c:custkey o:custkey)
+                  (= l:orderkey o:orderkey)
+                  (= l:suppkey s:suppkey)
+                  (= c:nationkey s:nationkey)
+                  (= s:nationkey n:nationkey)
+                  (= n:regionkey r:regionkey)
+                  (= r:name "ASIA")
+                  (>= o:orderdate #inst "1994-01-01")
+                  (< o:orderdate #inst "1995-01-01"))
+      :group-by [nation-name n:name]
+      :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
+      :order-by [revenue :desc]]
+     ($select :n_name nation-name
+              :revenue revenue)))
+
+(comment
+
+  (time (count (q5 @sf-005)))
+  (check-answer #'q5 @sf-001)
 
   )
 
@@ -243,14 +279,18 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  (doseq [q [#'q1, #'q2, #'q3,]]
+  (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5]]
     (println q)
     (time (count (q dataset))))
 
-  (time (dotimes [x 20] (count (q1 dataset))))
+  (time (dotimes [x 1] (count (q1 dataset))))
   (time (dotimes [x 1] (count (q2 dataset))))
-  (time (dotimes [x 100] (count (q2 dataset))))
   (time (dotimes [x 1] (count (q3 dataset))))
+  (time (dotimes [x 1] (count (q4 dataset))))
+  (time (dotimes [x 1] (count (q5 dataset))))
+
+  (time (dotimes [x 20] (count (q1 dataset))))
+  (time (dotimes [x 100] (count (q2 dataset))))
   (time (dotimes [x 50] (count (q3 dataset))))
 
   )

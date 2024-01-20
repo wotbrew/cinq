@@ -44,27 +44,31 @@
     `(->Column (object-array 0))
     (let [col-sym (with-meta (gensym "col") {:tag `Column})
           i-sym (gensym "i")]
-      `(let ~binding
-         (let [~col-sym ~(first binding)
-               data-size# (count ~col-sym)
-               out# (object-array data-size#)]
-           (loop [ret# ~init
-                  ~i-sym (int 0)]
-             (if (< ~i-sym data-size#)
-               (let ~(vec (for [[sym _] (partition 2 binding)
-                                form [sym `(.getObject ~(with-meta sym {:tag `IColumn}) ~i-sym)]]
-                            form))
-                 (recur (~op ret# ~expr) (unchecked-inc-int ~i-sym)))
-               ret#)))))))
+      `((fn bc-reduce-fn# ~(mapv first (partition 2 binding))
+          (let [~col-sym ~(first binding)
+                data-size# (count ~col-sym)
+                out# (object-array data-size#)]
+            (loop [ret# ~init
+                   ~i-sym (int 0)]
+              (if (< ~i-sym data-size#)
+                (let ~(vec (for [[sym _] (partition 2 binding)
+                                 form [sym `(.getObject ~(with-meta sym {:tag `IColumn}) ~i-sym)]]
+                             form))
+                  (recur (~op ret# ~expr) (unchecked-inc-int ~i-sym)))
+                ret#))))
+        ~@(map second (partition 2 binding))))))
+
+(defn sum1 [col]
+  (let [arr (get-array col)]
+    (loop [ret (Long/valueOf 0)
+           i (int 0)]
+      (if (< i (alength arr))
+        (recur (+ ret (aget arr i)) (unchecked-inc-int i))
+        ret))))
 
 (defmacro sum
-  ([col] `(let [arr# (get-array ~col)]
-            (loop [ret# 0
-                   i# (int 0)]
-              (if (< i# (alength arr#))
-                (recur (+ ret# (aget arr# i#)) (unchecked-inc-int i#))
-                ret#))))
-  ([binding expr] `(broadcast-reduce ~binding 0 + ~expr)))
+  ([col] `(sum1 ~col))
+  ([binding expr] `(broadcast-reduce ~binding (Long/valueOf 0) + ~expr)))
 
 (defmacro avg
   ([col]

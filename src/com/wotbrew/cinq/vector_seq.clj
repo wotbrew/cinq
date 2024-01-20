@@ -5,10 +5,8 @@
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
-            [meander.epsilon :as m]
-            [meander.strategy.epsilon :as r])
-  (:import (clojure.lang ILookup Indexed)
-           (java.util ArrayList Arrays Comparator HashMap List)))
+            [meander.epsilon :as m])
+  (:import (java.util ArrayList Arrays Comparator HashMap List)))
 
 (set! *warn-on-reflection* true)
 
@@ -45,16 +43,21 @@
                   (.put ht k (doto (ArrayList.) (.add o))))))
         _ (run! add vseq)]
     (map (fn [[k ^ArrayList al]]
-           (let [tc (alength ^objects (.get al 0))]
-             (-> (mapv (fn [i]
-                         (let [arr (object-array (.size al))]
-                           (dotimes [j (.size al)]
-                             (let [^objects t (.get al j)]
-                               (aset arr j (aget t i))))
-                           (col/->Column arr))) (range tc))
-                 (into k)
-                 (conj (.size al))
-                 (object-array))))
+           (let [tc (alength ^objects (.get al 0))
+                 out-array (object-array (+ tc (count k) 1))]
+             ;; group columns
+             (dotimes [i tc]
+               (let [arr (object-array (.size al))]
+                 (dotimes [j (.size al)]
+                   (let [^objects t (.get al j)]
+                     (aset arr j (aget t i))))
+                 (aset out-array i (col/->Column arr))))
+             ;; key columns
+             (dotimes [i (count k)]
+               (aset out-array (+ tc i) (nth k i)))
+             ;; %count variable
+             (aset out-array (+ tc (count k)) (Long/valueOf (long (.size al))))
+             out-array))
          ht)))
 
 (defn order [vseq order-clauses]
@@ -92,11 +95,24 @@
               [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
     l+r))
 
+(defn apply-single-join [vseq f]
+  (for [^objects l vseq
+        :let [x (first (f l))
+              ret (object-array (unchecked-inc-int (alength l)))
+              _ (System/arraycopy l 0 ret 0 (alength l))
+              _ (aset ret (alength l) x)]]
+    ret))
+
 (defn join [left right theta-pred]
   (for [l left
         r right
         :when (theta-pred l r)]
-    (into l r)))
+    (conjoin-tuples l r)))
+
+(defn semi-join [left right theta-pred]
+  (for [l left
+        :when (seq (filter #(theta-pred l %) right))]
+    l))
 
 (defn left-join [left right theta-pred n-cols]
   (for [l left
@@ -122,6 +138,25 @@
                           (.add out (conjoin-tuples l r)))))
                     out))))
       right)))
+
+(defn equi-semi-join [left left-key right right-key theta-pred]
+  (let [ht (HashMap.)
+        add (fn [o]
+              (let [k (right-key o), ^List al (.get ht k)]
+                (if al
+                  (.add al o)
+                  (.put ht k (doto (ArrayList.) (.add o))))))
+        _ (run! add right)]
+    (eduction
+      (keep (fn [l]
+                (when-some [^List al (.get ht (left-key l))]
+                  (loop [i (int 0)]
+                    (when (< i (.size al))
+                      (let [r (.get al i)]
+                        (if (theta-pred l r)
+                          l
+                          (recur (unchecked-inc-int i)))))))))
+      left)))
 
 (defn equi-left-join [left left-key right right-key theta-pred n-cols]
   (let [ht (HashMap.)
@@ -185,14 +220,7 @@
                `(> (compare ~?a ~?b) 0)
 
                [::plan/scalar-sq ?plan]
-               `(ffirst ~(compile-plan ?plan))
-
-               [::plan/column-sq ?plan]
-               `(col/->Column (object-array (map first ~(compile-plan ?plan))))
-
-               ;; todo tuple type?
-               [::plan/sq ?plan]
-               (compile-plan ?plan)
+               `(first ~(compile-plan ?plan))
 
                [::plan/and & ?clause]
                (if (seq ?clause)
@@ -232,42 +260,42 @@
 
     [::plan/where [::plan/scan ?src ?cols] ?pred]
     [(compile-src ?src)
-     (list (let [osym (gensym "o")
-                 asym (gensym "a")]
-             ;; permitting the keep transducer to be specialised (rather than passing a function to keep)
-             ;; reduces megamorphic completing dispatch and speeds things up quite a bit (30-40% on some benchmarks)
-             `(fn [rf#]
-                (fn
-                  ([] (rf#))
-                  ([result#] (rf# result#))
-                  ([result# ~osym]
-                   (let [~@(for [[sym k] ?cols
-                                 form [sym (cond
-                                             (= :cinq/self k) osym
-                                             (keyword? k) (list k osym)
-                                             :else (list `get osym k))]]
-                             form)]
-                     (when ~(rewrite-expr [] ?pred)
-                       (let [~asym (object-array ~(count ?cols))]
-                         ~@(for [[i sym] (map-indexed vector (map first ?cols))]
-                             `(aset ~asym ~i ~sym))
-                         (rf# result# ~asym)))))))))]
+     [(let [osym (gensym "o")
+            asym (gensym "a")]
+        ;; permitting the keep transducer to be specialised (rather than passing a function to keep)
+        ;; reduces megamorphic completing dispatch and speeds things up quite a bit (30-40% on some benchmarks)
+        `(fn [rf#]
+           (fn
+             ([] (rf#))
+             ([result#] (rf# result#))
+             ([result# ~osym]
+              (let [~@(for [[sym k] ?cols
+                            form [sym (cond
+                                        (= :cinq/self k) osym
+                                        (keyword? k) (list k osym)
+                                        :else (list `get osym k))]]
+                        form)]
+                (when ~(rewrite-expr [] ?pred)
+                  (let [~asym (object-array ~(count ?cols))]
+                    ~@(for [[i sym] (map-indexed vector (map first ?cols))]
+                        `(aset ~asym ~i ~sym))
+                    (rf# result# ~asym))))))))]]
 
     [::plan/scan ?src ?cols]
     (let [osym (gensym "o")
           asym (gensym "a")]
       [(compile-src ?src)
-       (list `(map (fn [~osym]
-                     (let [~@(for [[sym k] ?cols
-                                   form [sym (cond
-                                               (= :cinq/self k) osym
-                                               (keyword? k) (list k osym)
-                                               :else (list `get osym k))]]
-                               form)
-                           ~asym (object-array ~(count ?cols))]
-                       ~@(for [[i sym] (map-indexed vector (map first ?cols))]
-                           `(aset ~asym ~i ~sym))
-                       ~asym))))])
+       [`(map (fn [~osym]
+                (let [~@(for [[sym k] ?cols
+                              form [sym (cond
+                                          (= :cinq/self k) osym
+                                          (keyword? k) (list k osym)
+                                          :else (list `get osym k))]]
+                          form)
+                      ~asym (object-array ~(count ?cols))]
+                  ~@(for [[i sym] (map-indexed vector (map first ?cols))]
+                      `(aset ~asym ~i ~sym))
+                  ~asym)))]])
 
     [::plan/where ?ra ?pred]
     (let [[src xforms] (compile-plan* ?ra)]
@@ -276,19 +304,28 @@
 
     [::plan/cross-join ?left ?right]
     [`(cross-join ~(collapse-plan (compile-plan* ?left))
-                  ~(collapse-plan (compile-plan* ?right)))]
+                  ~(collapse-plan (compile-plan* ?right)))
+     []]
 
     [::plan/apply :cross-join ?left ?right]
     [`(apply-join
         ~(compile-plan ?left)
-        ~(compile-lambda [?left] ?right)
-        ~(plan/arity ?right))]
+        ~(compile-lambda [?left] (compile-plan ?right))
+        ~(plan/arity ?right))
+     []]
 
     [::plan/apply :left-join ?left ?right]
     [`(apply-left-join
         ~(compile-plan ?left)
-        ~(compile-lambda [?left] ?right)
-        ~(plan/arity ?right))]
+        ~(compile-lambda [?left] (compile-plan ?right))
+        ~(plan/arity ?right))
+     []]
+
+    [::plan/apply :single-join ?left ?right]
+    [`(apply-single-join
+        ~(compile-plan ?left)
+        ~(compile-lambda [?left] (compile-plan ?right)))
+     []]
 
     [::plan/join ?left ?right ?pred]
     (let [{:keys [left-key right-key theta]
@@ -299,10 +336,26 @@
                      ~(compile-key [?left] left-key)
                      ~(compile-plan ?right)
                      ~(compile-key [?right] right-key)
-                     ~(compile-lambda [?left ?right] theta))
+                     ~(compile-lambda [?left ?right] `(and ~@theta)))
          `(join ~(compile-plan ?left)
                 ~(compile-plan ?right)
-                ~(compile-lambda [?left ?right] ?pred)))])
+                ~(compile-lambda [?left ?right] ?pred)))
+       []])
+
+    [::plan/semi-join ?left ?right ?pred]
+    (let [{:keys [left-key right-key theta]
+           :or {theta [true]}}
+          (plan/equi-theta ?left ?right ?pred)]
+      [(if (seq left-key)
+         `(equi-semi-join ~(compile-plan ?left)
+                     ~(compile-key [?left] left-key)
+                     ~(compile-plan ?right)
+                     ~(compile-key [?right] right-key)
+                     ~(compile-lambda [?left ?right] `(and ~@theta)))
+         `(semi-join ~(compile-plan ?left)
+                     ~(compile-plan ?right)
+                     ~(compile-lambda [?left ?right] ?pred)))
+       []])
 
     [::plan/left-join ?left ?right ?pred]
     (let [{:keys [left-key right-key theta]
@@ -313,12 +366,13 @@
                           ~(compile-key [?left] left-key)
                           ~(compile-plan ?right)
                           ~(compile-key [?right] right-key)
-                          ~(compile-lambda [?left ?right] theta)
+                          ~(compile-lambda [?left ?right] `(and ~@theta))
                           ~(plan/arity ?right))
          `(left-join ~(compile-plan ?left)
                      ~(compile-plan ?right)
                      ~(compile-lambda [?left ?right] ?pred)
-                     ~(plan/arity ?right)))])
+                     ~(plan/arity ?right)))
+       []])
 
     [::plan/let ?ra ?bindings]
     `[(add-columns
@@ -330,12 +384,14 @@
                       form)]
               (doto (object-array ~(count ?bindings))
                 ~@(for [[i [sym]] (map-indexed vector ?bindings)]
-                    `(aset ~i ~sym))))))]
+                    `(aset ~i ~sym))))))
+      []]
 
-    [::plan/select ?ra ?projection]
-    `[(select
-        ~(compile-plan ?ra)
-        ~(compile-lambda [?ra] (mapv second ?projection)))]
+    [::plan/project ?ra ?projections]
+    (let [[src xform] (compile-plan* ?ra)]
+      (if (= 1 (count ?projections))
+        [src (conj xform `(map ~(compile-lambda [?ra] (second (first ?projections)))))]
+        [src (conj xform `(map ~(compile-lambda [?ra] (mapv second ?projections))))]))
 
     [::plan/group-by ?ra ?bindings]
     `[(group ~(compile-plan ?ra) ~(compile-lambda
@@ -343,26 +399,33 @@
                                     `(let [~@(for [[sym expr] ?bindings
                                                    form [sym expr]]
                                                form)]
-                                       ~(mapv first ?bindings))))]
+                                       ~(mapv first ?bindings))))
+      []]
 
     [::plan/order-by ?ra ?order-clauses]
     `[(order ~(compile-plan ?ra)
              [~@(for [[expr dir] ?order-clauses]
-                  [(compile-lambda [?ra] expr) dir])])]
+                  [(compile-lambda [?ra] expr) dir])])
+      []]
 
     [::plan/limit ?ra ?n]
-    `[(limit ~(compile-plan ?ra) ~?n)]))
+    `[(limit ~(compile-plan ?ra) ~?n)
+      []]))
 
-(defmacro q [ra expr]
-  (let [lp (parse/parse ra expr)
-        lp' (plan/rewrite lp)
-        [src xforms] (compile-plan* lp')]
-    `(sequence ~(collapse-plan [src (conj xforms `(map vec))]))))
+(defmacro q
+  ([ra] `(q ~ra :cinq/*))
+  ([ra expr]
+   (let [lp (parse/parse (list 'q ra expr))
+         lp' (plan/rewrite lp)
+         [src xforms] (compile-plan* lp')]
+     `(sequence ~(collapse-plan [src xforms])))))
 
 (comment
 
   (q [a [1, 2, 3]])
-  (macroexpand '(q [a [1, 2, 3]]))
+  (q [a [1, 2, 3]] a)
+  (q [a [1, 2, 3] b [1, 2]])
+  (macroexpand '(q [a [1, 2, 3]] a))
 
 
   (q [a [1, 2, 3]
@@ -399,9 +462,15 @@
 
   (q [c [{:firstname "Dan" :lastname "Stone", :id 42}]
       o [{:basket {"egg" 1, "bacon" 2}, :customer-id 42}]
-      :where (= c:id o:customer-id)
-      :select [:name (str c:firstname " " c:lastname)
-               :basket o:basket]])
+      :where (= c:id o:customer-id)]
+     {:name (str c:firstname " " c:lastname)
+      :basket o:basket})
+
+  (q [c [{:firstname "Dan" :lastname "Stone", :id 42}]
+      o [{:basket {"egg" 1, "bacon" 2}, :customer-id 42}]
+      :where (= c:id o:customer-id)]
+     ($select :name (str c:firstname " " c:lastname)
+              :basket o:basket))
 
   ;; reserved names, not allowed in user args, reify args, let symbol.
   ;; columns! e.g if I have 'a bound to a column, I cannot shadow it
