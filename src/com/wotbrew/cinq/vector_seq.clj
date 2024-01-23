@@ -195,10 +195,16 @@
     l))
 
 (defn left-join [left right theta-pred n-cols]
-  (for [l left
+  (for [^objects l left
         :let [rs (filter #(theta-pred l %) right)]
-        l+r (if (seq rs) (map #(into l %) rs) [(into l (take n-cols) (repeat nil))])]
+        l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
     l+r))
+
+(defn single-join [left right theta-pred]
+  (for [^objects l left
+        :let [r (first (filter #(theta-pred l %) right))]]
+    (doto (Arrays/copyOf l (inc (alength l)))
+      (aset (alength l) r))))
 
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
@@ -250,6 +256,19 @@
           :let [rs (filter #(theta-pred l %) (.get ht (left-key l)))]
           l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
       l+r)))
+
+(defn equi-single-join [left left-key right right-key theta-pred]
+  (let [ht (HashMap.)
+        add (fn [o]
+              (let [k (right-key o), ^List al (.get ht k)]
+                (if al
+                  (.add al o)
+                  (.put ht k (doto (ArrayList.) (.add o))))))
+        _ (run! add right)]
+    (for [^objects l left
+          :let [r (first (filter #(theta-pred l %) (.get ht (left-key l))))]]
+      (doto (Arrays/copyOf l (inc (alength l)))
+        (aset (alength l) r)))))
 
 (defn cross-join [left right]
   (for [l left
@@ -337,8 +356,8 @@
 
 (defmacro safe-hash [a]
   `(if (nil? ~a)
-    0
-    (.hashCode ~(with-meta a {:tag 'java.lang.Object}))))
+     0
+     (.hashCode ~(with-meta a {:tag 'java.lang.Object}))))
 
 (defn compile-plan* [plan]
   (m/match plan
@@ -459,6 +478,21 @@
                      ~(plan/arity ?right)))
        []])
 
+    [::plan/single-join ?left ?right ?pred]
+    (let [{:keys [left-key right-key theta]
+           :or {theta [true]}}
+          (plan/equi-theta ?left ?right ?pred)]
+      [(if (seq left-key)
+         `(equi-single-join ~(compile-plan ?left)
+                            ~(compile-key [?left] left-key)
+                            ~(compile-plan ?right)
+                            ~(compile-key [?right] right-key)
+                            ~(compile-lambda [?left ?right] `(and ~@theta)))
+         `(single-join ~(compile-plan ?left)
+                       ~(compile-plan ?right)
+                       ~(compile-lambda [?left ?right] ?pred)))
+       []])
+
     [::plan/let ?ra ?bindings]
     `[(add-columns
         ~(compile-plan ?ra)
@@ -495,16 +529,16 @@
 
       2
       `[(group2 ~(compile-plan ?ra)
-               ~(compile-lambda
-                  [?ra]
-                  `(let [~@(for [[sym expr] ?bindings
-                                 form [(with-meta sym {:tag Object}) expr]]
-                             form)]
-                     (new Key2
-                          ~(first (first ?bindings))
-                          ~(first (second ?bindings))
-                          ~(let [[[sym1] [sym2]] ?bindings]
-                             `(bit-xor (safe-hash ~sym1) (safe-hash ~sym2)))))))
+                ~(compile-lambda
+                   [?ra]
+                   `(let [~@(for [[sym expr] ?bindings
+                                  form [(with-meta sym {:tag Object}) expr]]
+                              form)]
+                      (new Key2
+                           ~(first (first ?bindings))
+                           ~(first (second ?bindings))
+                           ~(let [[[sym1] [sym2]] ?bindings]
+                              `(bit-xor (safe-hash ~sym1) (safe-hash ~sym2)))))))
         []]
 
       `[(group ~(compile-plan ?ra)

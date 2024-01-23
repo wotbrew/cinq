@@ -94,6 +94,9 @@
     [::left-join ?left ?right _]
     (into (columns ?left) (columns ?right))
 
+    [::single-join ?left ?right _]
+    (into (columns ?left) (columns ?right))
+
     [::group-by ?ra ?bindings]
     (let [cols (columns ?ra)]
       (conj (into cols (mapv first ?bindings)) '%count))

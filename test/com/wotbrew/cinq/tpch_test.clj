@@ -395,12 +395,12 @@
   (check-answer #'q8 @sf-001))
 
 (defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
-  (q [p part 
-      s supplier 
-      l lineitem 
+  (q [p part
+      s supplier
+      l lineitem
       ps partsupp
-      o orders 
-      n nation 
+      o orders
+      n nation
       :where
       (and (= s:suppkey l:suppkey)
            (= ps:suppkey l:suppkey)
@@ -415,8 +415,8 @@
       :group-by [nation n:name
                  year (get-year o:orderdate)]
       :order-by [nation :asc, year :desc]]
-     ($select :nation nation 
-              :o_year year 
+     ($select :nation nation
+              :o_year year
               :sum_profit ($sum amount))))
 
 (deftest q9-test (check-answer #'q9 @sf-001))
@@ -425,7 +425,6 @@
   (time (count (q9 @sf-005)))
   (q9 @sf-001)
   (check-answer #'q9 @sf-001))
-
 
 (defn q10 [{:keys [lineitem customer orders nation]}]
   (q [c customer
@@ -467,6 +466,37 @@
   (check-answer #'q10 @sf-001)
   )
 
+(defn q11 [{:keys [partsupp supplier nation]}]
+  (q [ps partsupp
+      s supplier
+      n nation
+      :where
+      (and (= ps:suppkey s:suppkey)
+           (= s:nationkey n:nationkey)
+           (= n:name "GERMANY"))
+      :group-by [ps_partkey ps:partkey]
+      :let [value ($sum (* ps:supplycost ps:availqty))]
+      :where (> value (S [ps partsupp
+                          s supplier
+                          n nation
+                          :where
+                          (and (= ps:suppkey s:suppkey)
+                               (= s:nationkey n:nationkey)
+                               (= n:name "GERMANY"))
+                          :group-by []]
+                         (* 0.0001 ($sum (* ps:supplycost ps:availqty)))))
+      :order-by [value :desc]]
+     ($select :ps_partkey ps_partkey
+              :value value)))
+
+(deftest q11-test (check-answer #'q11 @sf-001))
+
+(comment
+  (time (count (q11 @sf-005)))
+  (q11 @sf-001)
+  (check-answer #'q11 @sf-001)
+  )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -481,7 +511,10 @@
   (type (first (:lineitem dataset)))
 
   (time
-    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7, #'q8, #'q9 #'q10]]
+    (do (doseq [q [#'q1, #'q2, #'q3,
+                   #'q4, #'q5, #'q6,
+                   #'q7, #'q8, #'q9
+                   #'q10, #'q11]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
