@@ -426,6 +426,47 @@
   (q9 @sf-001)
   (check-answer #'q9 @sf-001))
 
+
+(defn q10 [{:keys [lineitem customer orders nation]}]
+  (q [c customer
+      o orders
+      l lineitem
+      n nation
+      :where
+      (and (= c:custkey o:custkey)
+           (= l:orderkey o:orderkey)
+           (>= o:orderdate #inst "1993-10-01")
+           (< o:orderdate #inst "1994-01-01")
+           (= "R" l:returnflag)
+           (= c:nationkey n:nationkey))
+      ;; todo shadowing names here cause issues
+      :group-by [c_custkey c:custkey
+                 c_name c:name
+                 c_acctbal c:acctbal
+                 c_phone c:phone
+                 n_name n:name
+                 c_address c:address
+                 c_comment c:comment]
+      :let [revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
+      :order-by [revenue :desc, c_custkey :asc]
+      :limit 20]
+     ($select :c_custkey c_custkey
+              :c_name c_name
+              :revenue revenue
+              :c_acctbal c_acctbal
+              :n_name n_name
+              :c_address c_address
+              :c_phone c_phone
+              :c_comment c_comment)))
+
+(deftest q10-test (check-answer #'q10 @sf-001))
+
+(comment
+  (time (count (q10 @sf-005)))
+  (q10 @sf-001)
+  (check-answer #'q10 @sf-001)
+  )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -440,7 +481,7 @@
   (type (first (:lineitem dataset)))
 
   (time
-    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7, #'q8, #'q9]]
+    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7, #'q8, #'q9 #'q10]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
