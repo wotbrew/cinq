@@ -5,7 +5,8 @@
             [clojure.instant :as inst]
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.vector-seq :refer [q]])
-  (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)))
+  (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
+           (java.util Date)))
 
 (set! *warn-on-reflection* true)
 
@@ -131,22 +132,21 @@
               :avg_price ($avg l:extendedprice)
               :avg_disc ($avg l:discount)
               :count_order %count)))
-#_
-(defn q1-el [{:keys [lineitem]}]
-  (com.wotbrew.cinq.eager-loop/q
-    [l lineitem
-      :where (<= l:shipdate #inst "1998-09-02")
-      :group-by [returnflag l:returnflag, linestatus l:linestatus]]
-     ($select :l_returnflag returnflag
-              :l_linestatus linestatus
-              :sum_qty ($sum l:quantity)
-              :sum_base_price ($sum l:extendedprice)
-              :sum_disc_price ($sum (* l:extendedprice (- 1 l:discount)))
-              :sum_charge ($sum (* l:extendedprice (- 1 l:discount) (+ 1 l:tax)))
-              :avg_qty ($avg l:quantity)
-              :avg_price ($avg l:extendedprice)
-              :avg_disc ($avg l:discount)
-              :count_order %count)))
+#_(defn q1-el [{:keys [lineitem]}]
+    (com.wotbrew.cinq.eager-loop/q
+      [l lineitem
+       :where (<= l:shipdate #inst "1998-09-02")
+       :group-by [returnflag l:returnflag, linestatus l:linestatus]]
+      ($select :l_returnflag returnflag
+               :l_linestatus linestatus
+               :sum_qty ($sum l:quantity)
+               :sum_base_price ($sum l:extendedprice)
+               :sum_disc_price ($sum (* l:extendedprice (- 1 l:discount)))
+               :sum_charge ($sum (* l:extendedprice (- 1 l:discount) (+ 1 l:tax)))
+               :avg_qty ($avg l:quantity)
+               :avg_price ($avg l:extendedprice)
+               :avg_disc ($avg l:discount)
+               :count_order %count)))
 
 (comment
 
@@ -309,12 +309,94 @@
 
   )
 
+(defn get-year [^Date date]
+  (+ 1900 (.getYear date)))
+
+(defn q7 [{:keys [supplier lineitem orders customer nation]}]
+  (q [s supplier
+      l lineitem
+      o orders
+      c customer
+      n1 nation
+      n2 nation
+      :where (and (= s:suppkey l:suppkey)
+                  (= o:orderkey l:orderkey)
+                  (= c:custkey o:custkey)
+                  (= s:nationkey n1:nationkey)
+                  (= c:nationkey n2:nationkey)
+                  (or (and (= "FRANCE" n1:name)
+                           (= "GERMANY" n2:name))
+                      (and (= "GERMANY" n1:name)
+                           (= "FRANCE" n2:name)))
+                  (<= #inst "1995-01-01" l:shipdate)
+                  (<= l:shipdate #inst "1996-12-31"))
+      :let [year (get-year l:shipdate)
+            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))
+            supp_nation n1:name
+            cust_nation n2:name]
+      :group-by [supp_nation supp_nation
+                 cust_nation cust_nation
+                 year year]
+      :order-by [supp_nation :asc
+                 cust_nation :asc
+                 year :asc]]
+     ($select :supp_nation supp_nation
+              :cust_nation cust_nation
+              :l_year year
+              :revenue ($sum volume))))
+
+(deftest q7-test (check-answer #'q7 @sf-001))
+
+(comment
+
+  (time (count (q7 @sf-005)))
+  (q7 @sf-001)
+  (check-answer #'q7 @sf-001))
+
+(defn q8 [{:keys [part supplier region lineitem orders customer nation]}]
+  (q [p part
+      s supplier
+      l lineitem
+      o orders
+      c customer
+      n1 nation
+      n2 nation
+      r region
+      :where
+      (and (= p:partkey l:partkey)
+           (= s:suppkey l:suppkey)
+           (= l:orderkey o:orderkey)
+           (= o:custkey c:custkey)
+           (= c:nationkey n1:nationkey)
+           (= n1:regionkey r:regionkey)
+           (= "AMERICA" r:name)
+           (= s:nationkey n2:nationkey)
+           (<= #inst "1995-01-01" o:orderdate)
+           (<= o:orderdate #inst "1996-12-31")
+           (= "ECONOMY ANODIZED STEEL" p:type))
+      :let [o_year (get-year o:orderdate)
+            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))
+            nation n2:name]
+      :group-by [o_year o_year]
+      :order-by [o_year :asc]]
+     ($select
+       :o_year o_year
+       :mkt_share (double (/ ($sum
+                               (if (= "BRAZIL" nation)
+                                 volume
+                                 0.0))
+                             ($sum volume))))))
+
+(deftest q8-test (check-answer #'q8 @sf-001))
+
+(comment
+  (time (count (q8 @sf-005)))
+  (q8 @sf-001)
+  (check-answer #'q8 @sf-001))
 
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
-
-
 
   (System/gc)
 
@@ -325,9 +407,11 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6]]
-    (println q)
-    (time (count (q dataset))))
+  (time
+    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7]]
+          (println q)
+          (time (count (q dataset))))
+        (println "done")))
 
   (time (dotimes [x 1] (count (q1 dataset))))
   (time (dotimes [x 1] (count (q2 dataset))))
@@ -335,10 +419,15 @@
   (time (dotimes [x 1] (count (q4 dataset))))
   (time (dotimes [x 1] (count (q5 dataset))))
   (time (dotimes [x 1] (count (q6 dataset))))
+  (time (dotimes [x 1] (count (q7 dataset))))
 
   (clj-async-profiler.core/profile
     {}
     (dotimes [x 20] (count (q1 dataset))))
+
+  (clj-async-profiler.core/profile
+    {}
+    (dotimes [x 20] (count (q7 dataset))))
 
 
   (time (dotimes [x 20] (count (q1-el dataset))))

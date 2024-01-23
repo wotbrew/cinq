@@ -22,7 +22,7 @@
   (getObject [_ i] (aget data i)))
 
 (defmethod print-method Column [^Column col ^Writer w]
-  (print-method (vec (.-data col)) w))
+   (print-method (vec (get-array col)) w))
 
 (defmacro broadcast [binding expr]
   (if (empty? binding)

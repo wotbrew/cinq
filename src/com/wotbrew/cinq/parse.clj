@@ -24,7 +24,7 @@
                  (symbol? k) [[k v]]
                  (= :keys k)
                  (for [k v]
-                   [(symbol nil k) k])
+                   [(symbol nil (name k)) k])
 
                  (= :strs k)
                  (for [s v]
