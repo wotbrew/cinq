@@ -394,6 +394,38 @@
   (q8 @sf-001)
   (check-answer #'q8 @sf-001))
 
+(defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
+  (q [p part 
+      s supplier 
+      l lineitem 
+      ps partsupp
+      o orders 
+      n nation 
+      :where
+      (and (= s:suppkey l:suppkey)
+           (= ps:suppkey l:suppkey)
+           (= ps:partkey l:partkey)
+           (= p:partkey l:partkey)
+           (= o:orderkey l:orderkey)
+           (= s:nationkey n:nationkey)
+           (str/includes? p:name "green"))
+      ;; todo if I do not have the boxing here - the let aset causes reflection
+      :let [amount (Double/valueOf (- (* l:extendedprice (- 1.0 l:discount))
+                                      (* ps:supplycost l:quantity)))]
+      :group-by [nation n:name
+                 year (get-year o:orderdate)]
+      :order-by [nation :asc, year :desc]]
+     ($select :nation nation 
+              :o_year year 
+              :sum_profit ($sum amount))))
+
+(deftest q9-test (check-answer #'q9 @sf-001))
+
+(comment
+  (time (count (q9 @sf-005)))
+  (q9 @sf-001)
+  (check-answer #'q9 @sf-001))
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -408,7 +440,7 @@
   (type (first (:lineitem dataset)))
 
   (time
-    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7]]
+    (do (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6, #'q7, #'q8, #'q9]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
@@ -428,7 +460,6 @@
   (clj-async-profiler.core/profile
     {}
     (dotimes [x 20] (count (q7 dataset))))
-
 
   (time (dotimes [x 20] (count (q1-el dataset))))
   (time (dotimes [x 100] (count (q2 dataset))))
