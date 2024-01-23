@@ -5,30 +5,33 @@
 (definterface IColumn
   (getObject ^Object [^int i]))
 
-(deftype Column [^objects data]
-  IDeref
-  (deref [_] data)
-  Counted
-  (count [_] (alength data))
-  Indexed
-  (nth [_ i] (aget data i))
-  (nth [_ i not-found] (if (< i (alength data)) (aget data i) not-found))
-  Iterable
-  (iterator [_] (ArrayIter/create data))
-  IColumn
-  (getObject [_ i] (aget data i)))
+(defn get-array ^objects [^IDeref col] (.deref col))
 
-(defn get-array ^objects [col] @col)
+(deftype Column [^:unsynchronized-mutable ^objects data thunk]
+  IDeref
+  (deref [this] (or data (let [arr (thunk)] (set! (.-data this) arr) arr)))
+  Counted
+  (count [this] (alength @this))
+  Indexed
+  (nth [this i] (aget (get-array this) i))
+  (nth [this i not-found] (let [data (get-array this)] (if (< i (alength data)) (aget data i) not-found)))
+  Iterable
+  (iterator [this] (ArrayIter/create (get-array this)))
+  IColumn
+  ;; require forcing
+  (getObject [_ i] (aget data i)))
 
 (defmethod print-method Column [^Column col ^Writer w]
   (print-method (vec (.-data col)) w))
 
 (defmacro broadcast [binding expr]
   (if (empty? binding)
-    `(->Column (object-array 0))
+    `(->Column (object-array 0) nil)
     (let [col-sym (with-meta (gensym "col") {:tag `Column})
           i-sym (gensym "i")]
       `(let ~binding
+         ;; force used arrays
+         ~@(for [binding (map first (partition 2 binding))] `(get-array ~binding))
          (let [~col-sym ~(first binding)
                data-size# (count ~col-sym)
                out# (object-array data-size#)]
@@ -37,11 +40,11 @@
                               form [sym `(.getObject ~(with-meta sym {:tag `IColumn}) ~i-sym)]]
                           form))
                (aset out# ~i-sym ~expr)))
-           (->Column out#))))))
+           (->Column out# nil))))))
 
 (defmacro broadcast-reduce [binding init op expr]
   (if (empty? binding)
-    `(->Column (object-array 0))
+    `(->Column (object-array 0) nil)
     (let [col-sym (with-meta (gensym "col") {:tag `Column})
           i-sym (gensym "i")]
       `((fn bc-reduce-fn# ~(mapv first (partition 2 binding))
@@ -52,11 +55,11 @@
                    ~i-sym (int 0)]
               (if (< ~i-sym data-size#)
                 (let ~(vec (for [[sym _] (partition 2 binding)
-                                 form [sym `(.getObject ~(with-meta sym {:tag `IColumn}) ~i-sym)]]
+                                 form [sym `(aget ~(with-meta sym {:tag 'objects}) ~i-sym)]]
                              form))
                   (recur (~op ret# ~expr) (unchecked-inc-int ~i-sym)))
                 ret#))))
-        ~@(map second (partition 2 binding))))))
+        ~@(map (fn [[_ x]] `(get-array ~x)) (partition 2 binding))))))
 
 (defn sum1 [col]
   (let [arr (get-array col)]

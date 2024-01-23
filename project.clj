@@ -9,4 +9,5 @@
                  [org.clojure/tools.analyzer.jvm "1.2.3"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
                                   [criterium "0.4.6"]]}}
+  :jvm-opts ^:replace []
   :repl-options {:init-ns cinq.core})

@@ -125,6 +125,22 @@
               :l_linestatus linestatus
               :sum_qty ($sum l:quantity)
               :sum_base_price ($sum l:extendedprice)
+              :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
+              :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
+              :avg_qty ($avg l:quantity)
+              :avg_price ($avg l:extendedprice)
+              :avg_disc ($avg l:discount)
+              :count_order %count)))
+#_
+(defn q1-el [{:keys [lineitem]}]
+  (com.wotbrew.cinq.eager-loop/q
+    [l lineitem
+      :where (<= l:shipdate #inst "1998-09-02")
+      :group-by [returnflag l:returnflag, linestatus l:linestatus]]
+     ($select :l_returnflag returnflag
+              :l_linestatus linestatus
+              :sum_qty ($sum l:quantity)
+              :sum_base_price ($sum l:extendedprice)
               :sum_disc_price ($sum (* l:extendedprice (- 1 l:discount)))
               :sum_charge ($sum (* l:extendedprice (- 1 l:discount) (+ 1 l:tax)))
               :avg_qty ($avg l:quantity)
@@ -135,6 +151,8 @@
 (comment
 
   (time (count (q1 @sf-005)))
+  (time (count (q1-el @sf-005)))
+
   (check-answer #'q1 @sf-001)
   )
 
@@ -263,6 +281,8 @@
      ($select :n_name nation-name
               :revenue revenue)))
 
+(deftest q5-test (check-answer #'q5 @sf-001))
+
 (comment
 
   (time (count (q5 @sf-005)))
@@ -270,16 +290,42 @@
 
   )
 
+(defn q6 [{:keys [lineitem]}]
+  (q [l lineitem
+      :where (and (>= l:shipdate #inst "1994-01-01")
+                  (< l:shipdate #inst "1995-01-01")
+                  (>= l:discount 0.05)
+                  (<= l:discount 0.07)
+                  (< l:quantity 24.0))
+      :group-by []]
+     ($select :foo ($sum (* l:extendedprice l:discount)))))
+
+(deftest q6-test (check-answer #'q6 @sf-001))
+
+(comment
+
+  (time (count (q6 @sf-005)))
+  (check-answer #'q6 @sf-001)
+
+  )
+
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
 
-  (def dataset @sf-1)
+
+
+  (System/gc)
+
+  (def dataset @sf-001)
   (def dataset @sf-005)
+  (def dataset @sf-1)
+
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5]]
+  (doseq [q [#'q1, #'q2, #'q3, #'q4, #'q5, #'q6]]
     (println q)
     (time (count (q dataset))))
 
@@ -288,8 +334,14 @@
   (time (dotimes [x 1] (count (q3 dataset))))
   (time (dotimes [x 1] (count (q4 dataset))))
   (time (dotimes [x 1] (count (q5 dataset))))
+  (time (dotimes [x 1] (count (q6 dataset))))
 
-  (time (dotimes [x 20] (count (q1 dataset))))
+  (clj-async-profiler.core/profile
+    {}
+    (dotimes [x 20] (count (q1 dataset))))
+
+
+  (time (dotimes [x 20] (count (q1-el dataset))))
   (time (dotimes [x 100] (count (q2 dataset))))
   (time (dotimes [x 50] (count (q3 dataset))))
 

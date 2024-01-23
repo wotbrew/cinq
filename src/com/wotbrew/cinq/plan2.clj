@@ -354,15 +354,15 @@
     ;; endregion
 
     ;; region de-correlation rule 9
+    ;; todo agg behaviour is not the same as SQL in cinq
+    ;; this rule likely does not apply as group-by returns an empty rel for an empty in
+    ;; sum, + etc do not accept nil inputs
     [::apply :single-join ?left [::project [::group-by ?right ?group-binding] [[?sym ?expr]]]]
     [::let
      [::group-by
       [::apply :left-join ?left ?right]
-      (do
-        (def l ?left)
-        (into (vec (for [sym (columns ?left)] [sym sym])) ?group-binding))]
+      (into (vec (for [sym (columns ?left)] [sym sym])) ?group-binding)]
      [[?sym ?expr]]]
-
     ;; endregion
 
     ;; poor mans semi join

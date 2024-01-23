@@ -47,11 +47,11 @@
                  out-array (object-array (+ tc (count k) 1))]
              ;; group columns
              (dotimes [i tc]
-               (let [arr (object-array (.size al))]
-                 (dotimes [j (.size al)]
-                   (let [^objects t (.get al j)]
-                     (aset arr j (aget t i))))
-                 (aset out-array i (col/->Column arr))))
+               (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
+                                                      (dotimes [j (.size al)]
+                                                        (let [^objects t (.get al j)]
+                                                          (aset arr j (aget t i))))
+                                                      arr))))
              ;; key columns
              (dotimes [i (count k)]
                (aset out-array (+ tc i) (nth k i)))
@@ -59,6 +59,86 @@
              (aset out-array (+ tc (count k)) (Long/valueOf (long (.size al))))
              out-array))
          ht)))
+
+(deftype Key2 [a b hash]
+  Object
+  (hashCode [_] hash)
+  (equals [_ o]
+    (and (instance? Key2 o)
+         (let [^Key2 o o]
+           (and (= a (.-a o))
+                (= b (.-b o)))))))
+
+(defn group2 [vseq key-fn]
+  (let [ht (HashMap.)
+        add (fn [o]
+              (let [k (key-fn o), ^List al (.get ht k)]
+                (if al
+                  (.add al o)
+                  (.put ht k (doto (ArrayList.) (.add o))))))
+        _ (run! add vseq)]
+    (map (fn [[^Key2 k ^ArrayList al]]
+           (let [tc (alength ^objects (.get al 0))
+                 out-array (object-array (+ tc 3))]
+             ;; group columns
+             (dotimes [i tc]
+               (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))
+                                                          i (int i)]
+                                                      (dotimes [j (.size al)]
+                                                        (let [^objects t (.get al j)]
+                                                          (aset arr j (aget t i))))
+                                                      arr))))
+             ;; key columns
+             (aset out-array tc (.-a k))
+             (aset out-array (+ tc 1) (.-b k))
+             ;; %count variable
+             (aset out-array (+ tc 2) (Long/valueOf (long (.size al))))
+             out-array))
+         ht)))
+
+(defn group1 [vseq key-fn]
+  (let [ht (HashMap.)
+        add (fn [o]
+              (let [k (key-fn o), ^List al (.get ht k)]
+                (if al
+                  (.add al o)
+                  (.put ht k (doto (ArrayList.) (.add o))))))
+        _ (run! add vseq)]
+    (map (fn [[k ^ArrayList al]]
+           (let [tc (alength ^objects (.get al 0))
+                 out-array (object-array (+ tc 2))]
+             ;; group columns
+             (dotimes [i tc]
+               (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
+                                                      (dotimes [j (.size al)]
+                                                        (let [^objects t (.get al j)]
+                                                          (aset arr j (aget t i))))
+                                                      arr))))
+             ;; key columns
+             (aset out-array tc k)
+             ;; %count variable
+             (aset out-array (+ tc 1) (Long/valueOf (long (.size al))))
+             out-array))
+         ht)))
+
+(defn group-all [vseq]
+  (let [al (ArrayList.)
+        _ (run! (fn [t] (.add al t)) vseq)]
+    (if (= 0 (.size al))
+      ;; todo sql semantics or empty here?
+      []
+      [(let [tc (alength ^objects (.get al 0))
+             out-array (object-array (inc tc))]
+         ;; group columns
+         (dotimes [i tc]
+           (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
+                                                  (dotimes [j (.size al)]
+                                                    (let [^objects t (.get al j)]
+                                                      (aset arr j (aget t i))))
+                                                  arr))))
+         ;; %count variable
+         (aset out-array tc (Long/valueOf (long (.size al))))
+         out-array)])))
 
 (defn order [vseq order-clauses]
   (sort (reify Comparator
@@ -149,13 +229,13 @@
         _ (run! add right)]
     (eduction
       (keep (fn [l]
-                (when-some [^List al (.get ht (left-key l))]
-                  (loop [i (int 0)]
-                    (when (< i (.size al))
-                      (let [r (.get al i)]
-                        (if (theta-pred l r)
-                          l
-                          (recur (unchecked-inc-int i)))))))))
+              (when-some [^List al (.get ht (left-key l))]
+                (loop [i (int 0)]
+                  (when (< i (.size al))
+                    (let [r (.get al i)]
+                      (if (theta-pred l r)
+                        l
+                        (recur (unchecked-inc-int i)))))))))
       left)))
 
 (defn equi-left-join [left left-key right right-key theta-pred n-cols]
@@ -255,6 +335,11 @@
 (declare compile-plan*)
 (defn compile-plan [plan] (collapse-plan (compile-plan* plan)))
 
+(defmacro safe-hash [a]
+  `(if (nil? ~a)
+    0
+    (.hashCode ~(with-meta a {:tag 'java.lang.Object}))))
+
 (defn compile-plan* [plan]
   (m/match plan
 
@@ -348,10 +433,10 @@
           (plan/equi-theta ?left ?right ?pred)]
       [(if (seq left-key)
          `(equi-semi-join ~(compile-plan ?left)
-                     ~(compile-key [?left] left-key)
-                     ~(compile-plan ?right)
-                     ~(compile-key [?right] right-key)
-                     ~(compile-lambda [?left ?right] `(and ~@theta)))
+                          ~(compile-key [?left] left-key)
+                          ~(compile-plan ?right)
+                          ~(compile-key [?right] right-key)
+                          ~(compile-lambda [?left ?right] `(and ~@theta)))
          `(semi-join ~(compile-plan ?left)
                      ~(compile-plan ?right)
                      ~(compile-lambda [?left ?right] ?pred)))
@@ -394,13 +479,42 @@
         [src (conj xform `(map ~(compile-lambda [?ra] (mapv second ?projections))))]))
 
     [::plan/group-by ?ra ?bindings]
-    `[(group ~(compile-plan ?ra) ~(compile-lambda
-                                    [?ra]
-                                    `(let [~@(for [[sym expr] ?bindings
-                                                   form [sym expr]]
-                                               form)]
-                                       ~(mapv first ?bindings))))
-      []]
+    (case (count ?bindings)
+      0
+      `[(group-all ~(compile-plan ?ra)) []]
+
+      1
+      `[(group1 ~(compile-plan ?ra)
+                ~(compile-lambda
+                   [?ra]
+                   `(let [~@(for [[sym expr] ?bindings
+                                  form [sym expr]]
+                              form)]
+                      ~(ffirst ?bindings))))
+        []]
+
+      2
+      `[(group2 ~(compile-plan ?ra)
+               ~(compile-lambda
+                  [?ra]
+                  `(let [~@(for [[sym expr] ?bindings
+                                 form [(with-meta sym {:tag Object}) expr]]
+                             form)]
+                     (new Key2
+                          ~(first (first ?bindings))
+                          ~(first (second ?bindings))
+                          ~(let [[[sym1] [sym2]] ?bindings]
+                             `(bit-xor (safe-hash ~sym1) (safe-hash ~sym2)))))))
+        []]
+
+      `[(group ~(compile-plan ?ra)
+               ~(compile-lambda
+                  [?ra]
+                  `(let [~@(for [[sym expr] ?bindings
+                                 form [sym expr]]
+                             form)]
+                     ~(mapv first ?bindings))))
+        []])
 
     [::plan/order-by ?ra ?order-clauses]
     `[(order ~(compile-plan ?ra)
@@ -418,7 +532,9 @@
    (let [lp (parse/parse (list 'q ra expr))
          lp' (plan/rewrite lp)
          [src xforms] (compile-plan* lp')]
-     `(sequence ~(collapse-plan [src xforms])))))
+     (if (seq xforms)
+       `(sequence (comp ~@xforms) ~src)
+       `(sequence ~src)))))
 
 (comment
 
