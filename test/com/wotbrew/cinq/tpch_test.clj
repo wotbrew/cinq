@@ -526,6 +526,10 @@
   (time (dotimes [x 1] (count (q5 dataset))))
   (time (dotimes [x 1] (count (q6 dataset))))
   (time (dotimes [x 1] (count (q7 dataset))))
+  (time (dotimes [x 1] (count (q8 dataset))))
+  (time (dotimes [x 1] (count (q9 dataset))))
+  (time (dotimes [x 1] (count (q10 dataset))))
+  (time (dotimes [x 1] (count (q11 dataset))))
 
   (clj-async-profiler.core/profile
     {}

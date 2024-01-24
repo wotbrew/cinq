@@ -184,27 +184,31 @@
     ret))
 
 (defn join [left right theta-pred]
-  (for [l left
-        r right
-        :when (theta-pred l r)]
-    (conjoin-tuples l r)))
+  (let [right (seq right)]
+    (for [l left
+          r right
+          :when (theta-pred l r)]
+      (conjoin-tuples l r))))
 
 (defn semi-join [left right theta-pred]
-  (for [l left
-        :when (seq (filter #(theta-pred l %) right))]
-    l))
+  (let [right (seq right)]
+    (for [l left
+          :when (seq (filter #(theta-pred l %) right))]
+      l)))
 
 (defn left-join [left right theta-pred n-cols]
-  (for [^objects l left
-        :let [rs (filter #(theta-pred l %) right)]
-        l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
-    l+r))
+  (let [right (seq right)]
+    (for [^objects l left
+          :let [rs (filter #(theta-pred l %) right)]
+          l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
+      l+r)))
 
 (defn single-join [left right theta-pred]
-  (for [^objects l left
-        :let [r (first (filter #(theta-pred l %) right))]]
-    (doto (Arrays/copyOf l (inc (alength l)))
-      (aset (alength l) r))))
+  (let [right (seq right)]
+    (for [^objects l left
+          :let [r (first (filter #(theta-pred l %) right))]]
+      (doto (Arrays/copyOf l (inc (alength l)))
+        (aset (alength l) r)))))
 
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
