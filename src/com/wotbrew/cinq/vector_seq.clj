@@ -212,13 +212,34 @@
 
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
-        add (fn [o]
-              (let [k (left-key o), ^List al (.get ht k)]
-                (if al
-                  (.add al o)
-                  (.put ht k (doto (ArrayList.) (.add o))))))
-        _ (run! add left)]
+        _ (reduce (fn [_ o]
+                    ;; itable left-key
+                    (let [k (left-key o), ^List al (.get ht k)]
+                      (if al
+                        (.add al o)
+                        (.put ht k (doto (ArrayList.) (.add o))))))
+                  nil left)]
     (eduction
+      (fn [rf]
+        (fn
+          ([] (rf))
+          ([result] (rf result))
+          ([result r]
+           ;; itable right-key
+           (if-some [^List al (.get ht (right-key r))]
+             (let [len (.size al)]
+               (loop [result result
+                      i 0]
+                 (if (< i len)
+                   (let [l (.get al i)]
+                     ;; itable theta-pred
+                     (if (theta-pred l r)
+                       (recur (rf result (conjoin-tuples l r)) (unchecked-inc-int i))
+                       (recur result (unchecked-inc-int i))))
+                   result)))
+             result))))
+
+#_
       (mapcat (fn [r]
                 (when-some [^List al (.get ht (right-key r))]
                   (let [out (ArrayList.)]
@@ -293,6 +314,10 @@
 
                [::plan/lookup ?kw ?s]
                (list ?kw ?s)
+
+               [::plan/count-some ?expr]
+               (let [deps (possible-dependencies dep-cols ?expr)]
+                 (list `col/count-some (vec (interleave deps deps)) ?expr))
 
                [::plan/sum ?expr]
                (let [deps (possible-dependencies dep-cols ?expr)]
@@ -393,17 +418,21 @@
     (let [osym (gensym "o")
           asym (gensym "a")]
       [(compile-src ?src)
-       [`(map (fn [~osym]
-                (let [~@(for [[sym k] ?cols
-                              form [sym (cond
-                                          (= :cinq/self k) osym
-                                          (keyword? k) (list k osym)
-                                          :else (list `get osym k))]]
-                          form)
-                      ~asym (object-array ~(count ?cols))]
+       [`(fn [rf#]
+           (fn
+             ([] (rf#))
+             ([result#] (rf# result#))
+             ([result# ~osym]
+              (let [~@(for [[sym k] ?cols
+                            form [sym (cond
+                                        (= :cinq/self k) osym
+                                        (keyword? k) (list k osym)
+                                        :else (list `get osym k))]]
+                        form)]
+                (let [~asym (object-array ~(count ?cols))]
                   ~@(for [[i sym] (map-indexed vector (map first ?cols))]
                       `(aset ~asym ~i ~sym))
-                  ~asym)))]])
+                  (rf# result# ~asym))))))]])
 
     [::plan/where ?ra ?pred]
     (let [[src xforms] (compile-plan* ?ra)]

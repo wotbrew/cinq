@@ -277,6 +277,14 @@
           smap (merge left-smap right-smap)]
       [[::join left-ra right-ra (walk/postwalk-replace smap ?pred)] smap])
 
+    [::single-join ?left ?right ?pred]
+    (let [expr-lookups (find-lookups ?pred)
+          lookups (into lookups expr-lookups)
+          [right-ra right-smap] (push-lookups* ?right lookups)
+          [left-ra left-smap] (push-lookups* ?left (set/difference lookups (set (keys right-smap))))
+          smap (merge left-smap right-smap)]
+      [[::single-join left-ra right-ra (walk/postwalk-replace smap ?pred)] smap])
+
     [::left-join ?left ?right ?pred]
     (let [expr-lookups (find-lookups ?pred)
           lookups (into lookups expr-lookups)
@@ -337,6 +345,26 @@
     ;; region de-correlation rule 2
     ;; apply(T, R, select(E, p)) = join(T, E, p)
     ;; if E not correlated with R
+
+    (m/and [::apply ?mode ?left [::where ?right [::and & ?clauses]]]
+           (m/guard (#{:cross-join :left-join :single-join} ?mode))
+           (m/guard (not-dependent? ?left ?right)))
+    ;; =>
+    (let [{dependent true, not-dependent false} (group-by #(dependent? ?left %) ?clauses)]
+      [(case ?mode
+         :cross-join ::join
+         :left-join ::left-join
+         :single-join ::single-join)
+       ?left
+       (case (count not-dependent)
+         0 ?right
+         1 [::where ?right (first not-dependent)]
+         [::where ?right (into [::and] not-dependent)])
+       (case (count dependent)
+         0 true
+         1 (first dependent)
+         (into [::and] dependent))])
+
     (m/and [::apply ?mode ?left [::where ?right ?pred]]
            (m/guard (#{:cross-join :left-join :single-join} ?mode))
            (m/guard (not-dependent? ?left ?right)))
@@ -619,8 +647,8 @@
            [::join ?a ?b ?pred]
            (conj (! ?a) [:join (! ?b) ?pred])
 
-           [::join ?a ?b ?pred]
-           (conj (! ?a) [:join (! ?b) ?pred])
+           [::single-join ?a ?b ?pred]
+           (conj (! ?a) [:single-join (! ?b) ?pred])
 
            [::left-join ?a ?b ?pred]
            (conj (! ?a) [:left-join (! ?b) ?pred])

@@ -11,7 +11,7 @@
   IDeref
   (deref [this] (or data (let [arr (thunk)] (set! (.-data this) arr) arr)))
   Counted
-  (count [this] (alength @this))
+  (count [this] (alength (get-array this)))
   Indexed
   (nth [this i] (aget (get-array this) i))
   (nth [this i not-found] (let [data (get-array this)] (if (< i (alength data)) (aget data i) not-found)))
@@ -74,8 +74,7 @@
   ([binding expr] `(broadcast-reduce ~binding (Long/valueOf 0) + ~expr)))
 
 (defmacro avg
-  ([col]
-   `(let [col# ~col] (/ (sum col#) (count col#))))
+  ([col] `(let [col# ~col] (/ (sum col#) (count col#))))
   ([binding expr] `(avg (broadcast ~binding ~expr))))
 
 (defmacro minimum
@@ -87,6 +86,20 @@
   ([col]
    `(reduce (fn [a# b#] (if (nil? a#) b# (if (pos? (compare a# b#)) a# b#))) nil ~col))
   ([binding expr] `(maximum (broadcast ~binding ~expr))))
+
+(defn count-some1 [col]
+  (let [arr (get-array col)]
+    (loop [ret 0
+           i (int 0)]
+      (if (< i (alength arr))
+        (if (nil? (aget arr i))
+          (recur ret (unchecked-inc-int i))
+          (recur (unchecked-inc ret) (unchecked-inc-int i)))
+        ret))))
+
+(defmacro count-some
+  ([col] `(count-some1 ~col))
+  ([binding expr] `(sum ~binding (if (nil? ~expr) 0 1))))
 
 (comment
 

@@ -88,6 +88,8 @@
     [::plan/min ?expr]
     ($max ?expr)
     [::plan/max ?expr]
+    ($count ?expr)
+    [::plan/count-some ?expr]
 
     ;; comparisons
     (= ?a ?b)
@@ -123,8 +125,8 @@
          :expr (rewrite-exprs expr)
          :bindings (normalize-binding binding)})
 
-      :where
-      {:op :where
+      :when
+      {:op :when
        :pred (rewrite-exprs arg)}
 
       :let
@@ -138,12 +140,12 @@
          :expr (rewrite-exprs expr)
          :condition (if (seq cseq) (rewrite-exprs condition) true)})
 
-      :group-by
-      {:op :group-by
+      :group
+      {:op :group
        :bindings (mapv (fn [[a b]] [a (rewrite-exprs b)]) (partition 2 arg))}
 
-      :order-by
-      {:op :order-by
+      :order
+      {:op :order
        :clauses (mapv (fn [[expr dir]] [(rewrite-exprs expr) dir]) (partition 2 arg))}
 
       :limit
@@ -178,7 +180,7 @@
           (! (:prev tree))
           [::plan/where [::plan/scan (:expr tree) (:bindings tree)] (:condition tree)]]
 
-         :where
+         :when
          [::plan/where (! (:prev tree)) (:pred tree)]
 
          :let
@@ -187,10 +189,10 @@
          :select
          [::plan/project (! (:prev tree)) (:projection tree)]
 
-         :group-by
+         :group
          [::plan/group-by (! (:prev tree)) (:bindings tree)]
 
-         :order-by
+         :order
          [::plan/order-by (! (:prev tree)) (:clauses tree)]
 
          :limit

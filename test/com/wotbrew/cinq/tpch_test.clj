@@ -4,11 +4,16 @@
             [clojure.test :refer :all]
             [clojure.instant :as inst]
             [com.wotbrew.cinq.column :as col]
+            [com.wotbrew.cinq.parse :as parse]
+            [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.vector-seq :refer [q]])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
 
 (set! *warn-on-reflection* true)
+
+(defn view-plan [q]
+  (-> q parse/parse plan/rewrite plan/stack-view))
 
 (comment
   (for [t (TpchTable/getTables)]
@@ -110,8 +115,6 @@
                 (is (= parsed relv) (str col ", row " i))))
             :else (is (= parsed relv) (str col ", row " i))))))))
 
-(def sf-00001 (delay (all-tables 0.0001)))
-(def sf-0001 (delay (all-tables 0.001)))
 (def sf-001 (delay (all-tables 0.01)))
 (def sf-005 (delay (all-tables 0.05)))
 (def sf-01 (delay (all-tables 0.1)))
@@ -119,9 +122,9 @@
 
 (defn q1 [{:keys [lineitem]}]
   (q [l lineitem
-      :where (<= l:shipdate #inst "1998-09-02")
-      :group-by [returnflag l:returnflag, linestatus l:linestatus]
-      :order-by [returnflag :asc, linestatus :asc]]
+      :when (<= l:shipdate #inst "1998-09-02")
+      :group [returnflag l:returnflag, linestatus l:linestatus]
+      :order [returnflag :asc, linestatus :asc]]
      ($select :l_returnflag returnflag
               :l_linestatus linestatus
               :sum_qty ($sum l:quantity)
@@ -132,29 +135,6 @@
               :avg_price ($avg l:extendedprice)
               :avg_disc ($avg l:discount)
               :count_order %count)))
-#_(defn q1-el [{:keys [lineitem]}]
-    (com.wotbrew.cinq.eager-loop/q
-      [l lineitem
-       :where (<= l:shipdate #inst "1998-09-02")
-       :group-by [returnflag l:returnflag, linestatus l:linestatus]]
-      ($select :l_returnflag returnflag
-               :l_linestatus linestatus
-               :sum_qty ($sum l:quantity)
-               :sum_base_price ($sum l:extendedprice)
-               :sum_disc_price ($sum (* l:extendedprice (- 1 l:discount)))
-               :sum_charge ($sum (* l:extendedprice (- 1 l:discount) (+ 1 l:tax)))
-               :avg_qty ($avg l:quantity)
-               :avg_price ($avg l:extendedprice)
-               :avg_disc ($avg l:discount)
-               :count_order %count)))
-
-(comment
-
-  (time (count (q1 @sf-005)))
-  (time (count (q1-el @sf-005)))
-
-  (check-answer #'q1 @sf-001)
-  )
 
 (deftest q1-test (check-answer #'q1 @sf-001))
 
@@ -164,7 +144,7 @@
       ps partsupp
       n nation
       r region
-      :where
+      :when
       (and
         (= p:partkey ps:partkey)
         (= s:suppkey ps:suppkey)
@@ -177,17 +157,17 @@
                              s supplier
                              n nation
                              r region
-                             :where (and (= p:partkey ps:partkey)
-                                         (= s:suppkey ps:suppkey)
-                                         (= s:nationkey n:nationkey)
-                                         (= n:regionkey r:regionkey)
-                                         (= "EUROPE" r:name))
-                             :group-by []]
+                             :when (and (= p:partkey ps:partkey)
+                                        (= s:suppkey ps:suppkey)
+                                        (= s:nationkey n:nationkey)
+                                        (= n:regionkey r:regionkey)
+                                        (= "EUROPE" r:name))
+                             :group []]
                             ($min ps:supplycost))))
-      :order-by [s:acctbal :desc
-                 n:name :asc
-                 s:name :asc
-                 p:partkey :asc]]
+      :order [s:acctbal :desc
+              n:name :asc
+              s:name :asc
+              p:partkey :asc]]
      ($select :s_acctbal s:acctbal
               :s_name s:name
               :n_name n:name
@@ -209,17 +189,17 @@
   (q [c customer
       o orders
       l lineitem
-      :where
+      :when
       (and (= c:mktsegment "BUILDING")
            (= c:custkey o:custkey)
            (= l:orderkey o:orderkey)
            (< o:orderdate #inst "1995-03-15")
            (> l:shipdate #inst "1995-03-15"))
-      :group-by [orderkey l:orderkey
-                 orderdate o:orderdate
-                 shippriority o:shippriority]
+      :group [orderkey l:orderkey
+              orderdate o:orderdate
+              shippriority o:shippriority]
       :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
-      :order-by [revenue :desc, orderdate :asc, orderkey :asc]
+      :order [revenue :desc, orderdate :asc, orderkey :asc]
       :limit 10]
      ($select
        :l_orderkey orderkey
@@ -237,15 +217,15 @@
 (defn q4 [{:keys [orders, lineitem]}]
   ;; needs decor + semijoin
   (q [o orders
-      :where (and (>= o:orderdate #inst "1993-07-01")
-                  (< o:orderdate #inst "1993-10-01")
-                  ;; todo $exists
-                  (S [l lineitem
-                      :where (and (= l:orderkey o:orderkey)
-                                  (< l:commitdate l:receiptdate))]
-                     true))
-      :group-by [orderpriority o:orderpriority]
-      :order-by [orderpriority :asc]]
+      :when (and (>= o:orderdate #inst "1993-07-01")
+                 (< o:orderdate #inst "1993-10-01")
+                 ;; todo $exists
+                 (S [l lineitem
+                     :when (and (= l:orderkey o:orderkey)
+                                (< l:commitdate l:receiptdate))]
+                    true))
+      :group [orderpriority o:orderpriority]
+      :order [orderpriority :asc]]
      ($select
        :o_orderpriority orderpriority
        :order_count %count)))
@@ -266,18 +246,18 @@
       s supplier
       n nation
       r region
-      :where (and (= c:custkey o:custkey)
-                  (= l:orderkey o:orderkey)
-                  (= l:suppkey s:suppkey)
-                  (= c:nationkey s:nationkey)
-                  (= s:nationkey n:nationkey)
-                  (= n:regionkey r:regionkey)
-                  (= r:name "ASIA")
-                  (>= o:orderdate #inst "1994-01-01")
-                  (< o:orderdate #inst "1995-01-01"))
-      :group-by [nation-name n:name]
+      :when (and (= c:custkey o:custkey)
+                 (= l:orderkey o:orderkey)
+                 (= l:suppkey s:suppkey)
+                 (= c:nationkey s:nationkey)
+                 (= s:nationkey n:nationkey)
+                 (= n:regionkey r:regionkey)
+                 (= r:name "ASIA")
+                 (>= o:orderdate #inst "1994-01-01")
+                 (< o:orderdate #inst "1995-01-01"))
+      :group [nation-name n:name]
       :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
-      :order-by [revenue :desc]]
+      :order [revenue :desc]]
      ($select :n_name nation-name
               :revenue revenue)))
 
@@ -292,12 +272,12 @@
 
 (defn q6 [{:keys [lineitem]}]
   (q [l lineitem
-      :where (and (>= l:shipdate #inst "1994-01-01")
-                  (< l:shipdate #inst "1995-01-01")
-                  (>= l:discount 0.05)
-                  (<= l:discount 0.07)
-                  (< l:quantity 24.0))
-      :group-by []]
+      :when (and (>= l:shipdate #inst "1994-01-01")
+                 (< l:shipdate #inst "1995-01-01")
+                 (>= l:discount 0.05)
+                 (<= l:discount 0.07)
+                 (< l:quantity 24.0))
+      :group []]
      ($select :foo ($sum (* l:extendedprice l:discount)))))
 
 (deftest q6-test (check-answer #'q6 @sf-001))
@@ -319,27 +299,25 @@
       c customer
       n1 nation
       n2 nation
-      :where (and (= s:suppkey l:suppkey)
-                  (= o:orderkey l:orderkey)
-                  (= c:custkey o:custkey)
-                  (= s:nationkey n1:nationkey)
-                  (= c:nationkey n2:nationkey)
-                  (or (and (= "FRANCE" n1:name)
-                           (= "GERMANY" n2:name))
-                      (and (= "GERMANY" n1:name)
-                           (= "FRANCE" n2:name)))
-                  (<= #inst "1995-01-01" l:shipdate)
-                  (<= l:shipdate #inst "1996-12-31"))
+      :when (and (= s:suppkey l:suppkey)
+                 (= o:orderkey l:orderkey)
+                 (= c:custkey o:custkey)
+                 (= s:nationkey n1:nationkey)
+                 (= c:nationkey n2:nationkey)
+                 (or (and (= "FRANCE" n1:name)
+                          (= "GERMANY" n2:name))
+                     (and (= "GERMANY" n1:name)
+                          (= "FRANCE" n2:name)))
+                 (<= #inst "1995-01-01" l:shipdate)
+                 (<= l:shipdate #inst "1996-12-31"))
       :let [year (get-year l:shipdate)
-            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))
-            supp_nation n1:name
-            cust_nation n2:name]
-      :group-by [supp_nation supp_nation
-                 cust_nation cust_nation
-                 year year]
-      :order-by [supp_nation :asc
-                 cust_nation :asc
-                 year :asc]]
+            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))]
+      :group [supp_nation n1:name
+              cust_nation n2:name
+              year year]
+      :order [supp_nation :asc
+              cust_nation :asc
+              year :asc]]
      ($select :supp_nation supp_nation
               :cust_nation cust_nation
               :l_year year
@@ -362,7 +340,7 @@
       n1 nation
       n2 nation
       r region
-      :where
+      :when
       (and (= p:partkey l:partkey)
            (= s:suppkey l:suppkey)
            (= l:orderkey o:orderkey)
@@ -377,8 +355,8 @@
       :let [o_year (get-year o:orderdate)
             volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))
             nation n2:name]
-      :group-by [o_year o_year]
-      :order-by [o_year :asc]]
+      :group [o_year o_year]
+      :order [o_year :asc]]
      ($select
        :o_year o_year
        :mkt_share (double (/ ($sum
@@ -401,7 +379,7 @@
       ps partsupp
       o orders
       n nation
-      :where
+      :when
       (and (= s:suppkey l:suppkey)
            (= ps:suppkey l:suppkey)
            (= ps:partkey l:partkey)
@@ -412,9 +390,9 @@
       ;; todo if I do not have the boxing here - the let aset causes reflection
       :let [amount (Double/valueOf (- (* l:extendedprice (- 1.0 l:discount))
                                       (* ps:supplycost l:quantity)))]
-      :group-by [nation n:name
-                 year (get-year o:orderdate)]
-      :order-by [nation :asc, year :desc]]
+      :group [nation n:name
+              year (get-year o:orderdate)]
+      :order [nation :asc, year :desc]]
      ($select :nation nation
               :o_year year
               :sum_profit ($sum amount))))
@@ -431,7 +409,7 @@
       o orders
       l lineitem
       n nation
-      :where
+      :when
       (and (= c:custkey o:custkey)
            (= l:orderkey o:orderkey)
            (>= o:orderdate #inst "1993-10-01")
@@ -439,15 +417,15 @@
            (= "R" l:returnflag)
            (= c:nationkey n:nationkey))
       ;; todo shadowing names here cause issues
-      :group-by [c_custkey c:custkey
-                 c_name c:name
-                 c_acctbal c:acctbal
-                 c_phone c:phone
-                 n_name n:name
-                 c_address c:address
-                 c_comment c:comment]
+      :group [c_custkey c:custkey
+              c_name c:name
+              c_acctbal c:acctbal
+              c_phone c:phone
+              n_name n:name
+              c_address c:address
+              c_comment c:comment]
       :let [revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
-      :order-by [revenue :desc, c_custkey :asc]
+      :order [revenue :desc, c_custkey :asc]
       :limit 20]
      ($select :c_custkey c_custkey
               :c_name c_name
@@ -470,22 +448,22 @@
   (q [ps partsupp
       s supplier
       n nation
-      :where
+      :when
       (and (= ps:suppkey s:suppkey)
            (= s:nationkey n:nationkey)
            (= n:name "GERMANY"))
-      :group-by [ps_partkey ps:partkey]
+      :group [ps_partkey ps:partkey]
       :let [value ($sum (* ps:supplycost ps:availqty))]
-      :where (> value (S [ps partsupp
-                          s supplier
-                          n nation
-                          :where
-                          (and (= ps:suppkey s:suppkey)
-                               (= s:nationkey n:nationkey)
-                               (= n:name "GERMANY"))
-                          :group-by []]
-                         (* 0.0001 ($sum (* ps:supplycost ps:availqty)))))
-      :order-by [value :desc]]
+      :when (> value (S [ps partsupp
+                         s supplier
+                         n nation
+                         :when
+                         (and (= ps:suppkey s:suppkey)
+                              (= s:nationkey n:nationkey)
+                              (= n:name "GERMANY"))
+                         :group []]
+                        (* 0.0001 ($sum (* ps:supplycost ps:availqty)))))
+      :order [value :desc]]
      ($select :ps_partkey ps_partkey
               :value value)))
 
@@ -497,6 +475,124 @@
   (check-answer #'q11 @sf-001)
   )
 
+(defn q12 [{:keys [orders lineitem]}]
+  (q [o orders
+      l lineitem
+      :when (and (= o:orderkey l:orderkey)
+                 (#{"MAIL", "SHIP"} l:shipmode)
+                 (< l:commitdate l:receiptdate)
+                 (< l:shipdate l:commitdate)
+                 (>= l:receiptdate #inst "1994-01-01")
+                 (< l:receiptdate #inst "1995-01-01"))
+      :group [shipmode l:shipmode]
+      :order [shipmode :asc]]
+     ($select
+       :shipmode shipmode
+       :high_line_count ($sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
+       :low_line_count ($sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
+
+(deftest q12-test (check-answer #'q12 @sf-001))
+
+(comment
+  (time (count (q12 @sf-005)))
+  (q12 @sf-001)
+  (check-answer #'q12 @sf-001)
+  )
+
+(defn q13 [{:keys [customer orders]}]
+  (q [c customer
+      :left-join [o orders (and (= c:custkey o:custkey) (re-find #"^(?!.*?special.*?requests)" o:comment))]
+      :group [custkey c:custkey]
+      :group [order-count ($count o:orderkey)]
+      :order [%count :desc, order-count :desc]]
+     ($select :c_count order-count, :custdist %count)))
+
+(deftest q13-test (check-answer #'q13 @sf-001))
+
+(comment
+  (time (count (q13 @sf-005)))
+  (q13 @sf-001)
+  (check-answer #'q13 @sf-001)
+  )
+
+(defn q14 [{:keys [lineitem part]}]
+  (q [l lineitem
+      p part
+      :when (and (= l:partkey p:partkey)
+                 (>= l:shipdate #inst "1995-09-01")
+                 (< l:shipdate #inst "1995-10-01"))
+      :group []]
+     ($select
+       :promo_revenue
+       (* 100.0
+          (/ ($sum (if (str/starts-with? p:type "PROMO")
+                     (* l:extendedprice (- 1.0 l:discount))
+                     0.0))
+             ($sum (* l:extendedprice (- 1.0 l:discount))))))))
+
+(deftest q14-test (check-answer #'q14 @sf-001))
+
+(comment
+  (time (count (q14 @sf-005)))
+  (q14 @sf-001)
+  (check-answer #'q14 @sf-001)
+  )
+
+(defn q15 [{:keys [lineitem supplier]}]
+  (let [revenue (q [l lineitem
+                    :when (and (>= l:shipdate #inst "1996-01-01")
+                               (< l:shipdate #inst "1996-04-01"))
+                    :group [suppkey l:suppkey]
+                    :let [total_revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
+                    {:suppkey suppkey
+                     :total_revenue total_revenue}])]
+    (q [s supplier
+        r revenue
+        :when (and (= s:suppkey r:suppkey)
+                   (= r:total_revenue (S [r revenue :group []] ($max r:total_revenue))))
+        :order [s:suppkey :asc]]
+       ($select :s_suppkey s:suppkey
+                :s_name s:name
+                :s_address s:address
+                :s_phone s:phone
+                :total_revenue r:total_revenue))))
+
+(deftest q15-test (check-answer #'q15 @sf-001))
+
+(comment
+  (time (count (q15 @sf-005)))
+  (q15 @sf-001)
+  (check-answer #'q15 @sf-001)
+  )
+
+(defn q16 [{:keys [partsupp part supplier]}]
+  (q [p part
+      ps partsupp
+      :when (and (= p:partkey ps:partkey)
+                 (not= p:brand "Brand#45")
+                 (not (str/starts-with? p:type "MEDIUM POLISHED"))
+                 (case (int p:size) (49, 14, 23, 45, 19, 3, 36, 9) true false)
+                 (not (contains? (S [s supplier
+                                     :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
+                                     :group []]
+                                    (set s:suppkey))
+                                 ps:suppkey)))
+      :group [brand p:brand, type p:type, size p:size]
+      :let [supplier-cnt (Long/valueOf (count (set ps:suppkey)))]
+      :order [supplier-cnt :desc, brand :asc, type :asc, size :asc]]
+     ($select :p_brand brand
+              :p_type type
+              :p_size size
+              :supplier_cnt supplier-cnt)))
+
+(deftest q16-test (check-answer #'q16 @sf-001))
+
+(comment
+  (time (count (q16 @sf-005)))
+  (q16 @sf-001)
+  (check-answer #'q16 @sf-001)
+  )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -505,6 +601,7 @@
 
   (def dataset @sf-001)
   (def dataset @sf-005)
+  (def dataset @sf-01)
   (def dataset @sf-1)
 
   (update-vals dataset count)
@@ -514,7 +611,8 @@
     (do (doseq [q [#'q1, #'q2, #'q3,
                    #'q4, #'q5, #'q6,
                    #'q7, #'q8, #'q9
-                   #'q10, #'q11]]
+                   #'q10, #'q11, #'q12,
+                   #'q13, #'q14, #'q15]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
@@ -530,6 +628,10 @@
   (time (dotimes [x 1] (count (q9 dataset))))
   (time (dotimes [x 1] (count (q10 dataset))))
   (time (dotimes [x 1] (count (q11 dataset))))
+  (time (dotimes [x 1] (count (q12 dataset))))
+  (time (dotimes [x 1] (count (q13 dataset))))
+  (time (dotimes [x 1] (count (q14 dataset))))
+  (time (dotimes [x 1] (count (q15 dataset))))
 
   (clj-async-profiler.core/profile
     {}
@@ -537,7 +639,7 @@
 
   (clj-async-profiler.core/profile
     {}
-    (dotimes [x 20] (count (q7 dataset))))
+    (dotimes [x 10] (count (q13 @sf-005))))
 
   (time (dotimes [x 20] (count (q1-el dataset))))
   (time (dotimes [x 100] (count (q2 dataset))))
