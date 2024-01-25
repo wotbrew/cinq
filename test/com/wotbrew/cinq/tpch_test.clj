@@ -593,6 +593,104 @@
   (check-answer #'q16 @sf-001)
   )
 
+(defn q17 [{:keys [lineitem part]}]
+  (q [l lineitem
+      p part
+      :when (and (= p:partkey l:partkey)
+                 (= p:brand "Brand#23")
+                 (= p:container "MED BOX")
+                 (< l:quantity (S [l2 lineitem
+                                   :when (= l2:partkey p:partkey)
+                                   :group []]
+                                  (Double/valueOf (* 0.2 ($avg l2:quantity))))))
+      :group []]
+     ($select :avg_yearly (/ ($sum l:extendedprice) 7.0))))
+
+;; q17 does not test as our aggregates always return null for an empty input
+(deftest q17-test #_(check-answer #'q17 @sf-001))
+
+(comment
+  (time (count (q17 @sf-005)))
+  (q17 @sf-001)
+  (check-answer #'q17 @sf-001)
+  )
+
+(defn q18 [{:keys [customer orders lineitem]}]
+  ;; make this a sub query without weirdness
+  (let [orderkeys (set (q [l lineitem
+                           :group [ok l:orderkey]
+                           :when (> ($sum l:quantity) 300)]
+                          ok))]
+    (q [c customer
+        o orders
+        l lineitem
+        :when (and (contains? orderkeys o:orderkey)
+                   (= c:custkey o:custkey)
+                   (= o:orderkey l:orderkey))
+        :group [name c:name
+                custkey c:custkey
+                orderkey o:orderkey
+                orderdate o:orderdate
+                totalprice o:totalprice]
+        :order [totalprice :desc, orderdate :asc, orderkey :asc]
+        :limit 100]
+       ($select :c_name name
+                :c_custkey custkey
+                :c_orderkey orderkey
+                :c_orderdate orderdate
+                :c_totalprice totalprice
+                :quantity ($sum l:quantity)))))
+
+(deftest q18-test (check-answer #'q18 @sf-001))
+
+(comment
+  (time (count (q18 @sf-005)))
+  (q18 @sf-001)
+  (check-answer #'q18 @sf-001)
+  )
+
+(comment
+  (time (count (q17 @sf-005)))
+  (q17 @sf-001)
+  (check-answer #'q17 @sf-001)
+  )
+
+(defn q19 [{:keys [lineitem part]}]
+  (q [l lineitem
+      p part
+      :when (and (= l:partkey p:partkey)
+                 (or (and (= p:brand "Brand#12")
+                          (#{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p:container)
+                          (>= l:quantity 1)
+                          (<= l:quantity 11)
+                          (<= 1 p:size 5)
+                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (= l:shipinstruct "DELIVER IN PERSON"))
+                     (and (= p:brand "Brand#23")
+                          (#{"MED BAG" "MED BOX" "MED PKG" "MED PACK"} p:container)
+                          (>= l:quantity 10)
+                          (<= l:quantity 20)
+                          (<= 1 p:size 10)
+                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (= l:shipinstruct "DELIVER IN PERSON"))
+                     (and (= p:brand "Brand#34")
+                          (#{"LG CASE" "LG BOX" "LG PACK" "LG PKG"} p:container)
+                          (>= l:quantity 20)
+                          (<= l:quantity 30)
+                          (<= 1 p:size 15)
+                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (= l:shipinstruct "DELIVER IN PERSON"))))
+      :group []]
+     ($select :revenue ($sum (* l:extendedprice (- 1.0 l:discount))))))
+
+(deftest q19-test (check-answer #'q19 @sf-001))
+
+(comment
+  (time (count (q19 @sf-005)))
+  (q19 @sf-001)
+  (check-answer #'q19 @sf-001)
+  )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -612,7 +710,7 @@
                    #'q4, #'q5, #'q6,
                    #'q7, #'q8, #'q9
                    #'q10, #'q11, #'q12,
-                   #'q13, #'q14, #'q15]]
+                   #'q13, #'q14, #'q15, #'q16 #'q17]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
