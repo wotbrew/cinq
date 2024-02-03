@@ -6,7 +6,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (clojure.lang IRecord)
+  (:import (clojure.lang IRecord Util)
            (java.lang.reflect Field)
            (java.util ArrayList Arrays Comparator HashMap List)))
 
@@ -57,8 +57,8 @@
   (equals [_ o]
     (and (instance? Key2 o)
          (let [^Key2 o o]
-           (and (= a (.-a o))
-                (= b (.-b o)))))))
+           (and (Util/equals a (.-a o))
+                (Util/equals b (.-b o)))))))
 
 (defn group2 [vseq key-fn]
   (let [ht (HashMap.)
@@ -317,7 +317,7 @@
 (declare compile-plan*)
 (defn compile-plan [plan] (collapse-plan (compile-plan* plan)))
 
-(defmacro safe-hash [a] `(clojure.lang.Util/hasheq ~a))
+(defmacro safe-hash [a] `(clojure.lang.Util/hash ~a))
 
 (defn has-kw-field? [^Class class kw]
   (and (isa? class IRecord)
