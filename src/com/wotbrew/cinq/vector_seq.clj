@@ -185,6 +185,11 @@
         :when (seq (filter #(theta-pred l %) right))]
     l))
 
+(defn const-semi-join [left right]
+  (if (seq right)
+    left
+    ()))
+
 (defn left-join [left right theta-pred n-cols]
   (for [^objects l left
         :let [rs (filter #(theta-pred l %) right)]
@@ -231,16 +236,6 @@
                        (recur result (unchecked-inc-int i))))
                    result)))
              result))))
-
-#_
-      (mapcat (fn [r]
-                (when-some [^List al (.get ht (right-key r))]
-                  (let [out (ArrayList.)]
-                    (dotimes [i (.size al)]
-                      (let [l (.get al i)]
-                        (when (theta-pred l r)
-                          (.add out (conjoin-tuples l r)))))
-                    out))))
       right)))
 
 (defn equi-semi-join [left left-key right right-key theta-pred]
@@ -435,12 +430,18 @@
     (let [{:keys [left-key right-key theta]
            :or {theta [true]}}
           (plan/equi-theta ?left ?right ?pred)]
-      [(if (seq left-key)
+      [(cond
+         (seq left-key)
          `(equi-semi-join ~(compile-plan ?left)
                           ~(compile-key [?left] left-key)
                           ~(compile-plan ?right)
                           ~(compile-key [?right] right-key)
                           ~(compile-lambda [?left ?right] `(and ~@theta)))
+
+         (= [true] theta)
+         `(const-semi-join ~(compile-plan ?left) ~(compile-plan ?right))
+
+         :else
          `(semi-join ~(compile-plan ?left)
                      ~(compile-plan ?right)
                      ~(compile-lambda [?left ?right] ?pred)))
