@@ -589,6 +589,7 @@
         (iterator [_#]
           (let [~iter ~form]
             (reify Iterator
+              ;; todo is it ok to have this kind of destructive hasNext
               (hasNext [_#] (.nextRow ~iter))
               (next [_#]
                 (let [~@(for [[i col] (map-indexed vector cols)
