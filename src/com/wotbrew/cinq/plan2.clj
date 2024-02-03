@@ -1,10 +1,8 @@
 (ns com.wotbrew.cinq.plan2
   (:require [clojure.set :as set]
-            [clojure.string :as str]
             [clojure.walk :as walk]
             [meander.epsilon :as m]
-            [meander.strategy.epsilon :as r]
-            [com.stuartsierra.dependency :as dep]))
+            [meander.strategy.epsilon :as r]))
 
 (declare arity column-map columns)
 
@@ -19,7 +17,7 @@
 (defn unique-ify* [ra]
   (m/match ra
     [::scan ?src ?bindings]
-    (let [smap (into {} (map (fn [[sym]] [sym (*gensym* (name sym))]) ?bindings))]
+    (let [smap (into {} (map (fn [[sym]] [sym (with-meta (*gensym* (name sym)) (meta sym))]) ?bindings))]
       [[::scan ?src (mapv (fn [[sym e]] [(smap sym) e]) ?bindings)] smap])
 
     [::where ?ra ?pred]
@@ -259,8 +257,11 @@
 
     [::apply ?mode ?left ?right]
     (let [[right-ra right-smap] (push-lookups* ?right lookups)
-          [left-ra left-smap] (push-lookups* ?left (set/difference lookups (set (keys right-smap))))]
-      [[::apply ?mode left-ra right-ra] (merge left-smap right-smap)])
+          expr-lookups (find-lookups ?right)
+          lookups (into lookups (set/difference (set expr-lookups) (set (keys right-smap))))
+          [left-ra left-smap] (push-lookups* ?left lookups)
+          smap (merge left-smap right-smap)]
+      [[::apply ?mode left-ra (walk/postwalk-replace smap right-ra)] smap])
 
     [::semi-join ?left ?right ?pred]
     (let [expr-lookups (find-lookups ?pred)

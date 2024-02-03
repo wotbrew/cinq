@@ -3,10 +3,8 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [meander.epsilon :as m]
-            [meander.strategy.epsilon :as r]))
-
-(create-ns 'com.wotbrew.cinq.plan2)
-(alias 'plan 'com.wotbrew.cinq.plan2)
+            [meander.strategy.epsilon :as r]
+            [com.wotbrew.cinq.plan2 :as plan]))
 
 (defn normalize-binding [binding]
   (cond

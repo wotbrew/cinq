@@ -1,25 +1,16 @@
 (ns com.wotbrew.cinq.vector-seq
   "Seq of vectors runtime algebra representation. Very slow, but more likely correct due to its simple implementation.
    Good to test compiler results against."
-  (:require [clojure.walk :as walk]
+  (:require [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (java.util ArrayList Arrays Comparator HashMap List)))
+  (:import (clojure.lang IRecord)
+           (java.lang.reflect Field)
+           (java.util ArrayList Arrays Comparator HashMap List)))
 
 (set! *warn-on-reflection* true)
-
-;; src
-
-(defn scan [src cols]
-  (for [o src]
-    (mapv (fn [c] (if (identical? :cinq/self c) o (get o c))) cols)))
-
-;; ra
-
-(defn where [vseq pred]
-  (filter pred vseq))
 
 (defn conjoin-tuples
   ([^objects arr1 ^objects arr2]
@@ -184,31 +175,27 @@
     ret))
 
 (defn join [left right theta-pred]
-  (let [right (seq right)]
-    (for [l left
-          r right
-          :when (theta-pred l r)]
-      (conjoin-tuples l r))))
+  (for [l left
+        r right
+        :when (theta-pred l r)]
+    (conjoin-tuples l r)))
 
 (defn semi-join [left right theta-pred]
-  (let [right (seq right)]
-    (for [l left
-          :when (seq (filter #(theta-pred l %) right))]
-      l)))
+  (for [l left
+        :when (seq (filter #(theta-pred l %) right))]
+    l))
 
 (defn left-join [left right theta-pred n-cols]
-  (let [right (seq right)]
-    (for [^objects l left
-          :let [rs (filter #(theta-pred l %) right)]
-          l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
-      l+r)))
+  (for [^objects l left
+        :let [rs (filter #(theta-pred l %) right)]
+        l+r (if (seq rs) (map #(conjoin-tuples l %) rs) [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
+    l+r))
 
 (defn single-join [left right theta-pred]
-  (let [right (seq right)]
-    (for [^objects l left
-          :let [r (first (filter #(theta-pred l %) right))]]
-      (doto (Arrays/copyOf l (inc (alength l)))
-        (aset (alength l) r)))))
+  (for [^objects l left
+        :let [r (first (filter #(theta-pred l %) right))]]
+    (doto (Arrays/copyOf l (inc (alength l)))
+      (aset (alength l) r))))
 
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
@@ -300,64 +287,10 @@
         r right]
     (conjoin-tuples l r)))
 
-(defn possible-dependencies [dep-cols expr]
-  (->> (tree-seq seqable? seq expr)
-       (filter #(and (simple-symbol? %) (dep-cols %)))
-       (distinct)))
-
 (declare compile-plan)
 
 (defn rewrite-expr [col-maps clj-expr]
-  (let [dep-cols (apply merge-with (fn [_ b] b) col-maps)
-        rw (fn [form]
-             (m/match form
-
-               [::plan/lookup ?kw ?s]
-               (list ?kw ?s)
-
-               [::plan/count-some ?expr]
-               (let [deps (possible-dependencies dep-cols ?expr)]
-                 (list `col/count-some (vec (interleave deps deps)) ?expr))
-
-               [::plan/sum ?expr]
-               (let [deps (possible-dependencies dep-cols ?expr)]
-                 (list `col/sum (vec (interleave deps deps)) ?expr))
-
-               [::plan/avg ?expr]
-               (let [deps (possible-dependencies dep-cols ?expr)]
-                 (list `col/avg (vec (interleave deps deps)) ?expr))
-
-               [::plan/min ?expr]
-               (let [deps (possible-dependencies dep-cols ?expr)]
-                 (list `col/minimum (vec (interleave deps deps)) ?expr))
-
-               [::plan/max ?expr]
-               (let [deps (possible-dependencies dep-cols ?expr)]
-                 (list `col/maximum (vec (interleave deps deps)) ?expr))
-
-               [::plan/= ?a ?b]
-               `(= ~?a ~?b)
-
-               [::plan/<= ?a ?b]
-               `(<= (compare ~?a ~?b) 0)
-               [::plan/< ?a ?b]
-               `(< (compare ~?a ~?b) 0)
-               [::plan/>= ?a ?b]
-               `(>= (compare ~?a ~?b) 0)
-               [::plan/> ?a ?b]
-               `(> (compare ~?a ~?b) 0)
-
-               [::plan/scalar-sq ?plan]
-               `(first ~(compile-plan ?plan))
-
-               [::plan/and & ?clause]
-               (if (seq ?clause)
-                 `(and ~@?clause)
-                 true)
-
-               _ form))]
-    ;; todo should keep meta on this walk? (e.g return hints on lists)
-    (walk/prewalk rw clj-expr)))
+  (expr/rewrite col-maps clj-expr compile-plan))
 
 (defn compile-src [clj-expr] (rewrite-expr [] clj-expr))
 
@@ -383,17 +316,23 @@
 (declare compile-plan*)
 (defn compile-plan [plan] (collapse-plan (compile-plan* plan)))
 
-(defmacro safe-hash [a]
-  `(if (nil? ~a)
-     0
-     (.hashCode ~(with-meta a {:tag 'java.lang.Object}))))
+(defmacro safe-hash [a] `(clojure.lang.Util/hasheq ~a))
+
+(defn has-kw-field? [^Class class kw]
+  (and (isa? class IRecord)
+       (let [munged-name (munge (name kw))]
+         (->> (.getFields class)
+              (some (fn [^Field f] (= munged-name (.getName f))))))))
 
 (defn compile-plan* [plan]
   (m/match plan
 
     [::plan/where [::plan/scan ?src ?cols] ?pred]
     [(compile-src ?src)
-     [(let [osym (gensym "o")
+     [(let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) ?cols))
+            self-tag (:tag (meta self-binding))
+            self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
+            o (with-meta (gensym "o") {:tag self-tag})
             asym (gensym "a")]
         ;; permitting the keep transducer to be specialised (rather than passing a function to keep)
         ;; reduces megamorphic completing dispatch and speeds things up quite a bit (30-40% on some benchmarks)
@@ -401,12 +340,14 @@
            (fn
              ([] (rf#))
              ([result#] (rf# result#))
-             ([result# ~osym]
+             ([result# ~o]
               (let [~@(for [[sym k] ?cols
                             form [sym (cond
-                                        (= :cinq/self k) osym
-                                        (keyword? k) (list k osym)
-                                        :else (list `get osym k))]]
+                                        (= :cinq/self k) o
+                                        (and self-class (class? self-class) (has-kw-field? self-class k))
+                                        (list (symbol (str ".-" (munge (name k)))) o)
+                                        (keyword? k) (list k o)
+                                        :else (list `get o k))]]
                         form)]
                 (when ~(rewrite-expr [] ?pred)
                   (let [~asym (object-array ~(count ?cols))]
@@ -415,19 +356,24 @@
                     (rf# result# ~asym))))))))]]
 
     [::plan/scan ?src ?cols]
-    (let [osym (gensym "o")
+    (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) ?cols))
+          self-tag (:tag (meta self-binding))
+          self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
+          o (with-meta (gensym "o") {:tag self-tag})
           asym (gensym "a")]
       [(compile-src ?src)
        [`(fn [rf#]
            (fn
              ([] (rf#))
              ([result#] (rf# result#))
-             ([result# ~osym]
+             ([result# ~o]
               (let [~@(for [[sym k] ?cols
                             form [sym (cond
-                                        (= :cinq/self k) osym
-                                        (keyword? k) (list k osym)
-                                        :else (list `get osym k))]]
+                                        (= :cinq/self k) o
+                                        (and self-class (class? self-class) (has-kw-field? self-class k))
+                                        (list (symbol (str ".-" (munge (name k)))) o)
+                                        (keyword? k) (list k o)
+                                        :else (list `get o k))]]
                         form)]
                 (let [~asym (object-array ~(count ?cols))]
                   ~@(for [[i sym] (map-indexed vector (map first ?cols))]
@@ -592,6 +538,16 @@
     [::plan/limit ?ra ?n]
     `[(limit ~(compile-plan ?ra) ~?n)
       []]))
+
+(defmacro q*
+  ([ra] `(q* ~ra :cinq/*))
+  ([ra expr]
+   (let [lp (parse/parse (list 'q ra expr))
+         lp' (plan/rewrite lp)
+         [src xforms] (compile-plan* lp')]
+     (if (seq xforms)
+       `(eduction (comp ~@xforms) ~src)
+       `(eduction identity ~src)))))
 
 (defmacro q
   ([ra] `(q ~ra :cinq/*))

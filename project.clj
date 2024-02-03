@@ -8,6 +8,7 @@
                  [com.stuartsierra/dependency "1.0.0"]
                  [org.clojure/tools.analyzer.jvm "1.2.3"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
-                                  [criterium "0.4.6"]]}}
+                                  [criterium "0.4.6"]]
+                   :source-paths ["dev"]}}
   :jvm-opts ^:replace []
   :repl-options {:init-ns cinq.core})

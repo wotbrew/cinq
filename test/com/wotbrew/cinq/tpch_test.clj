@@ -6,11 +6,20 @@
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
+            [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.vector-seq :refer [q]])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
 
 (set! *warn-on-reflection* true)
+
+(defn iter-count [iterable]
+  (let [iter (.iterator ^Iterable iterable)]
+    (loop [n 0]
+      (if (.hasNext iter)
+        (do (.next iter)
+            (recur (unchecked-inc-int n)))
+        n))))
 
 (defn view-plan [q]
   (-> q parse/parse plan/rewrite plan/stack-view))
@@ -26,14 +35,14 @@
 (defrecord Customer [custkey name address nationkey phone acctbal mktsegment comment])
 (defrecord Order [orderkey custkey orderstatus totalprice orderdate orderpriority clerk shippriority comment])
 (defrecord Lineitem
-  [orderkey
-   partkey
-   suppkey
-   linenumber
-   quantity
-   extendedprice
-   discount
-   tax
+  [^long orderkey
+   ^long partkey
+   ^long suppkey
+   ^long linenumber
+   ^double quantity
+   ^double extendedprice
+   ^double discount
+   ^double tax
    returnflag
    linestatus
    shipdate
@@ -136,7 +145,31 @@
               :avg_disc ($avg l:discount)
               :count_order %count)))
 
+(defn q1-el [{:keys [lineitem]}]
+  (el/q
+    [^Lineitem l lineitem
+     :when (<= l:shipdate #inst "1998-09-02")
+     :group [returnflag l:returnflag, linestatus l:linestatus]
+     #_#_:order [returnflag :asc, linestatus :asc]]
+    ($select :l_returnflag returnflag
+             :l_linestatus linestatus
+             :sum_qty ($sum l:quantity)
+             :sum_base_price ($sum l:extendedprice)
+             :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
+             :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
+             :avg_qty ($avg l:quantity)
+             :avg_price ($avg l:extendedprice)
+             :avg_disc ($avg l:discount)
+             :count_order %count)))
+
 (deftest q1-test (check-answer #'q1 @sf-001))
+
+(comment
+  (check-answer #'q1 @sf-001)
+  (time (count (q1 @sf-005)))
+  (time (count (q1-el @sf-005)))
+
+  )
 
 (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
   (q [p part
@@ -691,6 +724,40 @@
   (check-answer #'q19 @sf-001)
   )
 
+;; q20 is problematic due to rule 9 currently
+#_#_#_(defn q20 [{:keys [supplier, nation, partsupp, lineitem, part]}]
+        (q [s supplier
+            n nation
+            :when (and (contains? s:suppkey
+                                  (S [ps partsupp
+                                      :when (and (contains? (S [p part
+                                                                :when (str/starts-with? p:name "forest")
+                                                                :group []]
+                                                               (set p:partkey))
+                                                            ps:partkey)
+                                                 (> ps:availqty (S [l lineitem
+                                                                    :when (and (= l:partkey ps:partkey)
+                                                                               (= l:suppkey ps:suppkey)
+                                                                               (>= l:shipdate #inst "1994-01-01")
+                                                                               (< l:shipdate #inst "1995-01-01"))
+                                                                    :group []]
+                                                                   ;; this query can return nil, the left join
+                                                                   (Double/valueOf (* 0.5 ($sum l:quantity))))))
+                                      :group []]
+                                     (set ps:suppkey)))
+                       (= s:nationkey n:nationkey)
+                       (= n:name "CANADA"))
+            :order [s:name :asc]]
+           ($select :name s:name, :address s:address)))
+
+        (deftest q20-test (check-answer #'q20 @sf-001))
+
+        (comment
+          (time (count (q20 @sf-005)))
+          (q20 @sf-001)
+          (check-answer #'q20 @sf-001)
+          )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -716,6 +783,7 @@
         (println "done")))
 
   (time (dotimes [x 1] (count (q1 dataset))))
+  (time (dotimes [x 1] (count (q1-el dataset))))
   (time (dotimes [x 1] (count (q2 dataset))))
   (time (dotimes [x 1] (count (q3 dataset))))
   (time (dotimes [x 1] (count (q4 dataset))))
