@@ -1,8 +1,12 @@
 (ns com.wotbrew.cinq.plan2
   (:require [clojure.set :as set]
             [clojure.walk :as walk]
+            [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m]
-            [meander.strategy.epsilon :as r]))
+            [meander.strategy.epsilon :as r])
+  (:import (clojure.lang IRecord)
+           (com.wotbrew.cinq.column Column DoubleColumn LongColumn)
+           (java.lang.reflect Field)))
 
 (declare arity column-map columns)
 
@@ -69,16 +73,88 @@
 (defn unique-ify [ra]
   (first (unique-ify* ra)))
 
+(defn self-class [scan-bindings]
+  (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) scan-bindings))
+        self-tag (:tag (meta self-binding))]
+    (if (symbol? self-tag) (resolve self-tag) self-tag)))
+
+(defn kw-field [^Class class kw]
+  (when (isa? class IRecord)
+    (let [munged-name (munge (name kw))]
+      (->> (.getFields class)
+           (some (fn [^Field f] (when (= munged-name (.getName f)) f)))))))
+
+(def %count-sym (with-meta '%count {:tag 'long}))
+
+(defn group-column-type [column-sym]
+  (condp = (:tag (meta column-sym))
+    'double `DoubleColumn
+    'long `LongColumn
+    `Column))
+
+(defn group-column-tag [column-sym]
+  (vary-meta column-sym assoc :tag (group-column-type column-sym)))
+
+(defn optional-tag [column-sym] (vary-meta column-sym dissoc :tag))
+
+(defn resolve-tag [column-sym]
+  (if-some [tag (:tag (meta column-sym))]
+    (condp = tag
+      'byte column-sym
+      'short column-sym
+      'int column-sym
+      'long column-sym
+      'double column-sym
+      'float column-sym
+      'boolean column-sym
+      (let [rt (resolve tag)]
+        (if (class? rt)
+          (vary-meta column-sym assoc :tag (symbol (.getName ^Class rt)))
+          column-sym)))
+    column-sym))
+
 (defn columns [ra]
   (m/match ra
     [::scan _ ?cols]
-    (mapv first ?cols)
+    (let [self-class (self-class ?cols)]
+      (if (isa? self-class IRecord)
+        (mapv (fn [[col k]]
+                (resolve-tag
+                  (if-some
+                    [new-tag
+                     (when (keyword? k)
+                       (if-some [^Field f (kw-field self-class k)]
+                         (condp = (.getType f)
+                           Byte/TYPE 'byte
+                           Short/TYPE 'short
+                           Integer/TYPE 'int
+                           Long/TYPE 'long
+                           Double/TYPE 'double
+                           Float/TYPE 'float
+                           Boolean/TYPE 'boolean
+                           (condp = (.getComponentType (.getType f))
+                             Byte/TYPE 'bytes
+                             Short/TYPE 'shorts
+                             Integer/TYPE 'ints
+                             Long/TYPE 'longs
+                             Double/TYPE 'doubles
+                             Float/TYPE 'floats
+                             Boolean/TYPE 'booleans
+                             (symbol (.getName (.getType f)))))))]
+                    ;; keep old tag if it resolves
+                    (vary-meta col (fn [m] (if (:tag m) m (assoc m :tag new-tag))))
+                    col)))
+              ?cols)
+        (mapv (fn [[col]] (resolve-tag col)) ?cols)))
 
     [::where ?ra _]
     (columns ?ra)
 
     [::project ?ra ?bindings]
     (mapv first ?bindings)
+
+    [::apply :left-join ?left ?right]
+    (into (columns ?left) (mapv optional-tag (columns ?right)))
 
     [::apply ?mode ?left ?right]
     (into (columns ?left) (columns ?right))
@@ -90,14 +166,17 @@
     (columns ?left)
 
     [::left-join ?left ?right _]
-    (into (columns ?left) (columns ?right))
+    (into (columns ?left) (mapv optional-tag (columns ?right)))
 
     [::single-join ?left ?right _]
     (into (columns ?left) (columns ?right))
 
     [::group-by ?ra ?bindings]
     (let [cols (columns ?ra)]
-      (conj (into cols (mapv first ?bindings)) '%count))
+      ;; todo Column type
+      (conj (into (mapv group-column-tag cols)
+                  (mapv first ?bindings))
+            %count-sym))
 
     [::order-by ?ra _]
     (columns ?ra)

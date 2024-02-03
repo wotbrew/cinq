@@ -3,13 +3,13 @@
             [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
-            [com.wotbrew.cinq.vector-seq :as vseq]
             [meander.epsilon :as m])
-  (:import (clojure.lang IHashEq IRecord RT Seqable Sequential)
-           (com.wotbrew.cinq ArrayIterator)
+  (:import (clojure.lang ArrayIter IRecord RT Seqable Sequential)
            (java.lang.reflect Field)
-           (java.util ArrayList HashMap Iterator LinkedHashMap$Entry Map$Entry)
+           (java.util ArrayList HashMap Iterator Map$Entry)
            (java.util.function Consumer)))
+
+(defn untag [sym] (vary-meta sym dissoc :tag))
 
 (set! *warn-on-reflection* true)
 
@@ -20,7 +20,7 @@
 
 (defn iterator ^Iterator [src]
   (if (instance? oarr src)
-    (ArrayIterator. src)
+    (ArrayIter/create src)
     (.iterator ^Iterable src)))
 
 (def scan-src-field (with-meta 'cinq__scan-src {:tag `Iterator}))
@@ -28,17 +28,22 @@
 (def src-field 'cinq__src)
 (def src-field-accessor '.-cinq__src)
 
-(defn col-field [i col] (with-meta (symbol (str "f" i)) (merge {:unsynchronized-mutable true, :public true} (select-keys (meta col) [:tag]))))
+(defn col-field [i col]
+  (with-meta
+    (symbol (str "f" i))
+    (merge {:unsynchronized-mutable true}
+           (select-keys (meta col) [:tag]))))
+
 (defn col-fields [cols] (map-indexed col-field cols))
 
 (defn field-sym [i] (symbol (str "f" i)))
 (defn field-accessor [i] (symbol (str ".-" (field-sym i))))
 
-(defn has-kw-field? [^Class class kw]
-  (and (isa? class IRecord)
-       (let [munged-name (munge (name kw))]
-         (->> (.getFields class)
-              (some (fn [^Field f] (= munged-name (.getName f))))))))
+(defn kw-field [^Class class kw]
+  (when (isa? class IRecord)
+    (let [munged-name (munge (name kw))]
+      (->> (.getFields class)
+           (some (fn [^Field f] (when (= munged-name (.getName f)) f)))))))
 
 (defn getter-sym [i] (symbol (str "getF" i)))
 
@@ -46,7 +51,7 @@
   (let [s (gensym "ITuple")]
     `(definterface ~s
        ~@(for [[i t] (map-indexed vector types)]
-           (list (getter-sym i) (with-meta [] {:tag t}))))))
+           (list (with-meta (getter-sym i) {:tag t}) [])))))
 
 (defn tuple-interface [cols]
   (tuple-interface* (mapv (fn [col] (:tag (meta col) `Object)) cols)))
@@ -61,7 +66,8 @@
   (let [t (gensym "Tuple")
         osym (gensym "o")
         tosym (with-meta osym {:tag interface-sym})
-        hsym (with-meta '__hashcode {:tag 'int, :unsynchronized-mutable true})]
+        hsym (with-meta '__hashcode {:tag 'int, :unsynchronized-mutable true})
+        hsymu (with-meta hsym {})]
     `(deftype ~t [~hsym ~@(col-fields cols)]
        ~@(tuple-impl interface-sym cols)
        ;; todo hasheq by default, java eq might want to be opt-in?
@@ -70,18 +76,18 @@
          (and (instance? ~interface-sym ~osym)
               (let [~tosym ~osym]
                 (and ~@(for [i (range (count cols))]
-                         `(clojure.lang.Util/equals  ~(field-sym i) (. ~tosym ~(getter-sym i))))))))
+                         `(clojure.lang.Util/equals ~(field-sym i) (. ~tosym ~(getter-sym i))))))))
        (hashCode [_#]
-         (if (= 0 ~hsym)
+         (if (= 0 ~hsymu)
            (let [hc# ~(case (count cols)
                         0 42
                         (reduce
                           (fn [form i] `(add-hash ~form (.hashCode (RT/box ~(field-sym i)))))
                           1
                           (range (count cols))))]
-             (set! ~hsym hc#)
+             (set! ~hsymu hc#)
              hc#)
-           ~hsym)))))
+           ~hsymu)))))
 
 (defn scan-iter
   ([tuple-sym cols bindings] (scan-iter tuple-sym cols bindings ::no-pred))
@@ -99,22 +105,23 @@
           (if (.hasNext ~scan-src-field)
             (let [~o (.next ~scan-src-field)
                   ~@(for [[sym k] bindings
-                          form [sym (cond
-                                      (= :cinq/self k) o
-                                      (and self-class (class? self-class) (has-kw-field? self-class k))
-                                      (list (symbol (str ".-" (munge (name k)))) o)
-                                      (keyword? k) (list k o)
-                                      :else (list `get o k))]]
+                          form [(untag sym)
+                                (cond
+                                  (= :cinq/self k) o
+                                  (and self-class (class? self-class) (kw-field self-class k))
+                                  (list (symbol (str ".-" (munge (name k)))) o)
+                                  (keyword? k) (list k o)
+                                  :else (list `get o k))]]
                       form)]
-              ~(if (= ::no-pred pred)
+              ~(if-not (= ::no-pred pred)
                  `(if ~pred
                     (do
                       ~@(for [[i [local]] (map-indexed vector bindings)]
-                          `(set! (~(field-accessor i) ~this) ~local))
+                          `(set! (~(field-accessor i) ~this) ~(untag local)))
                       true)
                     (recur))
                  `(do ~@(for [[i [local]] (map-indexed vector bindings)]
-                          `(set! (~(field-accessor i) ~this) ~local))
+                          `(set! (~(field-accessor i) ~this) ~(untag local)))
                       true)))
             false))))))
 
@@ -126,7 +133,7 @@
        (nextRow [~this]
          (if (.nextRow ~src-field)
            (let [~@(for [[i col] (map-indexed vector cols)
-                         form [col (list '. (src-acc src-field) (getter-sym i))]]
+                         form [(untag col) (list '. (src-acc src-field) (getter-sym i))]]
                      form)]
              (if ~pred
                true
@@ -142,7 +149,7 @@
         key (with-meta (gensym "key") {:tag key-tuple-sym})
         al (with-meta (gensym "al") {:tag `ArrayList})
         value (with-meta (gensym "value") {:tag val-tuple-sym})
-        all-cols (vec (concat cols key-cols '[%count]))
+        all-cols (vec (concat (mapv plan/group-column-tag cols) key-cols [plan/%count-sym]))
         %count '%count]
     `(deftype ~t [~entries ~@(col-fields all-cols)]
        ~@(tuple-impl tuple-sym all-cols)
@@ -152,20 +159,29 @@
            (let [~entry (.next ~entries)
                  ~key (.getKey ~entry)
                  ~@(for [[i col] (map-indexed vector key-cols)
-                         form [col (list '. key (getter-sym i))]]
+                         form [(untag col) (list '. key (getter-sym i))]]
                      form)
                  ~al (.getValue ~entry)
-                 ~%count (.size ~al)
+                 ~%count (unchecked-long (.size ~al))
                  ~@(for [[i col] (map-indexed vector cols)
-                         :let [thunk `(let [arr# (object-array ~%count)]
+                         :let [[array box column]
+                               (condp = (:tag (meta col))
+                                 'double [`double-array false `col/->DoubleColumn]
+                                 'long [`long-array false `col/->LongColumn]
+                                 [`object-array true `col/->Column])
+
+                               thunk `(let [arr# (~array ~%count)]
                                         (dotimes [i# ~%count]
                                           (let [~value (.get ~al i#)]
-                                            (aset arr# i# (clojure.lang.RT/box ~(list '. value (getter-sym i))))))
+                                            (aset arr# i# ~(let [getf (list '. value (getter-sym i))]
+                                                             (if box
+                                                               `(RT/box ~getf)
+                                                               getf)))))
                                         arr#)]
-                         form [col `(col/->Column nil (fn [] ~thunk))]]
+                         form [(untag col) `(~column nil (fn [] ~thunk))]]
                      form)]
              ~@(for [[i col] (map-indexed vector all-cols)]
-                `(set! ~(field-sym i) ~col))
+                 `(set! ~(field-sym i) ~(untag col)))
              true)
            false)))))
 
@@ -191,10 +207,10 @@
              false)
            (if (.nextRow ~right-field-acc)
              (let [~@(for [[i col] (map-indexed vector left-cols)
-                           form [col (list '. (left-acc left-field) (getter-sym i))]]
+                           form [(untag col) (list '. (left-acc left-field) (getter-sym i))]]
                        form)
                    ~@(for [[i col] (map-indexed vector right-cols)
-                           form [col (list '. (right-acc right-field-acc) (getter-sym i))]]
+                           form [(untag col) (list '. (right-acc right-field-acc) (getter-sym i))]]
                        form)]
                ~(if (= ::no-pred pred)
                   `(do
@@ -233,10 +249,10 @@
            (if (.hasNext ~matches-acc)
              (let [~o (.next ~matches-acc)
                    ~@(for [[i col] (map-indexed vector left-cols)
-                           form [col (list '. o (getter-sym i))]]
+                           form [(untag col) (list '. o (getter-sym i))]]
                        form)
                    ~@(for [[i col] (map-indexed vector right-cols)
-                           form [col (list '. (right-acc right-field) (getter-sym i))]]
+                           form [(untag col) (list '. (right-acc right-field) (getter-sym i))]]
                        form)]
                ~(if (= ::no-pred theta-pred)
                   `(do
@@ -255,7 +271,7 @@
            (.nextRow ~right-field)
            (let [~@(for [[i col] (map-indexed vector right-cols)
                          :when (used-in-right-key? col)
-                         form [col (list '. (right-acc right-field) (getter-sym i))]]
+                         form [(untag col) (list '. (right-acc right-field) (getter-sym i))]]
                      form)
                  key# ~right-key
                  ~al (.get ~hm key#)]
@@ -281,18 +297,18 @@
            (let [~right (~right-src-field)]
              (if (.nextRow ~right)
                (let [~@(for [[i col] (map-indexed vector left-cols)
-                             form [col (list '. (left-acc left-field) (getter-sym i))]]
+                             form [(untag col) (list '. (left-acc left-field) (getter-sym i))]]
                          form)
                      ~@(for [[i col] (map-indexed vector right-cols)
-                             form [col (list '. (right-acc right) (getter-sym i))]]
+                             form [(untag col) (list '. (right-acc right) (getter-sym i))]]
                          form)]
                  ~(if (= ::no-pred pred)
                     true
                     `(let [~@(for [[i col] (map-indexed vector left-cols)
-                                   form [col (list '. (left-acc left-field) (getter-sym i))]]
+                                   form [(untag col) (list '. (left-acc left-field) (getter-sym i))]]
                                form)
                            ~@(for [[i col] (map-indexed vector right-cols)
-                                   form [col (list '. (right-acc right) (getter-sym i))]]
+                                   form [(untag col) (list '. (right-acc right) (getter-sym i))]]
                                form)]
                        (if ~pred
                          true
@@ -304,10 +320,24 @@
 (def debug false)
 
 (defn- eval-definition ^Class [form]
-  (when debug (clojure.pprint/pprint form))
+  (when debug (binding [*print-meta* true] (clojure.pprint/pprint form)))
   (eval
     `(binding [*warn-on-reflection* true]
        ~form)))
+
+(defn column-defaults [cols]
+  (map
+    (fn [col] (let [tag (:tag (meta col))]
+                (condp = tag
+                  'boolean false
+                  'long 0
+                  'int 0
+                  'short 0
+                  'byte 0
+                  'double 0.0
+                  'float 0.0
+                  nil)))
+    cols))
 
 (defn compile-plan* [plan]
   (m/match plan
@@ -329,7 +359,7 @@
        ;; a clojure form that will construct the Iter
        ;; todo if ?src is not dependent we want to define it as a preamble, otherwise it might be re-evaluated every step of a loop
        ;; note: is this the same as const-expr elimination?
-       :form `(new ~iter-sym (iterator ~(expr/rewrite [] ?src compile-iterable)) ~@(repeat (count cols) nil))})
+       :form `(new ~iter-sym (iterator ~(expr/rewrite [] ?src compile-iterable)) ~@(column-defaults cols))})
 
     [::plan/group-by ?ra ?bindings]
     (let [all-cols (plan/columns plan)
@@ -373,21 +403,21 @@
                             al# (ArrayList.)]
                         (while (.nextRow ~build)
                           (let [~@(for [[i col] (map-indexed vector ra-cols)
-                                        form [col (list '. (ra-acc build) (getter-sym i))]]
+                                        form [(untag col) (list '. (ra-acc build) (getter-sym i))]]
                                     form)
-                                val# (new ~val-tuple-sym (unchecked-int 0) ~@ra-cols)]
+                                val# (new ~val-tuple-sym (unchecked-int 0) ~@(map untag ra-cols))]
                             (.add al# val#)))
                         ;; todo hasheq by default, java eq might want to be opt-in?
-                        (let [hm# (HashMap. (.size al#))]
+                        (let [hm# (HashMap. 32)]
                           (.forEach
                             al#
                             (reify Consumer
                               (accept [_# val#]
                                 (let [~value val#
                                       ~@(for [[i col] (map-indexed vector ra-cols)
-                                             :when (used-in-key? col)
-                                             form [col (list '. value (getter-sym i))]]
-                                         form)
+                                              :when (used-in-key? col)
+                                              form [(untag col) (list '. value (getter-sym i))]]
+                                          form)
                                       key# (new ~key-tuple-sym (unchecked-int 0) ~@key-exprs)
                                       ~al (.get hm# key#)]
                                   (if ~al
@@ -396,7 +426,7 @@
                                       (.add ~al ~value)
                                       (.put hm# key# ~al)))))))
                           (.iterator (.entrySet hm#))))))
-                   ~@(repeat (count all-cols) nil))})
+                   ~@(column-defaults all-cols))})
 
     [::plan/where [::plan/scan ?src ?bindings] ?pred]
     (let [cols (plan/columns plan)
@@ -409,7 +439,7 @@
       {:type-sym iter-sym
        :tuple-sym tuple-sym
        :type-acc identity
-       :form `(new ~iter-sym (iterator ~(expr/rewrite [] ?src compile-iterable)) ~@(repeat (count cols) nil))})
+       :form `(new ~iter-sym (iterator ~(expr/rewrite [] ?src compile-iterable)) ~@(column-defaults cols))})
 
     [::plan/where ?src ?pred]
     (let [{src-sym :type-sym
@@ -448,7 +478,7 @@
       {:type-sym iter-sym
        :tuple-sym tuple-sym
        :type-acc identity
-       :form `(new ~iter-sym ~left-form nil (fn [] ~right-form) ~@(repeat (count joined-cols) nil))})
+       :form `(new ~iter-sym ~left-form nil (fn [] ~right-form) ~@(column-defaults joined-cols))})
 
     [::plan/join ?left ?right ?pred]
     (let [{left-sym :type-sym
@@ -492,25 +522,25 @@
                                 ~build ~left-form]
                             (while (.nextRow ~build)
                               (let [~@(for [[i col] (map-indexed vector left-cols)
-                                            form [col (list '. (left-acc build) (getter-sym i))]]
+                                            form [(untag col) (list '. (left-acc build) (getter-sym i))]]
                                         form)
                                     key# ~left-key
                                     ~al (.get hm# key#)]
                                 (if ~al
-                                  (.add ~al (new ~left-tuple-standalone-sym 0 ~@left-cols))
+                                  (.add ~al (new ~left-tuple-standalone-sym 0 ~@(map untag left-cols)))
                                   (let [~al (ArrayList.)]
-                                    (.add ~al (new ~left-tuple-standalone-sym 0 ~@left-cols))
+                                    (.add ~al (new ~left-tuple-standalone-sym 0 ~@(map untag left-cols)))
                                     (.put hm# key# ~al)))))
                             hm#)
                           ))
-                       nil ~right-form ~@(repeat (count joined-cols) nil))})
+                       nil ~right-form ~@(column-defaults joined-cols))})
         (let [iter-def (join-iter tuple-sym left-acc left-sym left-cols right-acc right-sym right-cols joined-cols ::no-pred)
               iter-type (eval-definition iter-def)
               iter-sym (symbol (.getName iter-type))]
           {:type-sym iter-sym
            :tuple-sym tuple-sym
            :type-acc identity
-           :form `(new ~iter-sym ~left-form nil (fn [] ~right-form) ~@(repeat (count joined-cols) nil))})))
+           :form `(new ~iter-sym ~left-form nil (fn [] ~right-form) ~@(column-defaults joined-cols))})))
 
     ))
 
@@ -549,18 +579,15 @@
               (hasNext [_#] (.nextRow ~iter))
               (next [_#]
                 (let [~@(for [[i col] (map-indexed vector cols)
-                              form [col (list '. (with-meta (type-acc iter) {:tag tuple-sym}) (getter-sym i))]]
+                              form [(untag col) (list '. (with-meta (type-acc iter) {:tag tuple-sym}) (getter-sym i))]]
                           form)
                       ~@(for [[sym expr] projection
-                              form [sym (expr/rewrite [(plan/column-map plan)] expr compile-iterable)]]
+                              form [(untag sym) (expr/rewrite [(plan/column-map plan)] expr compile-iterable)]]
                           form)]
-                  ~(if-not projection
-                     (case (count cols)
-                       1 (first cols)
-                       (vec cols))
-                     (case (count projection)
-                       1 (ffirst projection)
-                       (mapv first projection))))))))))))
+                  ~(let [output (if projection (mapv (comp untag first) projection) (mapv untag cols))]
+                     (case (count output)
+                       1 (first output)
+                       (vec output))))))))))))
 
 (defmacro q
   ([ra] `(q ~ra :cinq/*))

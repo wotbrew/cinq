@@ -201,7 +201,9 @@
   (m/match expr
     :cinq/*
     (let [cols (plan/columns selection)]
-      [::plan/project selection [[(plan/*gensym* "col") (into {} (for [col cols] [(keyword (name col)) (rewrite-exprs col)]))]]])
+      [::plan/project selection
+       [[(plan/*gensym* "col")
+         (into {} (for [col cols] [(keyword (name col)) (rewrite-exprs col)]))]]])
 
     ;; todo tuple type?
     ($select & ?projection)

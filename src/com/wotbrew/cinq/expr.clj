@@ -8,7 +8,7 @@
   (if (sequential? dep-cols)
     (possible-dependencies (zipmap dep-cols (range)) expr)
     (->> (tree-seq seqable? seq expr)
-         (filter #(and (simple-symbol? %) (dep-cols %)))
+         (keep #(when (simple-symbol? %) (some-> (find dep-cols %) key)))
          (distinct))))
 
 (defn rewrite [col-maps clj-expr compile-plan]
