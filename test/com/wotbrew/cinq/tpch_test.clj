@@ -762,6 +762,8 @@
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
 
+  (require 'criterium.core)
+
   (System/gc)
 
   (def dataset @sf-001)

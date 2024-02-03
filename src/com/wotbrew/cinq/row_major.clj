@@ -5,10 +5,11 @@
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.vector-seq :as vseq]
             [meander.epsilon :as m])
-  (:import (clojure.lang IRecord Seqable Sequential)
+  (:import (clojure.lang IHashEq IRecord RT Seqable Sequential)
            (com.wotbrew.cinq ArrayIterator)
            (java.lang.reflect Field)
-           (java.util ArrayList HashMap Iterator LinkedHashMap$Entry Map$Entry)))
+           (java.util ArrayList HashMap Iterator LinkedHashMap$Entry Map$Entry)
+           (java.util.function Consumer)))
 
 (set! *warn-on-reflection* true)
 
@@ -63,18 +64,19 @@
         hsym (with-meta '__hashcode {:tag 'int, :unsynchronized-mutable true})]
     `(deftype ~t [~hsym ~@(col-fields cols)]
        ~@(tuple-impl interface-sym cols)
+       ;; todo hasheq by default, java eq might want to be opt-in?
        Object
        (equals [_# ~osym]
          (and (instance? ~interface-sym ~osym)
               (let [~tosym ~osym]
                 (and ~@(for [i (range (count cols))]
-                         `(= ~(field-sym i) (. ~tosym ~(getter-sym i))))))))
+                         `(clojure.lang.Util/equals  ~(field-sym i) (. ~tosym ~(getter-sym i))))))))
        (hashCode [_#]
          (if (= 0 ~hsym)
            (let [hc# ~(case (count cols)
                         0 42
                         (reduce
-                          (fn [form i] `(add-hash ~form (vseq/safe-hash ~(field-sym i))))
+                          (fn [form i] `(add-hash ~form (.hashCode (RT/box ~(field-sym i)))))
                           1
                           (range (count cols))))]
              (set! ~hsym hc#)
@@ -359,26 +361,41 @@
           iter-sym (symbol (.getName iter-type))
 
           build (with-meta (gensym "build") {:tag ra-type-sym})
-          al (with-meta (gensym "al") {:tag `ArrayList})]
+          al (with-meta (gensym "al") {:tag `ArrayList})
+          value (with-meta (gensym "value") {:tag val-tuple-sym})
+          used-in-key? (set (expr/possible-dependencies ra-cols key-exprs))]
       {:type-sym iter-sym
        :tuple-sym tuple-sym
        :type-acc identity
        :form `(new ~iter-sym
-                   ((fn []
+                   ((fn build-groups# []
                       (let [~build ~ra-form
-                            hm# (HashMap.)]
+                            al# (ArrayList.)]
                         (while (.nextRow ~build)
                           (let [~@(for [[i col] (map-indexed vector ra-cols)
                                         form [col (list '. (ra-acc build) (getter-sym i))]]
                                     form)
-                                key# (new ~key-tuple-sym 0 ~@key-exprs)
-                                ~al (.get hm# key#)]
-                            (if ~al
-                              (.add ~al (new ~val-tuple-sym 0 ~@ra-cols))
-                              (let [~al (ArrayList.)]
-                                (.add ~al (new ~val-tuple-sym 0 ~@ra-cols))
-                                (.put hm# key# ~al)))))
-                        (.iterator (.entrySet hm#)))))
+                                val# (new ~val-tuple-sym (unchecked-int 0) ~@ra-cols)]
+                            (.add al# val#)))
+                        ;; todo hasheq by default, java eq might want to be opt-in?
+                        (let [hm# (HashMap. (.size al#))]
+                          (.forEach
+                            al#
+                            (reify Consumer
+                              (accept [_# val#]
+                                (let [~value val#
+                                      ~@(for [[i col] (map-indexed vector ra-cols)
+                                             :when (used-in-key? col)
+                                             form [col (list '. value (getter-sym i))]]
+                                         form)
+                                      key# (new ~key-tuple-sym (unchecked-int 0) ~@key-exprs)
+                                      ~al (.get hm# key#)]
+                                  (if ~al
+                                    (.add ~al ~value)
+                                    (let [~al (ArrayList.)]
+                                      (.add ~al ~value)
+                                      (.put hm# key# ~al)))))))
+                          (.iterator (.entrySet hm#))))))
                    ~@(repeat (count all-cols) nil))})
 
     [::plan/where [::plan/scan ?src ?bindings] ?pred]
@@ -470,7 +487,7 @@
            :tuple-sym tuple-sym
            :type-acc identity
            :form `(new ~iter-sym
-                       ((fn []
+                       ((fn build-join-hm# []
                           (let [hm# (HashMap.)
                                 ~build ~left-form]
                             (while (.nextRow ~build)
@@ -562,41 +579,3 @@
   (macroexpand '(q [a [1, 2, 3] :when (= a 2)]))
 
   )
-
-;; spliterator
-
-'(deftype JoinIter2344 [left-iter, right-src, right-iter, side, f0, f1, f2]
-   Iter
-   (nextRow [s]
-     (if (.nextRow left-iter)
-       (let [left-bind-a (.-f0 left-iter)]
-         (when-not right-iter (set! right-iter (.iter right-src)))
-         (loop []
-           (do (if (.nextRow right this)
-                 (let [right-bind-a (.f0 right-iter)
-                       right-bind-b (.f1 right-iter)]
-                   (if (= left-bind-a right-bind-a)
-                     (do
-                       (set! f0 left-bind-a)
-                       (set! f1 right-bind-a)
-                       (set! f1 right-bind-b)
-                       true)
-                     (recur)))
-                 (set! right (.iter right-src))
-                 (recur)))))
-       false)))
-
-'(deftype EquiJoinIter2344 [left-ht, right-iter, pred, f0, f1, f2]
-   Iter
-   (nextRow [s]
-     (if (.nextRow right-iter)
-       (let [right-bind-a (.-f0 right-iter)
-             right-bind-b (.-f1 right-iter)
-             right-key (new K3323 right-bind-a)
-             left-matches (.get left-ht right-key)]
-         (set! matches left-matches)
-         (set! match-idx left-matches)
-         (set! f1 right-bind-a)
-         (set! f2 right-bind-b)
-         (recur))
-       false)))
