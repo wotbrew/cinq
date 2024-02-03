@@ -197,6 +197,12 @@
     (doto (Arrays/copyOf l (inc (alength l)))
       (aset (alength l) r))))
 
+(defn const-single-join [left right]
+  (let [r (first right)]
+    (for [^objects l left]
+      (doto (Arrays/copyOf l (inc (alength l)))
+        (aset (alength l) r)))))
+
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
         _ (reduce (fn [_ o]
@@ -461,12 +467,17 @@
     (let [{:keys [left-key right-key theta]
            :or {theta [true]}}
           (plan/equi-theta ?left ?right ?pred)]
-      [(if (seq left-key)
+      [(cond
+         (seq left-key)
          `(equi-single-join ~(compile-plan ?left)
                             ~(compile-key [?left] left-key)
                             ~(compile-plan ?right)
                             ~(compile-key [?right] right-key)
                             ~(compile-lambda [?left ?right] `(and ~@theta)))
+         (= theta [true])
+         `(const-single-join ~(compile-plan ?left) ~(compile-plan ?right))
+
+         :else
          `(single-join ~(compile-plan ?left)
                        ~(compile-plan ?right)
                        ~(compile-lambda [?left ?right] ?pred)))
