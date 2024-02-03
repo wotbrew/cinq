@@ -149,7 +149,8 @@
 
 (defn sum1 [^IColumn col] (.sum col))
 
-(defn sum-default [binding]
+(defn sum-default [binding expr]
+  ;; todo infer based on return of expr, for now using bindings but this is incorrect
   (let [types (for [[sym] (partition 2 binding)]
                 (case (broadcast-bind-type sym)
                   :object :o
@@ -172,7 +173,7 @@
   ([binding expr]
    (if (simple-sum? binding expr)
      `(sum1 ~(first binding))
-     `(broadcast-reduce ~binding ~(sum-default binding) + ~expr))))
+     `(broadcast-reduce ~binding ~(sum-default binding expr) + ~expr))))
 
 (defmacro avg
   ([col] `(let [col# ~col] (/ (sum col#) (count col#))))

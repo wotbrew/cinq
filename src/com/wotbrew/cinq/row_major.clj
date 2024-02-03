@@ -302,6 +302,7 @@
                      ~@(for [[i col] (map-indexed vector right-cols)
                              form [(untag col) (list '. (right-acc right) (getter-sym i))]]
                          form)]
+                 ;; todo no pred would be a const semi-join (e.g just test there is a row independent of the left side)
                  ~(if (= ::no-pred pred)
                     true
                     `(let [~@(for [[i col] (map-indexed vector left-cols)
@@ -314,6 +315,18 @@
                          true
                          (recur)))))
                (recur))))))))
+
+;; q2 will need
+;; - ::plan/let,
+;; - left-join/left-equi as the scalar sq is optimised away
+
+;; q3 will need
+;; - ::plan/let
+;; - ::plan/order-by
+;; - ::plan/limit
+
+;; q4 will need
+;; - semi, semi-equi
 
 (declare compile-iterable)
 

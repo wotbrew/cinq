@@ -3,10 +3,9 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.instant :as inst]
-            [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
-            [com.wotbrew.cinq.eager-loop :as el]
+            [com.wotbrew.cinq.row-major :as rm]
             [com.wotbrew.cinq.vector-seq :refer [q]])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
@@ -145,8 +144,8 @@
               :avg_disc ($avg l:discount)
               :count_order %count)))
 
-(defn q1-el [{:keys [lineitem]}]
-  (el/q
+(defn q1-rm [{:keys [lineitem]}]
+  (rm/q
     [^Lineitem l lineitem
      :when (<= l:shipdate #inst "1998-09-02")
      :group [returnflag l:returnflag, linestatus l:linestatus]
@@ -166,8 +165,10 @@
 
 (comment
   (check-answer #'q1 @sf-001)
-  (time (count (q1 @sf-005)))
-  (time (count (q1-el @sf-005)))
+  ;; 0.05 70.801619 ms, sf1 1691ms
+  (criterium.core/bench (count (q1 @sf-005)))
+  ;; 0.05 21.762265 ms, sf1 574.529417ms
+  (criterium.core/bench (iter-count (q1-rm @sf-005)))
 
   )
 
