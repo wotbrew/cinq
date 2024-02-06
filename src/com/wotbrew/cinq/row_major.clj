@@ -19,9 +19,10 @@
 (def oarr (Class/forName "[Ljava.lang.Object;"))
 
 (defn iterator ^Iterator [src]
-  (if (instance? oarr src)
-    (ArrayIter/create src)
-    (.iterator ^Iterable src)))
+  (cond
+    (instance? oarr src) (ArrayIter/create src)
+    (instance? Iterable src) (.iterator ^Iterable src)
+    :else (.iterator ^Iterable (eduction identity src))))
 
 (def scan-src-field (with-meta 'cinq__scan-src {:tag `Iterator}))
 
@@ -139,6 +140,44 @@
                true
                (recur)))
            false)))))
+
+;; this currently returns a tuple for an empty input, this might be what we want but vector-seq does not do this
+(defn group-all-iter
+  [tuple-sym cols val-tuple-sym]
+  (let [t (gensym "GroupByIter")
+        this (gensym "this")
+        al (with-meta (gensym "al") {:tag `ArrayList})
+        value (with-meta (gensym "value") {:tag val-tuple-sym})
+        all-cols (vec (concat (mapv plan/group-column-tag cols) [plan/%count-sym]))
+        %count '%count
+        iterated (with-meta (gensym "iterated") {:unsynchronized-mutable true})]
+    `(deftype ~t [~iterated ~al ~@(col-fields all-cols)]
+       ~@(tuple-impl tuple-sym all-cols)
+       Iter
+       (nextRow [~this]
+         (if ~(with-meta iterated nil)
+           false
+           (let [~%count (unchecked-long (.size ~al))
+                 ~@(for [[i col] (map-indexed vector cols)
+                         :let [[array box column]
+                               (condp = (:tag (meta col))
+                                 'double [`double-array false `col/->DoubleColumn]
+                                 'long [`long-array false `col/->LongColumn]
+                                 [`object-array true `col/->Column])
+                               thunk `(let [arr# (~array ~%count)]
+                                        (dotimes [i# ~%count]
+                                          (let [~value (.get ~al i#)]
+                                            (aset arr# i# ~(let [getf (list '. value (getter-sym i))]
+                                                             (if box
+                                                               `(RT/box ~getf)
+                                                               getf)))))
+                                        arr#)]
+                         form [(untag col) `(~column nil (fn [] ~thunk))]]
+                     form)]
+             (set! ~(with-meta iterated nil) true)
+             ~@(for [[i col] (map-indexed vector all-cols)]
+                 `(set! ~(field-sym i) ~(untag col)))
+             true))))))
 
 (defn group-by-iter
   [tuple-sym key-cols cols key-tuple-sym val-tuple-sym]
@@ -330,7 +369,7 @@
 
 (declare compile-iterable)
 
-(def debug false)
+(def debug true)
 
 (defn- eval-definition ^Class [form]
   (when debug (binding [*print-meta* true] (clojure.pprint/pprint form)))
@@ -373,6 +412,64 @@
        ;; todo if ?src is not dependent we want to define it as a preamble, otherwise it might be re-evaluated every step of a loop
        ;; note: is this the same as const-expr elimination?
        :form `(new ~iter-sym (iterator ~(expr/rewrite [] ?src compile-iterable)) ~@(column-defaults cols))})
+
+    [::plan/group-by ?ra []]
+    (let [all-cols (plan/columns plan)
+          cols (plan/columns ?ra)
+
+          {ra-tuple-sym :tuple-sym
+           ra-type-sym :type-sym
+           ra-acc :type-acc
+           ra-form :form}
+          (compile-plan* ?ra)
+
+          ra-cols (plan/columns ?ra)
+          val-tuple-type (eval-definition (tuple-standalone ra-tuple-sym ra-cols))
+          val-tuple-sym (symbol (.getName val-tuple-type))
+
+          tuple-type (eval-definition (tuple-interface all-cols))
+          tuple-sym (symbol (.getName tuple-type))
+
+          iter-def (group-all-iter tuple-sym cols val-tuple-sym)
+          iter-type (eval-definition iter-def)
+          iter-sym (symbol (.getName iter-type))
+
+          build (with-meta (gensym "build") {:tag ra-type-sym})]
+      {:type-sym iter-sym
+       :tuple-sym tuple-sym
+       :type-acc identity
+       ;; TODO: realise this in planning for vector-seq, then move on to fixing this for row-major
+       ;; grouping everything should use a completely eager reduction of the Iter. Why put everything in an array list.
+       ;; problem: if I do (q [a [1, 2, 3] :group []] a)
+       ;; what should a return? if I realise Column objects this is fine.
+       ;; could be we optimise this case only if all projections are aggregates?
+       ;; maybe I should give up the ability to reference grouped columns outside of aggregates?
+       ;; this issue is caused by the reification. Do as SQL do.
+       ;; could keep the Column at bottom (and for broadcasts), then specialise to something like this
+       ;; [::project [::group-by ra []] [[c (+ 1 ($sum (+ a b))]]]
+       ;; guard that we only reference grouped columns inside aggregate expressions
+       ;; guard that aggregates do not nest e.g have dependencies on each other, in which case we must materialize them
+       ;; (we could later tune this to only partially materialize where we need to)
+       ;; =>
+       ;; [::group-project ra [[__sum0 ($sum (+ a b))]] [[c (+ 1 __sum0)]]]
+       ;; in a similar spirit, groupings can still benefit from an eager reduction per group (less allocations)
+       ;; [::project [::group-by ra [[x x]]] [[x x] [c (+ 1 ($sum (+ a b))]]]
+       ;; =>
+       ;; [::group-project ra [[x x]] [[__sum0 :sum (+ a b)]] [[x x] [c (+ 1 __sum0)]]
+       ;; perhaps group project should just be a general fused form?
+       ;; group-project is always a fully eager form, can use eager-loop.clj
+       ;; in all cases, a ::group-by [] must return the init values of the aggregates
+       ;; we should also make the aggregates not throw for null columns, aggregates should work on all colls, including nil
+       ;; the semantics for nil elements can be to crash e.g ($sum (+ a nil)) will fail if a has any elements. but (sum1 nil) is ok.
+       :form `(let [~build ~ra-form
+                    al# (ArrayList.)]
+                (while (.nextRow ~build)
+                  (let [~@(for [[i col] (map-indexed vector ra-cols)
+                                form [(untag col) (list '. (ra-acc build) (getter-sym i))]]
+                            form)
+                        val# (new ~val-tuple-sym (unchecked-int 0) ~@(map untag ra-cols))]
+                    (.add al# val#)))
+                (new ~iter-sym false al# ~@(column-defaults all-cols)))})
 
     [::plan/group-by ?ra ?bindings]
     (let [all-cols (plan/columns plan)
@@ -570,11 +667,36 @@
              ~cont
              (recur)))))))
 
+(defn compile-count-iterable [plan]
+  (let [{:keys [type-sym, form]} (compile-plan* plan)
+        iter (with-meta (gensym "iter") {:tag type-sym})]
+    `(reify
+       Sequential
+       Seqable
+       (seq [this#] (iterator-seq (.iterator this#)))
+       Iterable
+       (iterator [_#]
+         (let [~iter ~form
+               row# (volatile! true)]
+           (reify Iterator
+             (hasNext [_#] @row#)
+             (next [_#]
+               (when @row#
+                 (vreset! row# false)
+                 (loop [n# 0]
+                   (if (.nextRow ~iter)
+                     (recur (unchecked-inc-int n#))
+                     n#))))))))))
+
 (defn compile-iterable
   ([plan]
    (m/match plan
+     [::plan/project [::plan/group-by ?plan []] [[?col '%count]]]
+     (compile-count-iterable ?plan)
+
      [::plan/project ?plan ?projection]
      (compile-iterable ?plan ?projection)
+
      _
      (compile-iterable plan nil)))
   ([plan projection]

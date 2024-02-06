@@ -1,8 +1,8 @@
 (ns com.wotbrew.cinq.plan2
   (:require [clojure.set :as set]
             [clojure.walk :as walk]
-            [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m]
+            [com.wotbrew.cinq.column]
             [meander.strategy.epsilon :as r])
   (:import (clojure.lang IRecord)
            (com.wotbrew.cinq.column Column DoubleColumn LongColumn)
@@ -465,9 +465,6 @@
     ;; endregion
 
     ;; region de-correlation rule 9
-    ;; todo agg behaviour is not the same as SQL in cinq
-    ;; this rule likely does not apply as group-by returns an empty rel for an empty in
-    ;; sum, + etc do not accept nil inputs
     [::apply :single-join ?left [::project [::group-by ?right ?group-binding] [[?sym ?expr]]]]
     [::let
      [::group-by
@@ -493,19 +490,33 @@
     [::join ?left [::where ?right ?pred] true]
     ;; endregion
 
-    ;; region noop where
+    ;; region where fusion
     [::where ?ra true]
     ?ra
+    [::where ?ra [::and ?pred]]
+    [::where ?ra ?pred]
+    [::where [::where ?ra ?pred-a] ?pred-b]
+    [::where ?ra (conjoin-predicates ?pred-a ?pred-b)]
     ;; endregion
 
     ;; region push predicate past joins
     (m/and [::where ?ra ?pred]
            (m/guard (pushable-side ?ra ?pred)))
     (push-predicate ?ra ?pred)
+
+    (m/and [::where ?ra [::and & ?preds]]
+           (m/guard (some #(pushable-side ?ra %) ?preds)))
+    (let [groups (group-by #(pushable-side ?ra %) ?preds)
+          not-pushable (groups nil)
+          pushable (mapcat val (dissoc groups nil))
+          ra (reduce push-predicate ?ra pushable)]
+      (if (seq not-pushable)
+        [::where ra (into [::and] not-pushable)]
+        ra))
     ;; endregion
 
     ;; region split predicate
-    [::where ?ra [::and & ?clause]]
+    #_#_[::where ?ra [::and & ?clause]]
     (reduce (fn [ra clause] [::where ra clause]) ?ra ?clause)
     ;; endregion
 
@@ -557,7 +568,7 @@
 
 (def join-collect
   (r/match
-
+    ;; todo deal with column shadowing (implying ordering), guard to stop the fusion because who cares or try to work around it with renames
     [::join [::join* ?rels-a ?preds-a] [::join* ?rels-b ?preds-b] ?pred]
     [::join* (into ?rels-a ?rels-b) (conjoin-predicate-list (into ?preds-a ?preds-b) ?pred)]
 
@@ -632,7 +643,7 @@
 
 (def substitute-sub-queries
   ;; walk ra, replace sub queries with symbols, wrap with apply
-  ;; PROBLEM: local envs let/fn/reify clauses over sub queries in expressions would cause sub queries to capture different scopes
+  ;; todo PROBLEM: local envs let/fn/reify clauses over sub queries in expressions would cause sub queries to capture different scopes
   ;; SOLUTION 1: disallow let? disallow fn? ...
   ;; SOLUTION 2: detect new scopes, let, fn and reify. subqueries within these scopes cannot be turned into joins
   ;;             e.g rewrite let as [::plan/local-let ...] etc.

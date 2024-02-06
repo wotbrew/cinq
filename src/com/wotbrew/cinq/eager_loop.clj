@@ -3,7 +3,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [meander.epsilon :as m]
-            [com.wotbrew.cinq.vector-seq :as vseq])
+            [com.wotbrew.cinq.array-seq :as aseq])
   (:import (clojure.lang RT)
            (java.lang.reflect Field)
            (java.util ArrayList HashMap Iterator Spliterator)
@@ -40,7 +40,7 @@
                      (let [hc# ~(case (count k)
                                   0 42
                                   (reduce
-                                    (fn [form i] `(add-hash ~form (vseq/safe-hash ~(tuple-field-sym i))))
+                                    (fn [form i] `(add-hash ~form (aseq/safe-hash ~(tuple-field-sym i))))
                                     1
                                     (range (count k))))]
                        (set! ~hsym hc#)
@@ -176,7 +176,7 @@
 ;; we should know whether the return is materialized and how?
 (defn loop-ify
   [ra cont]
-  (letfn [(rewrite-expr [expr & ra] (vseq/rewrite-expr (mapv #(plan/dependent-cols % expr) ra) expr))]
+  (letfn [(rewrite-expr [expr & ra] (aseq/rewrite-expr (mapv #(plan/dependent-cols % expr) ra) expr))]
     (m/match ra
       [::plan/scan ?src ?bindings]
       (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) ?bindings))
@@ -220,7 +220,7 @@
 
       [::plan/group-by ?ra ?bindings]
       (let [bindings (vec (for [[sym e] ?bindings]
-                            [sym (vseq/rewrite-expr [(plan/dependent-cols ?ra e)] e)]))
+                            [sym (aseq/rewrite-expr [(plan/dependent-cols ?ra e)] e)]))
             cols (plan/columns ?ra)]
         (case (count ?bindings)
           0

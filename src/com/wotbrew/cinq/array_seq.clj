@@ -1,12 +1,10 @@
-(ns com.wotbrew.cinq.vector-seq
-  "Seq of vectors runtime algebra representation. Very slow, but more likely correct due to its simple implementation.
-   Good to test compiler results against."
+(ns com.wotbrew.cinq.array-seq
   (:require [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (clojure.lang IRecord Util)
+  (:import (clojure.lang IRecord RT Util)
            (java.lang.reflect Field)
            (java.util ArrayList Arrays Comparator HashMap List)))
 
@@ -25,14 +23,14 @@
      (System/arraycopy r 0 ret (alength l) (alength r))
      ret)))
 
-(defn group [vseq key-fn]
+(defn group [aseq key-fn]
   (let [ht (HashMap.)
         add (fn [o]
               (let [k (key-fn o), ^List al (.get ht k)]
                 (if al
                   (.add al o)
                   (.put ht k (doto (ArrayList.) (.add o))))))
-        _ (run! add vseq)]
+        _ (run! add aseq)]
     (map (fn [[k ^ArrayList al]]
            (let [tc (alength ^objects (.get al 0))
                  out-array (object-array (+ tc (count k) 1))]
@@ -60,14 +58,14 @@
            (and (Util/equals a (.-a o))
                 (Util/equals b (.-b o)))))))
 
-(defn group2 [vseq key-fn]
+(defn group2 [aseq key-fn]
   (let [ht (HashMap.)
         add (fn [o]
               (let [k (key-fn o), ^List al (.get ht k)]
                 (if al
                   (.add al o)
                   (.put ht k (doto (ArrayList.) (.add o))))))
-        _ (run! add vseq)]
+        _ (run! add aseq)]
     (map (fn [[^Key2 k ^ArrayList al]]
            (let [tc (alength ^objects (.get al 0))
                  out-array (object-array (+ tc 3))]
@@ -87,14 +85,14 @@
              out-array))
          ht)))
 
-(defn group1 [vseq key-fn]
+(defn group1 [aseq key-fn]
   (let [ht (HashMap.)
         add (fn [o]
               (let [k (key-fn o), ^List al (.get ht k)]
                 (if al
                   (.add al o)
                   (.put ht k (doto (ArrayList.) (.add o))))))
-        _ (run! add vseq)]
+        _ (run! add aseq)]
     (map (fn [[k ^ArrayList al]]
            (let [tc (alength ^objects (.get al 0))
                  out-array (object-array (+ tc 2))]
@@ -112,26 +110,22 @@
              out-array))
          ht)))
 
-(defn group-all [vseq]
+(defn group-all [aseq n-cols]
   (let [al (ArrayList.)
-        _ (run! (fn [t] (.add al t)) vseq)]
-    (if (= 0 (.size al))
-      ;; todo sql semantics or empty here?
-      []
-      [(let [tc (alength ^objects (.get al 0))
-             out-array (object-array (inc tc))]
-         ;; group columns
-         (dotimes [i tc]
-           (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
-                                                  (dotimes [j (.size al)]
-                                                    (let [^objects t (.get al j)]
-                                                      (aset arr j (aget t i))))
-                                                  arr))))
-         ;; %count variable
-         (aset out-array tc (Long/valueOf (long (.size al))))
-         out-array)])))
+        _ (run! (fn [t] (.add al t)) aseq)]
+    [(let [out-array (object-array (inc n-cols))]
+       ;; group columns
+       (dotimes [i n-cols]
+         (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
+                                                (dotimes [j (.size al)]
+                                                  (let [^objects t (.get al j)]
+                                                    (aset arr j (aget t i))))
+                                                arr))))
+       ;; %count variable
+       (aset out-array n-cols (Long/valueOf (long (.size al))))
+       out-array)]))
 
-(defn order [vseq order-clauses]
+(defn order [aseq order-clauses]
   (sort (reify Comparator
           (compare [_ t0 t1]
             (loop [i 0]
@@ -142,32 +136,29 @@
                     (recur (inc i))
                     (case dir :desc (* -1 res) res)))
                 0))))
-        vseq))
+        aseq))
 
-(defn add-columns [vseq f]
-  (for [t vseq]
+(defn add-columns [aseq f]
+  (for [t aseq]
     (conjoin-tuples t (f t))))
 
-(defn limit [vseq n] (take n vseq))
+(defn limit [aseq n] (take n aseq))
 
-(defn select [vseq f]
-  (map f vseq))
-
-(defn apply-join [vseq f n-cols]
-  (for [^objects l vseq
+(defn apply-join [aseq f n-cols]
+  (for [^objects l aseq
         ^objects r (f l)]
     (conjoin-tuples l r n-cols)))
 
-(defn apply-left-join [vseq f n-cols]
-  (for [^objects l vseq
+(defn apply-left-join [aseq f n-cols]
+  (for [^objects l aseq
         :let [rs (f l)]
         l+r (if (seq rs)
               (map #(conjoin-tuples l % (int n-cols)) rs)
               [(Arrays/copyOf l (+ (alength l) (int n-cols)))])]
     l+r))
 
-(defn apply-single-join [vseq f]
-  (for [^objects l vseq
+(defn apply-single-join [aseq f]
+  (for [^objects l aseq
         :let [x (first (f l))
               ret (object-array (unchecked-inc-int (alength l)))
               _ (System/arraycopy l 0 ret 0 (alength l))
@@ -353,7 +344,7 @@
                 (when ~(rewrite-expr [] ?pred)
                   (let [~asym (object-array ~(count ?cols))]
                     ~@(for [[i sym] (map-indexed vector (map first ?cols))]
-                        `(aset ~asym ~i ~sym))
+                        `(aset ~asym ~i (RT/box ~sym)))
                     (rf# result# ~asym))))))))]]
 
     [::plan/scan ?src ?cols]
@@ -378,7 +369,7 @@
                         form)]
                 (let [~asym (object-array ~(count ?cols))]
                   ~@(for [[i sym] (map-indexed vector (map first ?cols))]
-                      `(aset ~asym ~i ~sym))
+                      `(aset ~asym ~i (RT/box ~sym)))
                   (rf# result# ~asym))))))]])
 
     [::plan/where ?ra ?pred]
@@ -494,7 +485,7 @@
                       form)]
               (doto (object-array ~(count ?bindings))
                 ~@(for [[i [sym]] (map-indexed vector ?bindings)]
-                    `(aset ~i ~sym))))))
+                    `(aset ~i (RT/box ~sym)))))))
       []]
 
     [::plan/project ?ra ?projections]
@@ -506,7 +497,7 @@
     [::plan/group-by ?ra ?bindings]
     (case (count ?bindings)
       0
-      `[(group-all ~(compile-plan ?ra)) []]
+      `[(group-all ~(compile-plan ?ra) ~(count (plan/columns ?ra))) []]
 
       1
       `[(group1 ~(compile-plan ?ra)

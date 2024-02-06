@@ -6,9 +6,10 @@
   (getObject ^Object [^int i])
   (sum ^Object []))
 
-(defn get-objects ^objects [^IDeref col] (.deref col))
-(defn get-doubles ^doubles [^IDeref col] (.deref col))
-(defn get-longs ^longs [^IDeref col] (.deref col))
+;; todo make fully polymorphic
+(defn get-objects ^objects [^IDeref col] (if col (.deref col) (object-array 0)))
+(defn get-doubles ^doubles [^IDeref col] (if col (.deref col) (double-array 0)))
+(defn get-longs ^longs [^IDeref col] (if col (.deref col) (long-array 0)))
 
 (deftype LongColumn [^:unsynchronized-mutable ^longs data thunk]
   IDeref
@@ -70,7 +71,10 @@
       (loop [ret (Long/valueOf 0)
              i 0]
         (if (< i (alength arr))
-          (recur (+ ret (aget arr i)) (unchecked-inc-int i))
+          (let [o (aget arr i)]
+            (if (nil? o)
+              (recur ret (unchecked-inc-int i))
+              (recur (+ ret o) (unchecked-inc-int i))))
           ret)))))
 
 (defmethod print-method IColumn [^IColumn col ^Writer w]
@@ -147,7 +151,7 @@
                 ret#))))
         ~@(map (fn [[_ x]] x) (partition 2 binding))))))
 
-(defn sum1 [^IColumn col] (.sum col))
+(defn sum1 [^IColumn col] (if col (.sum col) 0))
 
 (defn sum-default [binding expr]
   ;; todo infer based on return of expr, for now using bindings but this is incorrect
