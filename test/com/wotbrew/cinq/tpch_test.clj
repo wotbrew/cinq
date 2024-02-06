@@ -788,6 +788,38 @@
   (check-answer #'q21 @sf-001)
   )
 
+
+(defn q22 [{:keys [customer orders]}]
+  (q [c customer
+      :let [cntrycode (subs c:phone 0 2)]
+      :when (and (contains? #{"13", "31", "23", "29", "30", "18", "17"} cntrycode)
+                 (> c:acctbal (S [c customer
+                                  :when (and (> c:acctbal 0.0)
+                                             (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
+                                  :group []]
+                                 ($avg c:acctbal)))
+                 (not (S [o orders
+                          :when (= o:custkey c:custkey)]
+                         true)))
+      :group [cntrycode cntrycode]
+      :order [cntrycode :asc]]
+     ($select :cntrycode cntrycode,
+              :numcust %count,
+              :totacctbal ($sum c:acctbal))))
+
+
+(deftest q22-test (check-answer #'q22 @sf-001))
+
+(comment
+  (time (count (q22 @sf-005)))
+  (q22 @sf-001)
+  (check-answer #'q22 @sf-001)
+  )
+
+
+
+(deftest q22-test (check-answer #'q22 @sf-001))
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -804,7 +836,7 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  ;; 0.05 graal array-seq 673ms
+  ;; 0.05 graal array-seq 695ms
   (time
     (do (doseq [q [#'q1, #'q2, #'q3,
                    #'q4, #'q5, #'q6,
@@ -812,7 +844,8 @@
                    #'q10, #'q11, #'q12,
                    #'q13, #'q14, #'q15,
                    #'q16 #'q17, #'q18
-                   #'q19, #'q20, #'q21]]
+                   #'q19, #'q20, #'q21
+                   #'q22]]
           (println q)
           (time (count (q dataset))))
         (println "done")))
