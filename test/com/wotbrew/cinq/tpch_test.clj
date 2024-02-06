@@ -751,6 +751,43 @@
   (check-answer #'q20 @sf-001)
   )
 
+(defn q21 [{:keys [supplier lineitem orders nation]}]
+  (q [s supplier
+      l1 lineitem
+      o orders
+      n nation
+      :when (and (= s:suppkey l1:suppkey)
+                 (= o:orderkey l1:orderkey)
+                 (= o:orderstatus "F")
+                 (> l1:receiptdate l1:commitdate)
+                 (S [l2 lineitem
+                     :when (and (= l2:orderkey l1:orderkey)
+                                (not= l2:suppkey l1:suppkey))]
+                    true)
+                 (not (S [l3 lineitem
+                          :when (and (= l3:orderkey l1:orderkey)
+                                     (not= l3:suppkey l1:suppkey)
+                                     (> l3:receiptdate l3:commitdate))]
+                         true))
+                 (= n:nationkey s:nationkey)
+                 (= n:name "SAUDI ARABIA"))
+      :group [s_name s:name]
+      :let [numwait %count]
+      :order [numwait :desc]
+      :limit 100]
+     ($select
+       :name s_name
+       :numwait numwait)))
+
+(deftest q21-test (check-answer #'q21 @sf-001))
+
+(comment
+  (time (count (q21 @sf-005)))
+  (q21 @sf-001)
+
+  (check-answer #'q21 @sf-001)
+  )
+
 (comment
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
@@ -767,7 +804,7 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  ;; 0.05 graal array-seq 605ms
+  ;; 0.05 graal array-seq 673ms
   (time
     (do (doseq [q [#'q1, #'q2, #'q3,
                    #'q4, #'q5, #'q6,
@@ -775,7 +812,7 @@
                    #'q10, #'q11, #'q12,
                    #'q13, #'q14, #'q15,
                    #'q16 #'q17, #'q18
-                   #'q19, #'q20]]
+                   #'q19, #'q20, #'q21]]
           (println q)
           (time (count (q dataset))))
         (println "done")))

@@ -181,6 +181,16 @@
     left
     ()))
 
+(defn anti-join [left right theta-pred]
+  (for [l left
+        :when (empty? (filter #(theta-pred l %) right))]
+    l))
+
+(defn const-anti-join [left right]
+  (if (empty? right)
+    left
+    ()))
+
 (defn left-join [left right theta-pred n-cols]
   (for [^objects l left
         :let [rs (filter #(theta-pred l %) right)]
@@ -238,14 +248,36 @@
                   (.put ht k (doto (ArrayList.) (.add o))))))
         _ (run! add right)]
     (eduction
-      (keep (fn [l]
-              (when-some [^List al (.get ht (left-key l))]
-                (loop [i (int 0)]
-                  (when (< i (.size al))
-                    (let [r (.get al i)]
-                      (if (theta-pred l r)
-                        l
-                        (recur (unchecked-inc-int i)))))))))
+      (filter
+        (fn [l]
+          (when-some [^List al (.get ht (left-key l))]
+            (loop [i (int 0)]
+              (when (< i (.size al))
+                (let [r (.get al i)]
+                  (if (theta-pred l r)
+                    true
+                    (recur (unchecked-inc-int i)))))))))
+      left)))
+
+(defn equi-anti-join [left left-key right right-key theta-pred]
+  (let [ht (HashMap.)
+        add (fn [o]
+              (let [k (right-key o), ^List al (.get ht k)]
+                (if al
+                  (.add al o)
+                  (.put ht k (doto (ArrayList.) (.add o))))))
+        _ (run! add right)]
+    (eduction
+      (filter (fn [l]
+                (if-some [^List al (.get ht (left-key l))]
+                  (loop [i (int 0)]
+                    (if (< i (.size al))
+                      (let [r (.get al i)]
+                        (if (theta-pred l r)
+                          false
+                          (recur (unchecked-inc-int i))))
+                      true))
+                  true)))
       left)))
 
 (defn equi-left-join [left left-key right right-key theta-pred n-cols]
@@ -434,6 +466,27 @@
 
          :else
          `(semi-join ~(compile-plan ?left)
+                     ~(compile-plan ?right)
+                     ~(compile-lambda [?left ?right] ?pred)))
+       []])
+
+    [::plan/anti-join ?left ?right ?pred]
+    (let [{:keys [left-key right-key theta]
+           :or {theta [true]}}
+          (plan/equi-theta ?left ?right ?pred)]
+      [(cond
+         (seq left-key)
+         `(equi-anti-join ~(compile-plan ?left)
+                          ~(compile-key [?left] left-key)
+                          ~(compile-plan ?right)
+                          ~(compile-key [?right] right-key)
+                          ~(compile-lambda [?left ?right] `(and ~@theta)))
+
+         (= [true] theta)
+         `(const-anti-join ~(compile-plan ?left) ~(compile-plan ?right))
+
+         :else
+         `(anti-join ~(compile-plan ?left)
                      ~(compile-plan ?right)
                      ~(compile-lambda [?left ?right] ?pred)))
        []])

@@ -165,6 +165,9 @@
     [::semi-join ?left ?right _]
     (columns ?left)
 
+    [::anti-join ?left ?right _]
+    (columns ?left)
+
     [::left-join ?left ?right _]
     (into (columns ?left) (mapv optional-tag (columns ?right)))
 
@@ -473,10 +476,25 @@
      [[?sym ?expr]]]
     ;; endregion
 
-    ;; poor mans semi join
-    (m/and [::where [::apply :single-join ?left [::project [::where ?right ?pred] [[?sym true]]]] ?sym]
+    ;; region semi/anti
+    ;; poor mans version for now
+    (m/and [::where
+            [::apply :single-join ?left
+             [::project
+              [::where ?right ?pred]
+              [[?sym true]]]]
+            ?sym]
            (m/guard (not-dependent? ?left ?right)))
     [::semi-join ?left ?right ?pred]
+    (m/and [::where
+            [::apply :single-join ?left
+             [::project
+              [::where ?right ?pred]
+              [[?sym true]]]]
+            (not ?sym)]
+           (m/guard (not-dependent? ?left ?right)))
+    [::anti-join ?left ?right ?pred]
+    ;;end region
 
     ;; region non dependent pred past join
     (m/and [::join ?left ?right ?pred]
