@@ -5,8 +5,7 @@
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [meander/epsilon "0.0.650"]
-                 [com.stuartsierra/dependency "1.0.0"]
-                 [org.clojure/tools.analyzer.jvm "1.2.3"]]
+                 [com.carrotsearch/hppc "0.9.1"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
                                   [criterium "0.4.6"]]
                    :source-paths ["dev"]}}

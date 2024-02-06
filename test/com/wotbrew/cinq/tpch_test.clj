@@ -632,14 +632,15 @@
       :when (and (= p:partkey l:partkey)
                  (= p:brand "Brand#23")
                  (= p:container "MED BOX")
-                 (< l:quantity (S [l2 lineitem
-                                   :when (= l2:partkey p:partkey)
-                                   :group []]
-                                  (Double/valueOf (* 0.2 ($avg l2:quantity))))))
+                 (< l:quantity
+                    (S [l2 lineitem
+                        :when (= l2:partkey p:partkey)
+                        :group []]
+                       (* 0.2 ($avg l2:quantity)))))
       :group []]
      ($select :avg_yearly (/ ($sum l:extendedprice) 7.0))))
 
-;; q17 does not test as our aggregates always return null for an empty input
+;; q17 does not test as our aggregates always return something for an empty input
 (deftest q17-test #_(check-answer #'q17 @sf-001))
 
 (comment
@@ -681,6 +682,8 @@
   (q18 @sf-001)
   (check-answer #'q18 @sf-001)
   )
+
+;; allow this with the l:partkey p:partkey condition in the OR as god intended
 
 (defn q19 [{:keys [lineitem part]}]
   (q [l lineitem
@@ -836,19 +839,23 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
-  ;; 0.05 graal array-seq 695ms
-  (time
-    (do (doseq [q [#'q1, #'q2, #'q3,
-                   #'q4, #'q5, #'q6,
-                   #'q7, #'q8, #'q9
-                   #'q10, #'q11, #'q12,
-                   #'q13, #'q14, #'q15,
-                   #'q16 #'q17, #'q18
-                   #'q19, #'q20, #'q21
-                   #'q22]]
-          (println q)
-          (time (count (q dataset))))
-        (println "done")))
+  ;; 0.05 graal array-seq 639ms
+  (clj-async-profiler.core/profile
+
+    (time
+      (do (doseq [q [#'q1, #'q2, #'q3,
+                     #'q4, #'q5, #'q6,
+                     #'q7, #'q8, #'q9
+                     #'q10, #'q11, #'q12,
+                     #'q13, #'q14, #'q15,
+                     #'q16 #'q17, #'q18
+                     #'q19, #'q20, #'q21
+                     #'q22]]
+            (println q)
+            (time (count (q dataset))))
+          (println "done")))
+
+    )
 
   (time (dotimes [x 1] (count (q1 dataset))))
   (time (dotimes [x 1] (count (q1-el dataset))))
@@ -866,6 +873,13 @@
   (time (dotimes [x 1] (count (q13 dataset))))
   (time (dotimes [x 1] (count (q14 dataset))))
   (time (dotimes [x 1] (count (q15 dataset))))
+  (time (dotimes [x 1] (count (q16 dataset))))
+  (time (dotimes [x 1] (count (q17 dataset))))
+  (time (dotimes [x 1] (count (q18 dataset))))
+  (time (dotimes [x 1] (count (q19 dataset))))
+  (time (dotimes [x 1] (count (q20 dataset))))
+  (time (dotimes [x 1] (count (q21 dataset))))
+  (time (dotimes [x 1] (count (q22 dataset))))
 
   (clj-async-profiler.core/profile
     {}

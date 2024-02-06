@@ -511,8 +511,9 @@
     ;; region where fusion
     [::where ?ra true]
     ?ra
-    [::where ?ra [::and ?pred]]
-    [::where ?ra ?pred]
+
+    [::and ?pred] ?pred
+
     [::where [::where ?ra ?pred-a] ?pred-b]
     [::where ?ra (conjoin-predicates ?pred-a ?pred-b)]
     ;; endregion
@@ -545,9 +546,7 @@
 
     #_#_(m/and [::join [::join ?a ?b ?pred-a] ?c ?pred-b]
                (m/guard (not-dependent? ?b ?pred-b)))
-            [::join [::join ?a ?c ?pred-b] ?b ?pred-a]
-
-    ))
+            [::join [::join ?a ?c ?pred-b] ?b ?pred-a]))
 
 (defn fix-max
   "Fixed point strategy combinator with a maximum iteration count.

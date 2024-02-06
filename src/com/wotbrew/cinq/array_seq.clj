@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (clojure.lang IRecord RT Util)
+  (:import (clojure.lang IHashEq IRecord Murmur3 RT Util)
            (java.lang.reflect Field)
            (java.util ArrayList Arrays Comparator HashMap List)))
 
@@ -23,6 +23,39 @@
      (System/arraycopy r 0 ret (alength l) (alength r))
      ret)))
 
+(deftype ArrayKey [^:unsynchronized-mutable ^int hc
+                   ^objects arr]
+
+  ;; not sure if I care about java clojure eq yet
+  #_#_
+  IHashEq
+  (hasheq [_]
+    (if (= 0 heq)
+      (let [h (loop [h 1
+                     i 0]
+                (if (< i (alength arr))
+                  (recur (unchecked-multiply-int 31 (unchecked-add-int h (Util/hasheq (aget arr i)))))
+                  (Murmur3/mixCollHash h (alength arr))))]
+        (set! heq h)
+        h)
+      heq))
+
+  Object
+  (equals [_ o]
+    ;; assume the cast as we will only ever use this internally
+    (Arrays/equals ^objects arr ^objects (.-arr ^ArrayKey o)))
+  (hashCode [_]
+    (if (= 0 hc)
+      (loop [h 1
+             i 0]
+        (if (< i (alength arr))
+          (recur (unchecked-multiply-int 31 (unchecked-add-int h (Util/hash (aget arr i))))
+                 (unchecked-inc-int i))
+          (let [h (Murmur3/mixCollHash h (alength arr))]
+            (set! hc h)
+            h)))
+      hc)))
+
 (defn group [aseq key-fn]
   (let [ht (HashMap.)
         add (fn [o]
@@ -31,9 +64,10 @@
                   (.add al o)
                   (.put ht k (doto (ArrayList.) (.add o))))))
         _ (run! add aseq)]
-    (map (fn [[k ^ArrayList al]]
+    (map (fn [[^ArrayKey k ^ArrayList al]]
            (let [tc (alength ^objects (.get al 0))
-                 out-array (object-array (+ tc (count k) 1))]
+                 ^objects karr (.-arr k)
+                 out-array (object-array (inc (+ tc (alength karr))))]
              ;; group columns
              (dotimes [i tc]
                (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))]
@@ -42,10 +76,10 @@
                                                           (aset arr j (aget t i))))
                                                       arr))))
              ;; key columns
-             (dotimes [i (count k)]
-               (aset out-array (+ tc i) (nth k i)))
+             (dotimes [i (alength karr)]
+               (aset out-array (+ tc i) (aget karr i)))
              ;; %count variable
-             (aset out-array (+ tc (count k)) (Long/valueOf (long (.size al))))
+             (aset out-array (+ tc (alength karr)) (Long/valueOf (long (.size al))))
              out-array))
          ht)))
 
@@ -330,7 +364,9 @@
 (defn compile-key [dep-relations key-exprs]
   (case (count key-exprs)
     1 (compile-lambda dep-relations (first key-exprs))
-    (compile-lambda dep-relations (vec key-exprs))))
+    (compile-lambda dep-relations `(new ArrayKey 0 (doto (object-array ~(count key-exprs))
+                                                     ~@(for [[i expr] (map-indexed vector key-exprs)]
+                                                         `(aset ~i ~expr)))))))
 
 (defn collapse-plan [[src xforms]]
   (if (seq xforms)
@@ -582,7 +618,9 @@
                   `(let [~@(for [[sym expr] ?bindings
                                  form [sym expr]]
                              form)]
-                     ~(mapv first ?bindings))))
+                     (new ArrayKey 0 (doto (object-array ~(count ?bindings))
+                                       ~@(for [[i [sym]] (map-indexed vector ?bindings)]
+                                           `(aset ~i ~sym)))))))
         []])
 
     [::plan/order-by ?ra ?order-clauses]

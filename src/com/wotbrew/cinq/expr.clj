@@ -59,6 +59,11 @@
                  `(and ~@?clause)
                  true)
 
+               [::plan/or & ?clause]
+               (if (seq ?clause)
+                 `(or ~@?clause)
+                 nil)
+
                _ form))]
     ;; todo should keep meta on this walk? (e.g return hints on lists)
     (walk/prewalk rw clj-expr)))

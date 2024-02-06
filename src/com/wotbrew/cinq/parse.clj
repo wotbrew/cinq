@@ -107,6 +107,9 @@
     (and & ?clause)
     (into [::plan/and] ?clause)
 
+    (or & ?clause)
+    (into [::plan/or] ?clause)
+
     ?any ?any))
 
 (def rewrite-exprs
