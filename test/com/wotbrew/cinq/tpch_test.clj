@@ -5,7 +5,6 @@
             [clojure.instant :as inst]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
-            [com.wotbrew.cinq.row-major :as rm]
             [com.wotbrew.cinq.array-seq :refer [q]])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
@@ -107,6 +106,7 @@
         (doseq [[relv tpch col] (map vector row (nth result i nil) (range))
                 :let [parsed (try
                                (cond
+                                 (= "null" tpch) nil
                                  (int? relv) (Long/parseLong tpch)
                                  (double? relv) (Double/parseDouble tpch)
                                  (inst? relv) (inst/read-instant-date tpch)
@@ -142,23 +142,7 @@
               :avg_qty ($avg l:quantity)
               :avg_price ($avg l:extendedprice)
               :avg_disc ($avg l:discount)
-              :count_order %count)))
-#_(defn q1-rm [{:keys [lineitem]}]
-    (rm/q
-      [^Lineitem l lineitem
-       :when (<= l:shipdate #inst "1998-09-02")
-       :group [returnflag l:returnflag, linestatus l:linestatus]
-       #_#_:order [returnflag :asc, linestatus :asc]]
-      ($select :l_returnflag returnflag
-               :l_linestatus linestatus
-               :sum_qty ($sum l:quantity)
-               :sum_base_price ($sum l:extendedprice)
-               :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
-               :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
-               :avg_qty ($avg l:quantity)
-               :avg_price ($avg l:extendedprice)
-               :avg_disc ($avg l:discount)
-               :count_order %count)))
+              :count_order ($count))))
 
 (deftest q1-test (check-answer #'q1 @sf-001))
 
@@ -261,7 +245,7 @@
       :order [orderpriority :asc]]
      ($select
        :o_orderpriority orderpriority
-       :order_count %count)))
+       :order_count ($count))))
 
 (comment
 
@@ -420,9 +404,7 @@
            (= o:orderkey l:orderkey)
            (= s:nationkey n:nationkey)
            (str/includes? p:name "green"))
-      ;; todo if I do not have the boxing here - the let aset causes reflection
-      :let [amount (Double/valueOf (- (* l:extendedprice (- 1.0 l:discount))
-                                      (* ps:supplycost l:quantity)))]
+      :let [amount (- (* l:extendedprice (- 1.0 l:discount)) (* ps:supplycost l:quantity))]
       :group [nation n:name
               year (get-year o:orderdate)]
       :order [nation :asc, year :desc]]
@@ -537,8 +519,8 @@
       :left-join [o orders (and (= c:custkey o:custkey) (re-find #"^(?!.*?special.*?requests)" o:comment))]
       :group [custkey c:custkey]
       :group [order-count ($count o:orderkey)]
-      :order [%count :desc, order-count :desc]]
-     ($select :c_count order-count, :custdist %count)))
+      :order [($count) :desc, order-count :desc]]
+     ($select :c_count order-count, :custdist ($count))))
 
 (deftest q13-test (check-answer #'q13 @sf-001))
 
@@ -775,7 +757,7 @@
                  (= n:nationkey s:nationkey)
                  (= n:name "SAUDI ARABIA"))
       :group [s_name s:name]
-      :let [numwait %count]
+      :let [numwait ($count)]
       :order [numwait :desc]
       :limit 100]
      ($select
@@ -807,7 +789,7 @@
       :group [cntrycode cntrycode]
       :order [cntrycode :asc]]
      ($select :cntrycode cntrycode,
-              :numcust %count,
+              :numcust ($count),
               :totacctbal ($sum c:acctbal))))
 
 

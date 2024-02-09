@@ -5,11 +5,15 @@
             [meander.epsilon :as m]))
 
 (defn possible-dependencies [dep-cols expr]
-  (if (sequential? dep-cols)
-    (possible-dependencies (zipmap dep-cols (range)) expr)
-    (->> (tree-seq seqable? seq expr)
-         (keep #(when (simple-symbol? %) (some-> (find dep-cols %) key)))
-         (distinct))))
+  (let [count-sym '%count]
+    (if (sequential? dep-cols)
+      (possible-dependencies (zipmap dep-cols (range)) expr)
+      (->> (tree-seq seqable? seq expr)
+           (keep #(cond
+                    (simple-symbol? %)
+                    (some-> (find dep-cols %) key)
+                    (= [::plan/count] %) (some-> (find dep-cols count-sym) key)))
+           (distinct)))))
 
 (defn rewrite [col-maps clj-expr compile-plan]
   (let [dep-cols (apply merge-with (fn [_ b] b) col-maps)
@@ -19,7 +23,9 @@
                [::plan/lookup ?kw ?s]
                (list ?kw ?s)
 
-               [::plan/count-some ?expr]
+               [::plan/count] '%count
+
+               [::plan/count ?expr]
                (let [deps (possible-dependencies dep-cols ?expr)]
                  (list `col/count-some (vec (interleave deps deps)) ?expr))
 

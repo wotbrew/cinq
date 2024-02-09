@@ -4,8 +4,7 @@
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [[org.clojure/clojure "1.11.1"]
-                 [meander/epsilon "0.0.650"]
-                 [com.carrotsearch/hppc "0.9.1"]]
+                 [meander/epsilon "0.0.650"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
                                   [criterium "0.4.6"]]
                    :source-paths ["dev"]}}

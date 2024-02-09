@@ -80,6 +80,8 @@
 (defmethod print-method IColumn [^IColumn col ^Writer w]
   (print-method (mapv (fn [i] (.getObject col (int i))) (range (count col))) w))
 
+(prefer-method print-method IColumn IDeref)
+
 (defn broadcast-bind-type [sym]
   (condp = (:tag (meta sym))
     `DoubleColumn :double

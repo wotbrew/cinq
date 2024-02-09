@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.plan2 :as plan]
             [meander.epsilon :as m]
             [com.wotbrew.cinq.array-seq :as aseq])
-  (:import (clojure.lang RT)
+  (:import (clojure.lang RT Util)
            (java.lang.reflect Field)
            (java.util ArrayList HashMap Iterator Spliterator)
            (java.util.function BiConsumer Consumer)))
@@ -40,7 +40,7 @@
                      (let [hc# ~(case (count k)
                                   0 42
                                   (reduce
-                                    (fn [form i] `(add-hash ~form (aseq/safe-hash ~(tuple-field-sym i))))
+                                    (fn [form i] `(add-hash ~form (Util/hash ~(tuple-field-sym i))))
                                     1
                                     (range (count k))))]
                        (set! ~hsym hc#)

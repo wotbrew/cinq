@@ -1,7 +1,5 @@
 (ns com.wotbrew.cinq.parse
-  (:require [clojure.set :as set]
-            [clojure.string :as str]
-            [clojure.walk :as walk]
+  (:require [clojure.string :as str]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
             [com.wotbrew.cinq.plan2 :as plan]))
@@ -87,7 +85,9 @@
     ($max ?expr)
     [::plan/max ?expr]
     ($count ?expr)
-    [::plan/count-some ?expr]
+    [::plan/count ?expr]
+    ($count)
+    [::plan/count]
 
     ;; comparisons
     (= ?a ?b)

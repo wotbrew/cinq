@@ -4,9 +4,11 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (clojure.lang IHashEq IRecord Murmur3 RT Util)
+  (:import (clojure.lang IRecord RT)
+           (com.wotbrew.cinq CinqUtil)
            (java.lang.reflect Field)
-           (java.util ArrayList Arrays Comparator HashMap List)))
+           (java.util ArrayList Arrays Comparator HashMap List)
+           (java.util.function Function)))
 
 (set! *warn-on-reflection* true)
 
@@ -23,38 +25,12 @@
      (System/arraycopy r 0 ret (alength l) (alength r))
      ret)))
 
-(deftype ArrayKey [^:unsynchronized-mutable ^int hc
-                   ^objects arr]
-
-  ;; not sure if I care about java clojure eq yet
-  #_#_
-  IHashEq
-  (hasheq [_]
-    (if (= 0 heq)
-      (let [h (loop [h 1
-                     i 0]
-                (if (< i (alength arr))
-                  (recur (unchecked-multiply-int 31 (unchecked-add-int h (Util/hasheq (aget arr i)))))
-                  (Murmur3/mixCollHash h (alength arr))))]
-        (set! heq h)
-        h)
-      heq))
-
+(deftype ArrayKey [^int hc ^objects arr]
   Object
   (equals [_ o]
     ;; assume the cast as we will only ever use this internally
     (Arrays/equals ^objects arr ^objects (.-arr ^ArrayKey o)))
-  (hashCode [_]
-    (if (= 0 hc)
-      (loop [h 1
-             i 0]
-        (if (< i (alength arr))
-          (recur (unchecked-multiply-int 31 (unchecked-add-int h (Util/hash (aget arr i))))
-                 (unchecked-inc-int i))
-          (let [h (Murmur3/mixCollHash h (alength arr))]
-            (set! hc h)
-            h)))
-      hc)))
+  (hashCode [_] hc))
 
 (defn group [aseq key-fn]
   (let [ht (HashMap.)
@@ -80,42 +56,6 @@
                (aset out-array (+ tc i) (aget karr i)))
              ;; %count variable
              (aset out-array (+ tc (alength karr)) (Long/valueOf (long (.size al))))
-             out-array))
-         ht)))
-
-(deftype Key2 [a b hash]
-  Object
-  (hashCode [_] hash)
-  (equals [_ o]
-    (and (instance? Key2 o)
-         (let [^Key2 o o]
-           (and (Util/equals a (.-a o))
-                (Util/equals b (.-b o)))))))
-
-(defn group2 [aseq key-fn]
-  (let [ht (HashMap.)
-        add (fn [o]
-              (let [k (key-fn o), ^List al (.get ht k)]
-                (if al
-                  (.add al o)
-                  (.put ht k (doto (ArrayList.) (.add o))))))
-        _ (run! add aseq)]
-    (map (fn [[^Key2 k ^ArrayList al]]
-           (let [tc (alength ^objects (.get al 0))
-                 out-array (object-array (+ tc 3))]
-             ;; group columns
-             (dotimes [i tc]
-               (aset out-array i (col/->Column nil #(let [arr (object-array (.size al))
-                                                          i (int i)]
-                                                      (dotimes [j (.size al)]
-                                                        (let [^objects t (.get al j)]
-                                                          (aset arr j (aget t i))))
-                                                      arr))))
-             ;; key columns
-             (aset out-array tc (.-a k))
-             (aset out-array (+ tc 1) (.-b k))
-             ;; %count variable
-             (aset out-array (+ tc 2) (Long/valueOf (long (.size al))))
              out-array))
          ht)))
 
@@ -245,33 +185,28 @@
 
 (defn equi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
-        _ (reduce (fn [_ o]
-                    ;; itable left-key
-                    (let [k (left-key o), ^List al (.get ht k)]
-                      (if al
-                        (.add al o)
-                        (.put ht k (doto (ArrayList.) (.add o))))))
-                  nil left)]
-    (eduction
-      (fn [rf]
-        (fn
-          ([] (rf))
-          ([result] (rf result))
-          ([result r]
-           ;; itable right-key
-           (if-some [^List al (.get ht (right-key r))]
-             (let [len (.size al)]
-               (loop [result result
-                      i 0]
-                 (if (< i len)
-                   (let [l (.get al i)]
-                     ;; itable theta-pred
-                     (if (theta-pred l r)
-                       (recur (rf result (conjoin-tuples l r)) (unchecked-inc-int i))
-                       (recur result (unchecked-inc-int i))))
-                   result)))
-             result))))
-      right)))
+        add (fn [o]
+              (let [k (left-key o)
+                    ^List al (.computeIfAbsent ht k (reify Function (apply [_ _] (ArrayList.))))]
+                (.add al o)))
+        _ (run! add left)]
+    [(fn [rf]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result r]
+          (if-some [^List al (.get ht (right-key r))]
+            (let [len (.size al)]
+              (loop [result result
+                     i 0]
+                (if (< i len)
+                  (let [l (.get al i)]
+                    (if (theta-pred l r)
+                      (recur (rf result (conjoin-tuples l r)) (unchecked-inc-int i))
+                      (recur result (unchecked-inc-int i))))
+                  result)))
+            result))))
+     right]))
 
 (defn equi-semi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)
@@ -364,9 +299,10 @@
 (defn compile-key [dep-relations key-exprs]
   (case (count key-exprs)
     1 (compile-lambda dep-relations (first key-exprs))
-    (compile-lambda dep-relations `(new ArrayKey 0 (doto (object-array ~(count key-exprs))
-                                                     ~@(for [[i expr] (map-indexed vector key-exprs)]
-                                                         `(aset ~i ~expr)))))))
+    (compile-lambda dep-relations `(let [arr# (doto (object-array ~(count key-exprs))
+                                                ~@(for [[i expr] (map-indexed vector key-exprs)]
+                                                    `(aset ~i ~expr)))]
+                                     (new ArrayKey (CinqUtil/hashArray arr#) arr#)))))
 
 (defn collapse-plan [[src xforms]]
   (if (seq xforms)
@@ -375,8 +311,6 @@
 
 (declare compile-plan*)
 (defn compile-plan [plan] (collapse-plan (compile-plan* plan)))
-
-(defmacro safe-hash [a] `(clojure.lang.Util/hash ~a))
 
 (defn has-kw-field? [^Class class kw]
   (and (isa? class IRecord)
@@ -482,8 +416,7 @@
                      ~(compile-lambda [?left ?right] `(and ~@theta)))
          `(join ~(compile-plan ?left)
                 ~(compile-plan ?right)
-                ~(compile-lambda [?left ?right] ?pred)))
-       []])
+                ~(compile-lambda [?left ?right] ?pred)))])
 
     [::plan/semi-join ?left ?right ?pred]
     (let [{:keys [left-key right-key theta]
@@ -598,29 +531,16 @@
                       ~(ffirst ?bindings))))
         []]
 
-      2
-      `[(group2 ~(compile-plan ?ra)
-                ~(compile-lambda
-                   [?ra]
-                   `(let [~@(for [[sym expr] ?bindings
-                                  form [(with-meta sym {:tag Object}) expr]]
-                              form)]
-                      (new Key2
-                           ~(first (first ?bindings))
-                           ~(first (second ?bindings))
-                           ~(let [[[sym1] [sym2]] ?bindings]
-                              `(bit-xor (safe-hash ~sym1) (safe-hash ~sym2)))))))
-        []]
-
       `[(group ~(compile-plan ?ra)
                ~(compile-lambda
                   [?ra]
                   `(let [~@(for [[sym expr] ?bindings
                                  form [sym expr]]
-                             form)]
-                     (new ArrayKey 0 (doto (object-array ~(count ?bindings))
-                                       ~@(for [[i [sym]] (map-indexed vector ?bindings)]
-                                           `(aset ~i ~sym)))))))
+                             form)
+                         arr# (doto (object-array ~(count ?bindings))
+                                ~@(for [[i [sym]] (map-indexed vector ?bindings)]
+                                    `(aset ~i ~sym)))]
+                     (new ArrayKey (CinqUtil/hashArray arr#) arr#))))
         []])
 
     [::plan/order-by ?ra ?order-clauses]
@@ -646,12 +566,16 @@
 (defmacro q
   ([ra] `(q ~ra :cinq/*))
   ([ra expr]
-   (let [lp (parse/parse (list 'q ra expr))
-         lp' (plan/rewrite lp)
-         [src xforms] (compile-plan* lp')]
-     (if (seq xforms)
-       `(sequence (comp ~@xforms) ~src)
-       `(sequence ~src)))))
+   (binding
+     [; columns must be boxed in array-seq
+      plan/*specialise-group-column-types* false
+      ]
+     (let [lp (parse/parse (list 'q ra expr))
+           lp' (plan/rewrite lp)
+           [src xforms] (compile-plan* lp')]
+       (if (seq xforms)
+         `(sequence (comp ~@xforms) ~src)
+         `(sequence ~src))))))
 
 (comment
 

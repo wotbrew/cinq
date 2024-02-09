@@ -1,6 +1,7 @@
 (ns com.wotbrew.cinq.plan2
   (:require [clojure.set :as set]
             [clojure.walk :as walk]
+            [com.wotbrew.cinq.expr :as expr]
             [meander.epsilon :as m]
             [com.wotbrew.cinq.column]
             [meander.strategy.epsilon :as r])
@@ -86,10 +87,17 @@
 
 (def %count-sym (with-meta '%count {:tag 'long}))
 
+(def ^:dynamic *specialise-group-column-types*
+  "Bind to false if you do not want to type hint group columns (aggregate macros use these hints to assume array types)
+   to always assume boxed Column arrays."
+  true)
+
 (defn group-column-type [column-sym]
-  (condp = (:tag (meta column-sym))
-    'double `DoubleColumn
-    'long `LongColumn
+  (if *specialise-group-column-types*
+    (condp = (:tag (meta column-sym))
+      'double `DoubleColumn
+      'long `LongColumn
+      `Column)
     `Column))
 
 (defn group-column-tag [column-sym]
@@ -153,6 +161,9 @@
     [::project ?ra ?bindings]
     (mapv first ?bindings)
 
+    [::group-project ?ra ?bindings ?aggregates ?projection]
+    (mapv first ?bindings)
+
     [::apply :left-join ?left ?right]
     (into (columns ?left) (mapv optional-tag (columns ?right)))
 
@@ -204,7 +215,11 @@
          (cond
            (symbol? expr) (when (cmap expr) (swap! dmap conj (find cmap expr)))
            (seq? expr) (run! ! expr)
-           (vector? expr) (run! ! expr)
+           (vector? expr)
+           (if (= [::count] expr)
+             (when (cmap %count-sym)
+               (swap! dmap conj (find cmap %count-sym)))
+             (run! ! expr))
            (map? expr) (run! ! expr)
            (set? expr) (run! ! expr)
            (map-entry? expr) (run! ! expr)
@@ -316,7 +331,7 @@
 (defn lookup-sym [lookup]
   (let [[_ kw a] lookup]
     (if (namespace kw)
-      (symbol (str (name a) ":" (namespace kw)) (name kw))
+      (symbol (str (name a) ":" (namespace kw) ":" (name kw)))
       (symbol (str (name a) ":" (name kw))))))
 
 (defn push-lookups* [ra lookups]
@@ -351,6 +366,13 @@
           [right-ra right-smap] (push-lookups* ?right (set expr-lookups))
           [left-ra left-smap] (push-lookups* ?left lookups)]
       [[::semi-join left-ra right-ra (walk/postwalk-replace (merge left-smap right-smap) ?pred)] left-smap])
+
+    [::anti-join ?left ?right ?pred]
+    (let [expr-lookups (find-lookups ?pred)
+          lookups (into lookups expr-lookups)
+          [right-ra right-smap] (push-lookups* ?right (set expr-lookups))
+          [left-ra left-smap] (push-lookups* ?left lookups)]
+      [[::anti-join left-ra right-ra (walk/postwalk-replace (merge left-smap right-smap) ?pred)] left-smap])
 
     [::join ?left ?right ?pred]
     (let [expr-lookups (find-lookups ?pred)
@@ -494,7 +516,7 @@
             (not ?sym)]
            (m/guard (not-dependent? ?left ?right)))
     [::anti-join ?left ?right ?pred]
-    ;;end region
+    ;;endregion
 
     ;; region non dependent pred past join
     (m/and [::join ?left ?right ?pred]
@@ -534,19 +556,16 @@
         ra))
     ;; endregion
 
-    ;; region split predicate
-    #_#_[::where ?ra [::and & ?clause]]
-    (reduce (fn [ra clause] [::where ra clause]) ?ra ?clause)
-    ;; endregion
-
     ;;region push predicate into join
     [::where [::join ?a ?b ?pred-a] ?pred-b]
     [::join ?a ?b (conjoin-predicates ?pred-a ?pred-b)]
     ;; endregion
 
-    #_#_(m/and [::join [::join ?a ?b ?pred-a] ?c ?pred-b]
-               (m/guard (not-dependent? ?b ?pred-b)))
-            [::join [::join ?a ?c ?pred-b] ?b ?pred-a]))
+    ;; region let fusion
+    [::let [::let ?ra ?binding-a] ?binding-b]
+    [::let ?ra (into ?binding-a ?binding-b)]
+    ;; endregion
+    ))
 
 (defn fix-max
   "Fixed point strategy combinator with a maximum iteration count.
@@ -561,6 +580,62 @@
           (= i n) t*
           :else (recur t* (inc i)))))))
 
+;; a ::group-by-project
+;; can permit faster aggregation where grouped columns do not need to be materialized and multiple aggregates
+;; can be computed in one loop
+;; where columns do not leak out of the projection
+(def ^:dynamic *group-project-fusion* false)
+
+(defn aggregate-defaults [cols expr]
+  (m/match expr
+    [::count] [`0]
+    [::count ?expr] [`(Long/valueOf 0)]
+    [::sum ?expr] [`(Long/valueOf 0)]
+    [::avg ?expr] [`(Long/valueOf 0) 0]
+    [::min ?expr] [nil]
+    [::max ?expr] [nil]
+    _ (throw (ex-info "Unknown aggregate" {:expr expr}))))
+
+(defn aggregate-reduction [acc-syms expr]
+  ;; multiples
+  (let [acc-sym (first acc-syms)]
+    (m/match expr
+      [::count] [`(unchecked-inc ~acc-sym)]
+      [::count ?expr] [`(if ~?expr (unchecked-inc ~acc-sym) ~acc-sym)]
+      [::sum ?expr] [`(+ ~acc-sym ?expr)]
+      [::avg ?expr] [`(+ ~acc-sym ?expr) (unchecked-inc-int ~(second acc-syms))]
+      ;; todo min/max
+      _ (throw (ex-info "Unknown aggregate" {:expr expr})))))
+
+(defn aggregate? [expr]
+  (m/match expr
+    [::sum _]
+    true
+    [::avg _]
+    true
+    [::min _]
+    true
+    [::max _]
+    true
+    [::count _]
+    true
+    [::count]
+    true
+    _
+    false))
+
+(defn hoist-aggregates [group-columns projection-bindings]
+  (let [smap (atom {})
+        new-sym (fn [expr] (or (get @smap expr) (get (swap! smap assoc expr (gensym "agg")) expr)))
+        aggregates (->> (tree-seq seqable? seq (mapv second projection-bindings))
+                        (keep (fn [expr] (when (aggregate? expr) [(new-sym expr) expr])))
+                        (distinct)
+                        vec)
+        new-projections (mapv (fn [[col expr]] [col (walk/postwalk-replace @smap expr)]) projection-bindings)
+        no-leakage (empty? (expr/possible-dependencies group-columns (mapv second new-projections)))]
+    (when no-leakage
+      [aggregates new-projections])))
+
 (def fuse
   (r/match
     [::where ?ra true]
@@ -569,6 +644,14 @@
     [::where [::where ?ra ?pred-a] ?pred-b]
     [::where ?ra (conjoin-predicates ?pred-a ?pred-b)]
 
+    ;; it might be better to have something like ::group-let and an ana pass
+    ;; to determine whether group columns leak
+    (m/and [::project [::group-by ?ra ?bindings] ?projection]
+           (m/guard *group-project-fusion*))
+    (let [;; filter out shadowed group columns
+          group-columns (filterv (complement (set (map first ?bindings))) (columns ?ra))
+          [agg-bindings new-projection] (hoist-aggregates group-columns ?projection)]
+      [::group-project ?ra ?bindings agg-bindings new-projection])
     ))
 
 (def rewrite-logical
@@ -618,6 +701,7 @@
         [::join* ?rels ?preds]
         (do (assert (seq ?rels))
             ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
+            ;; todo if the user hints cards to us we will want to use that for ordering
             (loop [unsatisfied-predicates ?preds
                    pending-relations (set ?rels)
                    ra nil
@@ -728,6 +812,7 @@
             ?right)]))
       r/attempt
       r/top-down))
+
 
 (defn rewrite [ra]
   (-> ra
