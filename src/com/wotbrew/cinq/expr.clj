@@ -1,8 +1,10 @@
 (ns com.wotbrew.cinq.expr
   (:require [clojure.walk :as walk]
             [com.wotbrew.cinq.column :as col]
-            [com.wotbrew.cinq.plan2 :as plan]
             [meander.epsilon :as m]))
+
+(create-ns 'com.wotbrew.cinq.plan2)
+(alias 'plan 'com.wotbrew.cinq.plan2)
 
 (defn possible-dependencies [dep-cols expr]
   (let [count-sym '%count]

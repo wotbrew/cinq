@@ -484,9 +484,10 @@
     ;; endregion
 
     ;; region de-correlation rule 3
+    ;; TODO verify this
     ;; apply(cross-join, R, select(E, p)) = select(cross-join(T, E), p)
     [::apply :cross-join ?a [::where ?b ?pred]]
-    [::where [::join ?a ?b true] ?pred]
+    [::where [::apply :cross-join ?a ?b] ?pred]
     ;; endregion
 
     ;; region de-correlation rule 9
@@ -742,6 +743,28 @@
       r/attempt
       r/bottom-up))
 
+(defn do-substitute-sub-queries [ra expr]
+  (let [replacement-syms (atom {})
+        replacement-sym (fn [sq]
+                          (or (@replacement-syms sq)
+                              (let [sym (*gensym* "scalar-subquery")]
+                                (swap! replacement-syms assoc sq sym)
+                                sym)))
+        all (-> (r/match
+                  (m/and [::scalar-sq [::project ?ra [[?col ?expr]]]] ?sq)
+                  (replacement-sym ?sq))
+                r/attempt
+                r/top-down)
+        new-expr (all expr)
+        new-ra (reduce
+             (fn [ra [sq sym]]
+               (m/match sq
+                 [::scalar-sq [::project ?sq [[?col ?expr]]]]
+                 [::apply :single-join ra [::project ?sq [[sym ?expr]]]]))
+             ra
+             @replacement-syms)]
+    [new-ra new-expr]))
+
 (def substitute-sub-queries
   ;; walk ra, replace sub queries with symbols, wrap with apply
   ;; todo PROBLEM: local envs let/fn/reify clauses over sub queries in expressions would cause sub queries to capture different scopes
@@ -751,26 +774,17 @@
   ;;             problem: macros introducing variables - this is already an issue for column shadowing, but actually you could normally use these
   (r/match
     [::where ?ra ?pred]
-    (let [replacement-syms (atom {})
-          replacement-sym (fn [sq]
-                            (or (@replacement-syms sq)
-                                (let [sym (*gensym* "scalar-subquery")]
-                                  (swap! replacement-syms assoc sq sym)
-                                  sym)))
-          all (-> (r/match
-                    (m/and [::scalar-sq [::project ?ra [[?col ?expr]]]] ?sq)
-                    (replacement-sym ?sq))
-                  r/attempt
-                  r/top-down)
-          pred (all ?pred)
-          ra (reduce
-               (fn [ra [sq sym]]
-                 (m/match sq
-                   [::scalar-sq [::project ?sq [[?col ?expr]]]]
-                   [::apply :single-join ra [::project ?sq [[sym ?expr]]]]))
-               ?ra
-               @replacement-syms)]
-      [::where ra pred])))
+    (let [[ra pred] (do-substitute-sub-queries ?ra ?pred)]
+      [::where ra pred])
+
+    [::project ?ra ?expr]
+    (let [[ra expr] (do-substitute-sub-queries ?ra ?expr)]
+      [::project ra expr])
+
+    [::let ?ra ?expr]
+    (let [[ra expr] (do-substitute-sub-queries ?ra ?expr)]
+      [::let ra expr])
+    ))
 
 (def rewrite-sub-queries
   (-> #'substitute-sub-queries

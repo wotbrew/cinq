@@ -1,0 +1,12 @@
+clojure native relational query as a macro `cinq/for`
+  - nil works the same
+  - equiv (custom hash and equality in hash maps), opt-in java eq
+  - no rewrites that would break clojure semantics (predicate pushdown / splitting / reordering), join ordering, opt-in.
+  - integrated with the language, no surprises
+  - fast version `cinq/ffor` with fast defaults, permits pushdown etc. Can preview rewrites by viewing the plan to determine if any pushdown/join order rules need to be opted out of (meta).
+
+JIT relational query as a macro `cinq/q`
+  - about named relations, intentional builders, parameters.
+  - values is the RA + relevant environment from params, ra. Can be recompiled if relevant dependencies change. Maybe stats changes can occasionally trigger a recompile.
+  - track dependencies on expansions for functions and queries
+  - custom equality, functions and so on.

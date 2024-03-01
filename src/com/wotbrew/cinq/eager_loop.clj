@@ -210,7 +210,7 @@
       ;; todo a block nested loop, we would need to be able to control the start/stop from the underlying iterator
       ;; again like limit there would be an iterator-control requirement.
       [::plan/join ?ra1 ?ra2 ?pred]
-      (if (== :no-pred ?pred)
+      (if (= :no-pred ?pred)
         (loop-ify ?ra1 (loop-ify ?ra2 cont))
         (loop-ify ?ra1 (loop-ify ?ra2 `(when (rewrite-expr ?pred ?ra1 ?ra2) ~cont))))
 

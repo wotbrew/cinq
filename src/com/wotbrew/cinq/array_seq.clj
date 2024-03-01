@@ -190,23 +190,24 @@
                     ^List al (.computeIfAbsent ht k (reify Function (apply [_ _] (ArrayList.))))]
                 (.add al o)))
         _ (run! add left)]
-    [(fn [rf]
-       (fn
-         ([] (rf))
-         ([result] (rf result))
-         ([result r]
-          (if-some [^List al (.get ht (right-key r))]
-            (let [len (.size al)]
-              (loop [result result
-                     i 0]
-                (if (< i len)
-                  (let [l (.get al i)]
-                    (if (theta-pred l r)
-                      (recur (rf result (conjoin-tuples l r)) (unchecked-inc-int i))
-                      (recur result (unchecked-inc-int i))))
-                  result)))
-            result))))
-     right]))
+    (eduction
+      (fn [rf]
+        (fn
+          ([] (rf))
+          ([result] (rf result))
+          ([result r]
+           (if-some [^List al (.get ht (right-key r))]
+             (let [len (.size al)]
+               (loop [result result
+                      i 0]
+                 (if (< i len)
+                   (let [l (.get al i)]
+                     (if (theta-pred l r)
+                       (recur (rf result (conjoin-tuples l r)) (unchecked-inc-int i))
+                       (recur result (unchecked-inc-int i))))
+                   result)))
+             result))))
+      right)))
 
 (defn equi-semi-join [left left-key right right-key theta-pred]
   (let [ht (HashMap.)

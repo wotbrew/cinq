@@ -1,8 +1,11 @@
 (ns com.wotbrew.cinq.parse
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
             [com.wotbrew.cinq.plan2 :as plan]))
+
+(def ^:dynamic *env* {})
 
 (defn normalize-binding [binding]
   (cond
@@ -75,6 +78,7 @@
            (m/guard (simple-symbol? ?s)))
     [::plan/lookup ?kw ?s]
 
+    ;; todo remove these, use cinq/*
     ;; aggregates
     ($sum ?expr)
     [::plan/sum ?expr]
@@ -110,8 +114,27 @@
     (or & ?clause)
     (into [::plan/or] ?clause)
 
+    (m/and (?sym & ?args)
+           (m/guard (symbol? ?sym))
+           (m/guard (resolve *env* ?sym )))
+    (condp = (.toSymbol (resolve *env* ?sym ))
+      'com.wotbrew.cinq/sum
+      (into [::plan/sum] ?args)
+      'com.wotbrew.cinq/max
+      (into [::plan/max] ?args)
+      'com.wotbrew.cinq/min
+      (into [::plan/min] ?args)
+      'com.wotbrew.cinq/avg
+      (into [::plan/avg] ?args)
+      'com.wotbrew.cinq/count
+      (into [::plan/count] ?args)
+      'com.wotbrew.cinq/scalar
+      [::plan/scalar-sq (parse (list* 'q ?args))]
+      (list* ?sym ?args))
+
     ?any ?any))
 
+;; todo analyze environment (for e.g shadowing cinq vars)
 (def rewrite-exprs
   (-> #'expr-rewrites
       r/bottom-up))
@@ -225,7 +248,5 @@
   (parse '(q [a [1, 2, 3]] a))
   (parse '(q [a [1, 2, 3]] {:foo a, :bar (inc a)}))
   (parse '(q [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
-
-
 
   )
