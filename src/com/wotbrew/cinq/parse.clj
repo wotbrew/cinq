@@ -1,6 +1,6 @@
 (ns com.wotbrew.cinq.parse
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]
+            [com.wotbrew.cinq.expr :as expr]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
             [com.wotbrew.cinq.plan2 :as plan]))
@@ -120,9 +120,10 @@
     (not= ?a ?b)
     [::plan/not [::plan/= ?a ?b]]
 
-    (m/and (contains? ?set ?expr)
-           (m/guard (set? ?set)))
-    [::plan/in ?expr ?set]
+    (contains? ?coll ?expr)
+    (if (and (set? ?coll) (every? expr/certainly-const-expr? ?coll))
+      [::plan/in ?expr ?coll]
+      [::plan/contains ?coll ?expr])
 
     (m/and (?sym & ?args)
            (m/guard (symbol? ?sym))

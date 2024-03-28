@@ -541,7 +541,7 @@
     ($select
       :promo_revenue
       (* 100.0
-         (/ ($sum (if (str/starts-with? p:type "PROMO")
+         (/ ($sum (if (c/like p:type "PROMO%")
                     (* l:extendedprice (- 1.0 l:discount))
                     0.0))
             ($sum (* l:extendedprice (- 1.0 l:discount))))))))
@@ -587,8 +587,9 @@
       :when (and (= p:partkey ps:partkey)
                  (not= p:brand "Brand#45")
                  (not (c/like p:type "MEDIUM POLISHED%"))
-                 (case (int p:size) (49, 14, 23, 45, 19, 3, 36, 9) true false)
+                 (contains? #{49, 14, 23, 45, 19, 3, 36, 9 } p:size)
                  (not (contains? (S [s supplier
+                                     ;; todo replace with like once it can handle everything
                                      :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
                                      :group []]
                                     (set s:suppkey))

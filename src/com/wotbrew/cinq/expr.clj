@@ -116,6 +116,11 @@
                [::plan/not ?e]
                `(not ~?e)
 
+               ;; any coll
+               [::plan/contains ?coll ?expr]
+               `(contains? ~?coll ~?expr)
+
+               ;; set only
                [::plan/in ?expr ?set]
                `(contains? ~?set ~?expr)
 
@@ -144,7 +149,8 @@
     [::plan/>= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
     [::plan/lookup ?kw ?expr] (pred-can-be-reordered? ?expr)
     [::plan/not ?expr] (pred-can-be-reordered? ?expr)
-    [::plan/in ?expr ?set] (and (pred-can-be-reordered? ?expr) (pred-can-be-reordered? ?set))
+    [::plan/in ?expr ?set] (pred-can-be-reordered? ?expr)
+    [::plan/contains ?coll ?expr] (and (pred-can-be-reordered? ?coll) (pred-can-be-reordered? ?expr))
     (m/guard (symbol? expr)) true
     (m/guard (map? expr)) (every? #(and (pred-can-be-reordered? (key %)) (pred-can-be-reordered? (val %))) expr)
     (m/guard (vector? expr)) (every? pred-can-be-reordered? expr)
