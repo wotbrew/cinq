@@ -404,7 +404,7 @@
            (= p:partkey l:partkey)
            (= o:orderkey l:orderkey)
            (= s:nationkey n:nationkey)
-           (str/includes? p:name "green"))
+           (c/like p:name "%green%"))
       :let [amount (- (* l:extendedprice (- 1.0 l:discount)) (* ps:supplycost l:quantity))]
       :group [nation n:name
               year (get-year o:orderdate)]
@@ -495,7 +495,7 @@
   (q [o orders
       l lineitem
       :when (and (= o:orderkey l:orderkey)
-                 (#{"MAIL", "SHIP"} l:shipmode)
+                 (contains? #{"MAIL", "SHIP"} l:shipmode)
                  (< l:commitdate l:receiptdate)
                  (< l:shipdate l:commitdate)
                  (>= l:receiptdate #inst "1994-01-01")
@@ -586,7 +586,7 @@
       ps partsupp
       :when (and (= p:partkey ps:partkey)
                  (not= p:brand "Brand#45")
-                 (not (str/starts-with? p:type "MEDIUM POLISHED"))
+                 (not (c/like p:type "MEDIUM POLISHED%"))
                  (case (int p:size) (49, 14, 23, 45, 19, 3, 36, 9) true false)
                  (not (contains? (S [s supplier
                                      :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
@@ -633,7 +633,7 @@
   )
 
 (defn q18 [{:keys [customer orders lineitem]}]
-  ;; make this a sub query without weirdness
+  ;; TODO make this a sub query without weirdness
   (let [orderkeys (set (q [l lineitem
                            :group [ok l:orderkey]
                            :when (> ($sum l:quantity) 300)]
@@ -673,25 +673,25 @@
       p part
       :when (and (= l:partkey p:partkey)
                  (or (and (= p:brand "Brand#12")
-                          (#{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p:container)
+                          (contains? #{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p:container)
                           (>= l:quantity 1)
                           (<= l:quantity 11)
                           (<= 1 p:size 5)
-                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (contains? #{"AIR" "AIR REG"} l:shipmode)
                           (= l:shipinstruct "DELIVER IN PERSON"))
                      (and (= p:brand "Brand#23")
-                          (#{"MED BAG" "MED BOX" "MED PKG" "MED PACK"} p:container)
+                          (contains? #{"MED BAG" "MED BOX" "MED PKG" "MED PACK"} p:container)
                           (>= l:quantity 10)
                           (<= l:quantity 20)
                           (<= 1 p:size 10)
-                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (contains? #{"AIR" "AIR REG"} l:shipmode)
                           (= l:shipinstruct "DELIVER IN PERSON"))
                      (and (= p:brand "Brand#34")
-                          (#{"LG CASE" "LG BOX" "LG PACK" "LG PKG"} p:container)
+                          (contains? #{"LG CASE" "LG BOX" "LG PACK" "LG PKG"} p:container)
                           (>= l:quantity 20)
                           (<= l:quantity 30)
                           (<= 1 p:size 15)
-                          (#{"AIR" "AIR REG"} l:shipmode)
+                          (contains? #{"AIR" "AIR REG"} l:shipmode)
                           (= l:shipinstruct "DELIVER IN PERSON"))))
       :group []]
     ($select :revenue ($sum (* l:extendedprice (- 1.0 l:discount))))))
