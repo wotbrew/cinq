@@ -114,6 +114,16 @@
     (or & ?clause)
     (into [::plan/or] ?clause)
 
+    (not ?expr)
+    [::plan/not ?expr]
+
+    (not= ?a ?b)
+    [::plan/not [::plan/= ?a ?b]]
+
+    (m/and (contains? ?set ?expr)
+           (m/guard (set? ?set)))
+    [::plan/in ?expr ?set]
+
     (m/and (?sym & ?args)
            (m/guard (symbol? ?sym))
            (m/guard (resolve *env* ?sym )))
@@ -128,6 +138,8 @@
       (into [::plan/avg] ?args)
       'com.wotbrew.cinq/count
       (into [::plan/count] ?args)
+      'com.wotbrew.cinq/like
+      (into [::plan/like] ?args)
       'com.wotbrew.cinq/scalar
       [::plan/scalar-sq (parse (list* 'q ?args))]
       (list* ?sym ?args))

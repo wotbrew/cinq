@@ -3,9 +3,9 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.instant :as inst]
+            [com.wotbrew.cinq :as c :refer [q]]
             [com.wotbrew.cinq.parse :as parse]
-            [com.wotbrew.cinq.plan2 :as plan]
-            [com.wotbrew.cinq.array-seq :refer [q]])
+            [com.wotbrew.cinq.plan2 :as plan])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
 
@@ -133,16 +133,16 @@
       :when (<= l:shipdate #inst "1998-09-02")
       :group [returnflag l:returnflag, linestatus l:linestatus]
       :order [returnflag :asc, linestatus :asc]]
-     ($select :l_returnflag returnflag
-              :l_linestatus linestatus
-              :sum_qty ($sum l:quantity)
-              :sum_base_price ($sum l:extendedprice)
-              :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
-              :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
-              :avg_qty ($avg l:quantity)
-              :avg_price ($avg l:extendedprice)
-              :avg_disc ($avg l:discount)
-              :count_order ($count))))
+    ($select :l_returnflag returnflag
+             :l_linestatus linestatus
+             :sum_qty ($sum l:quantity)
+             :sum_base_price ($sum l:extendedprice)
+             :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
+             :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
+             :avg_qty ($avg l:quantity)
+             :avg_price ($avg l:extendedprice)
+             :avg_disc ($avg l:discount)
+             :count_order ($count))))
 
 (deftest q1-test (check-answer #'q1 @sf-001))
 
@@ -166,7 +166,7 @@
         (= p:partkey ps:partkey)
         (= s:suppkey ps:suppkey)
         (= p:size 15)
-        (str/ends-with? p:type "BRASS")
+        (c/like p:type "%BRASS")
         (= s:nationkey n:nationkey)
         (= n:regionkey r:regionkey)
         (= r:name "EUROPE")
@@ -180,19 +180,20 @@
                                         (= n:regionkey r:regionkey)
                                         (= "EUROPE" r:name))
                              :group []]
-                            ($min ps:supplycost))))
+                            (c/min ps:supplycost))))
       :order [s:acctbal :desc
               n:name :asc
               s:name :asc
               p:partkey :asc]]
-     ($select :s_acctbal s:acctbal
-              :s_name s:name
-              :n_name n:name
-              :p_partkey p:partkey
-              :p_mfgr p:mfgr
-              :s_address s:address
-              :s_phone s:phone
-              :s_comment s:comment)))
+    ($select
+      :s_acctbal s:acctbal
+      :s_name s:name
+      :n_name n:name
+      :p_partkey p:partkey
+      :p_mfgr p:mfgr
+      :s_address s:address
+      :s_phone s:phone
+      :s_comment s:comment)))
 
 (comment
   (time (count (q2 @sf-001)))
@@ -218,11 +219,11 @@
       :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
       :order [revenue :desc, orderdate :asc, orderkey :asc]
       :limit 10]
-     ($select
-       :l_orderkey orderkey
-       :revenue revenue
-       :o_orderdate orderdate
-       :o_shippriority shippriority)))
+    ($select
+      :l_orderkey orderkey
+      :revenue revenue
+      :o_orderdate orderdate
+      :o_shippriority shippriority)))
 
 (comment
   (time (count (q3 @sf-001)))
@@ -243,9 +244,9 @@
                     true))
       :group [orderpriority o:orderpriority]
       :order [orderpriority :asc]]
-     ($select
-       :o_orderpriority orderpriority
-       :order_count ($count))))
+    ($select
+      :o_orderpriority orderpriority
+      :order_count ($count))))
 
 (comment
 
@@ -275,8 +276,8 @@
       :group [nation-name n:name]
       :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
       :order [revenue :desc]]
-     ($select :n_name nation-name
-              :revenue revenue)))
+    ($select :n_name nation-name
+             :revenue revenue)))
 
 (deftest q5-test (check-answer #'q5 @sf-001))
 
@@ -295,7 +296,7 @@
                  (<= l:discount 0.07)
                  (< l:quantity 24.0))
       :group []]
-     ($select :foo ($sum (* l:extendedprice l:discount)))))
+    ($select :foo ($sum (* l:extendedprice l:discount)))))
 
 (deftest q6-test (check-answer #'q6 @sf-001))
 
@@ -335,10 +336,10 @@
       :order [supp_nation :asc
               cust_nation :asc
               year :asc]]
-     ($select :supp_nation supp_nation
-              :cust_nation cust_nation
-              :l_year year
-              :revenue ($sum volume))))
+    ($select :supp_nation supp_nation
+             :cust_nation cust_nation
+             :l_year year
+             :revenue ($sum volume))))
 
 (deftest q7-test (check-answer #'q7 @sf-001))
 
@@ -370,17 +371,17 @@
            (<= o:orderdate #inst "1996-12-31")
            (= "ECONOMY ANODIZED STEEL" p:type))
       :let [o_year (get-year o:orderdate)
-            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))
+            volume (* l:extendedprice (- 1.0 l:discount))
             nation n2:name]
       :group [o_year o_year]
       :order [o_year :asc]]
-     ($select
-       :o_year o_year
-       :mkt_share (double (/ ($sum
-                               (if (= "BRAZIL" nation)
-                                 volume
-                                 0.0))
-                             ($sum volume))))))
+    ($select
+      :o_year o_year
+      :mkt_share (double (/ ($sum
+                              (if (= "BRAZIL" nation)
+                                volume
+                                0.0))
+                            ($sum volume))))))
 
 (deftest q8-test (check-answer #'q8 @sf-001))
 
@@ -408,9 +409,9 @@
       :group [nation n:name
               year (get-year o:orderdate)]
       :order [nation :asc, year :desc]]
-     ($select :nation nation
-              :o_year year
-              :sum_profit ($sum amount))))
+    ($select :nation nation
+             :o_year year
+             :sum_profit ($sum amount))))
 
 (deftest q9-test (check-answer #'q9 @sf-001))
 
@@ -442,14 +443,14 @@
       :let [revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
       :order [revenue :desc, c_custkey :asc]
       :limit 20]
-     ($select :c_custkey c_custkey
-              :c_name c_name
-              :revenue revenue
-              :c_acctbal c_acctbal
-              :n_name n_name
-              :c_address c_address
-              :c_phone c_phone
-              :c_comment c_comment)))
+    ($select :c_custkey c_custkey
+             :c_name c_name
+             :revenue revenue
+             :c_acctbal c_acctbal
+             :n_name n_name
+             :c_address c_address
+             :c_phone c_phone
+             :c_comment c_comment)))
 
 (deftest q10-test (check-answer #'q10 @sf-001))
 
@@ -479,8 +480,8 @@
                          :group []]
                         (* 0.0001 ($sum (* ps:supplycost ps:availqty)))))
       :order [value :desc]]
-     ($select :ps_partkey ps_partkey
-              :value value)))
+    ($select :ps_partkey ps_partkey
+             :value value)))
 
 (deftest q11-test (check-answer #'q11 @sf-001))
 
@@ -501,10 +502,10 @@
                  (< l:receiptdate #inst "1995-01-01"))
       :group [shipmode l:shipmode]
       :order [shipmode :asc]]
-     ($select
-       :shipmode shipmode
-       :high_line_count ($sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
-       :low_line_count ($sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
+    ($select
+      :shipmode shipmode
+      :high_line_count ($sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
+      :low_line_count ($sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
 
 (deftest q12-test (check-answer #'q12 @sf-001))
 
@@ -520,7 +521,7 @@
       :group [custkey c:custkey]
       :group [order-count ($count o:orderkey)]
       :order [($count) :desc, order-count :desc]]
-     ($select :c_count order-count, :custdist ($count))))
+    ($select :c_count order-count, :custdist ($count))))
 
 (deftest q13-test (check-answer #'q13 @sf-001))
 
@@ -537,13 +538,13 @@
                  (>= l:shipdate #inst "1995-09-01")
                  (< l:shipdate #inst "1995-10-01"))
       :group []]
-     ($select
-       :promo_revenue
-       (* 100.0
-          (/ ($sum (if (str/starts-with? p:type "PROMO")
-                     (* l:extendedprice (- 1.0 l:discount))
-                     0.0))
-             ($sum (* l:extendedprice (- 1.0 l:discount))))))))
+    ($select
+      :promo_revenue
+      (* 100.0
+         (/ ($sum (if (str/starts-with? p:type "PROMO")
+                    (* l:extendedprice (- 1.0 l:discount))
+                    0.0))
+            ($sum (* l:extendedprice (- 1.0 l:discount))))))))
 
 (deftest q14-test (check-answer #'q14 @sf-001))
 
@@ -558,19 +559,19 @@
                     :when (and (>= l:shipdate #inst "1996-01-01")
                                (< l:shipdate #inst "1996-04-01"))
                     :group [suppkey l:suppkey]
-                    :let [total_revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
-                    {:suppkey suppkey
-                     :total_revenue total_revenue}])]
+                    :let [total_revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]]
+                  {:suppkey suppkey
+                   :total_revenue total_revenue})]
     (q [s supplier
         r revenue
         :when (and (= s:suppkey r:suppkey)
                    (= r:total_revenue (S [r revenue :group []] ($max r:total_revenue))))
         :order [s:suppkey :asc]]
-       ($select :s_suppkey s:suppkey
-                :s_name s:name
-                :s_address s:address
-                :s_phone s:phone
-                :total_revenue r:total_revenue))))
+      ($select :s_suppkey s:suppkey
+               :s_name s:name
+               :s_address s:address
+               :s_phone s:phone
+               :total_revenue r:total_revenue))))
 
 (deftest q15-test (check-answer #'q15 @sf-001))
 
@@ -595,10 +596,10 @@
       :group [brand p:brand, type p:type, size p:size]
       :let [supplier-cnt (Long/valueOf (count (set ps:suppkey)))]
       :order [supplier-cnt :desc, brand :asc, type :asc, size :asc]]
-     ($select :p_brand brand
-              :p_type type
-              :p_size size
-              :supplier_cnt supplier-cnt)))
+    ($select :p_brand brand
+             :p_type type
+             :p_size size
+             :supplier_cnt supplier-cnt)))
 
 (deftest q16-test (check-answer #'q16 @sf-001))
 
@@ -620,7 +621,7 @@
                         :group []]
                        (* 0.2 ($avg l2:quantity)))))
       :group []]
-     ($select :avg_yearly (/ ($sum l:extendedprice) 7.0))))
+    ($select :avg_yearly (/ ($sum l:extendedprice) 7.0))))
 
 ;; q17 does not test as our aggregates always return something for an empty input
 (deftest q17-test #_(check-answer #'q17 @sf-001))
@@ -636,7 +637,7 @@
   (let [orderkeys (set (q [l lineitem
                            :group [ok l:orderkey]
                            :when (> ($sum l:quantity) 300)]
-                          ok))]
+                         ok))]
     (q [c customer
         o orders
         l lineitem
@@ -650,12 +651,12 @@
                 totalprice o:totalprice]
         :order [totalprice :desc, orderdate :asc, orderkey :asc]
         :limit 100]
-       ($select :c_name name
-                :c_custkey custkey
-                :c_orderkey orderkey
-                :c_orderdate orderdate
-                :c_totalprice totalprice
-                :quantity ($sum l:quantity)))))
+      ($select :c_name name
+               :c_custkey custkey
+               :c_orderkey orderkey
+               :c_orderdate orderdate
+               :c_totalprice totalprice
+               :quantity ($sum l:quantity)))))
 
 (deftest q18-test (check-answer #'q18 @sf-001))
 
@@ -693,7 +694,7 @@
                           (#{"AIR" "AIR REG"} l:shipmode)
                           (= l:shipinstruct "DELIVER IN PERSON"))))
       :group []]
-     ($select :revenue ($sum (* l:extendedprice (- 1.0 l:discount))))))
+    ($select :revenue ($sum (* l:extendedprice (- 1.0 l:discount))))))
 
 (deftest q19-test (check-answer #'q19 @sf-001))
 
@@ -726,7 +727,7 @@
                  (= s:nationkey n:nationkey)
                  (= n:name "CANADA"))
       :order [s:name :asc]]
-     ($select :name s:name, :address s:address)))
+    ($select :name s:name, :address s:address)))
 
 (deftest q20-test (check-answer #'q20 @sf-001))
 
@@ -760,9 +761,9 @@
       :let [numwait ($count)]
       :order [numwait :desc]
       :limit 100]
-     ($select
-       :name s_name
-       :numwait numwait)))
+    ($select
+      :name s_name
+      :numwait numwait)))
 
 (deftest q21-test (check-answer #'q21 @sf-001))
 
@@ -772,7 +773,6 @@
 
   (check-answer #'q21 @sf-001)
   )
-
 
 (defn q22 [{:keys [customer orders]}]
   (q [c customer
@@ -788,10 +788,9 @@
                          true)))
       :group [cntrycode cntrycode]
       :order [cntrycode :asc]]
-     ($select :cntrycode cntrycode,
-              :numcust ($count),
-              :totacctbal ($sum c:acctbal))))
-
+    ($select :cntrycode cntrycode,
+             :numcust ($count),
+             :totacctbal ($sum c:acctbal))))
 
 (deftest q22-test (check-answer #'q22 @sf-001))
 
@@ -800,8 +799,6 @@
   (q22 @sf-001)
   (check-answer #'q22 @sf-001)
   )
-
-
 
 (deftest q22-test (check-answer #'q22 @sf-001))
 

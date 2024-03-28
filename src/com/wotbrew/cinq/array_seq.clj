@@ -417,7 +417,8 @@
                      ~(compile-lambda [?left ?right] `(and ~@theta)))
          `(join ~(compile-plan ?left)
                 ~(compile-plan ?right)
-                ~(compile-lambda [?left ?right] ?pred)))])
+                ~(compile-lambda [?left ?right] ?pred)))
+       []])
 
     [::plan/semi-join ?left ?right ?pred]
     (let [{:keys [left-key right-key theta]

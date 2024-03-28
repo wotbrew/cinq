@@ -238,49 +238,51 @@
   "Return a sub relation index (1, 2) for joins, left-joins, products if the predicate can be pushed into one of these sub relations.
   nil if not."
   [ra pred]
-  (m/match ra
-    (m/or [::cross-join ?a ?b]
-          [::join ?a ?b _])
-    (cond
-      (not-dependent? ?b pred) 1
-      (not-dependent? ?a pred) 2
-      :else nil)
+  (when (expr/pred-can-be-reordered? pred)
+    (m/match ra
 
-    [::left-join ?a ?b _]
-    (cond
-      (not-dependent? ?b pred) 1
-      :else nil)
+      (m/or [::cross-join ?a ?b]
+            [::join ?a ?b _])
+      (cond
+        (not-dependent? ?b pred) 1
+        (not-dependent? ?a pred) 2
+        :else nil)
 
-    (m/and [::apply ?mode ?a ?b]
-           (m/guard (= ?mode :cross-join)))
-    (cond
-      (not-dependent? ?b pred) 2
-      (not-dependent? ?a pred) 3
-      :else nil)
+      [::left-join ?a ?b _]
+      (cond
+        (not-dependent? ?b pred) 1
+        :else nil)
 
-    [::apply ?mode ?a ?b]
-    (cond
-      (not-dependent? ?b pred) 2
-      :else nil)
+      (m/and [::apply ?mode ?a ?b]
+             (m/guard (= ?mode :cross-join)))
+      (cond
+        (not-dependent? ?b pred) 2
+        (not-dependent? ?a pred) 3
+        :else nil)
 
-    [::where ?ra _]
-    (when (pushable-side ?ra pred)
-      1)
+      [::apply ?mode ?a ?b]
+      (cond
+        (not-dependent? ?b pred) 2
+        :else nil)
 
-    [::let ?ra ?bindings]
-    (when (empty? (dependent-cols* (into {} ?bindings) pred))
-      1)
+      [::where ?ra _]
+      (when (pushable-side ?ra pred)
+        1)
 
-    [::group-by ?ra ?bindings]
-    (let [group-cols (dependent-cols ?ra pred)
-          binding-set (set (map first ?bindings))]
-      (when (->> group-cols
-                 keys
-                 (remove binding-set)
-                 empty?)
-        1))
+      [::let ?ra ?bindings]
+      (when (empty? (dependent-cols* (into {} ?bindings) pred))
+        1)
 
-    _ nil))
+      [::group-by ?ra ?bindings]
+      (let [group-cols (dependent-cols ?ra pred)
+            binding-set (set (map first ?bindings))]
+        (when (->> group-cols
+                   keys
+                   (remove binding-set)
+                   empty?)
+          1))
+
+      _ nil)))
 
 (defn split-dependent-clauses [ra clauses]
   ((juxt filter remove) #(dependent? ra %) clauses))
@@ -514,19 +516,21 @@
              [::project
               [::where ?right ?pred]
               [[?sym true]]]]
-            (not ?sym)]
+            [::not ?sym]]
            (m/guard (not-dependent? ?left ?right)))
     [::anti-join ?left ?right ?pred]
     ;;endregion
 
     ;; region non dependent pred past join
     (m/and [::join ?left ?right ?pred]
-           (m/guard (not-dependent? ?right ?pred)))
+           (m/guard (not-dependent? ?right ?pred))
+           (m/guard (expr/pred-can-be-reordered? ?pred)))
     ;; =>
     [::join [::where ?left ?pred] ?right true]
 
     (m/and [::join ?left ?right ?pred]
-           (m/guard (not-dependent? ?left ?pred)))
+           (m/guard (not-dependent? ?left ?pred))
+           (m/guard (expr/pred-can-be-reordered? ?pred)))
     ;; =>
     [::join ?left [::where ?right ?pred] true]
     ;; endregion
@@ -700,14 +704,15 @@
   "Depends on join-collect"
   (-> (r/match
         [::join* ?rels ?preds]
-        (do (assert (seq ?rels))
+        (let [_ (assert (seq ?rels))
+              {reordable-preds true, outer-preds false} (group-by expr/pred-can-be-reordered? ?preds)]
+
             ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
             ;; todo if the user hints cards to us we will want to use that for ordering
-            (loop [unsatisfied-predicates ?preds
+            (loop [unsatisfied-predicates reordable-preds
                    pending-relations (set ?rels)
                    ra nil
-                   ;; todo not sure if we need outer-where, check the loop
-                   outer-where []]
+                   outer-where outer-preds]
               (if (seq unsatisfied-predicates)
                 (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
                       cost (fn [pred] (count (dependent-relations pred)))
@@ -827,7 +832,6 @@
       r/attempt
       r/top-down))
 
-
 (defn rewrite [ra]
   (-> ra
       unique-ify-sub-queries
@@ -842,6 +846,24 @@
       push-lookups-sub-queries
       push-lookups))
 
+(defn equi-theta [left right pred]
+  (m/match pred
+    [::and & ?clauses]
+    (apply merge-with into (map #(equi-theta left right %) ?clauses))
+
+    [::= ?a ?b]
+    (m/match [(dependent? left ?a) (dependent? right ?a)
+              (dependent? left ?b) (dependent? right ?b)]
+      [true false false true] {:left-key [?a], :right-key [?b]}
+      [false true true false] {:left-key [?b], :right-key [?a]}
+      _ {:theta [pred]})
+
+    ?pred
+    {:theta [?pred]}))
+
+(defn equi-join? [left right pred]
+  (seq (:left-key (equi-theta left right pred))))
+
 (defn stack-view [ra]
   (-> ((fn ! [ra]
          (m/match ra
@@ -852,13 +874,13 @@
            [:join* ?rels ?preds]
 
            [::join ?a ?b ?pred]
-           (conj (! ?a) [:join (! ?b) ?pred])
+           (conj (! ?a) [(if (equi-join? ?a ?b ?pred) :equi-join :theta-join) (! ?b) ?pred])
 
            [::single-join ?a ?b ?pred]
-           (conj (! ?a) [:single-join (! ?b) ?pred])
+           (conj (! ?a) [(if (equi-join? ?a ?b ?pred) :equi-single-join :single-join) (! ?b) ?pred])
 
            [::left-join ?a ?b ?pred]
-           (conj (! ?a) [:left-join (! ?b) ?pred])
+           (conj (! ?a) [(if (equi-join? ?a ?b ?pred) :equi-left-join :left-join) (! ?b) ?pred])
 
            [::apply ?mode ?a ?b]
            (conj (! ?a) [:apply ?mode (! ?b)])
@@ -881,18 +903,3 @@
            r/bottom-up))
 
       ))
-
-(defn equi-theta [left right pred]
-  (m/match pred
-    [::and & ?clauses]
-    (apply merge-with into (map #(equi-theta left right %) ?clauses))
-
-    [::= ?a ?b]
-    (m/match [(dependent? left ?a) (dependent? right ?a)
-              (dependent? left ?b) (dependent? right ?b)]
-      [true false false true] {:left-key [?a], :right-key [?b]}
-      [false true true false] {:left-key [?b], :right-key [?a]}
-      _ {:theta [pred]})
-
-    ?pred
-    {:theta [?pred]}))
