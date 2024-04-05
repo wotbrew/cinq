@@ -43,3 +43,5 @@
 (defmacro count
   ([] (#'throw-only-in-queries #'count))
   ([expr] (#'throw-only-in-queries #'count)))
+
+(defmacro tuple [& kvs] (#'throw-only-in-queries #'tuple))

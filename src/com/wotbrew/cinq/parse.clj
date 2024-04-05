@@ -244,8 +244,9 @@
        [[(plan/*gensym* "col")
          (into {} (for [col cols] [(keyword (name col)) (rewrite-exprs col)]))]]])
 
-    ;; todo tuple type?
-    ($select & ?projection)
+    (m/and (?sym & ?projection)
+           (m/guard (symbol? ?sym))
+           (m/guard (= 'com.wotbrew.cinq/tuple (.toSymbol ^clojure.lang.Var (resolve ?sym)))))
     [::plan/project selection [[(plan/*gensym* "col") (mapv (fn [[_ e]] (rewrite-exprs e)) (partition 2 ?projection))]]]
 
     ?expr

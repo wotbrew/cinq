@@ -133,16 +133,16 @@
       :when (<= l:shipdate #inst "1998-09-02")
       :group [returnflag l:returnflag, linestatus l:linestatus]
       :order [returnflag :asc, linestatus :asc]]
-    ($select :l_returnflag returnflag
+    (c/tuple :l_returnflag returnflag
              :l_linestatus linestatus
-             :sum_qty ($sum l:quantity)
-             :sum_base_price ($sum l:extendedprice)
-             :sum_disc_price ($sum (* l:extendedprice (- 1.0 l:discount)))
-             :sum_charge ($sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
-             :avg_qty ($avg l:quantity)
-             :avg_price ($avg l:extendedprice)
-             :avg_disc ($avg l:discount)
-             :count_order ($count))))
+             :sum_qty (c/sum l:quantity)
+             :sum_base_price (c/sum l:extendedprice)
+             :sum_disc_price (c/sum (* l:extendedprice (- 1.0 l:discount)))
+             :sum_charge (c/sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
+             :avg_qty (c/avg l:quantity)
+             :avg_price (c/avg l:extendedprice)
+             :avg_disc (c/avg l:discount)
+             :count_order (c/count))))
 
 (deftest q1-test (check-answer #'q1 @sf-001))
 
@@ -170,22 +170,22 @@
         (= s:nationkey n:nationkey)
         (= n:regionkey r:regionkey)
         (= r:name "EUROPE")
-        (= ps:supplycost (S [ps partsupp
-                             s supplier
-                             n nation
-                             r region
-                             :when (and (= p:partkey ps:partkey)
-                                        (= s:suppkey ps:suppkey)
-                                        (= s:nationkey n:nationkey)
-                                        (= n:regionkey r:regionkey)
-                                        (= "EUROPE" r:name))
-                             :group []]
-                            (c/min ps:supplycost))))
+        (= ps:supplycost (c/scalar [ps partsupp
+                                    s supplier
+                                    n nation
+                                    r region
+                                    :when (and (= p:partkey ps:partkey)
+                                               (= s:suppkey ps:suppkey)
+                                               (= s:nationkey n:nationkey)
+                                               (= n:regionkey r:regionkey)
+                                               (= "EUROPE" r:name))
+                                    :group []]
+                           (c/min ps:supplycost))))
       :order [s:acctbal :desc
               n:name :asc
               s:name :asc
               p:partkey :asc]]
-    ($select
+    (c/tuple
       :s_acctbal s:acctbal
       :s_name s:name
       :n_name n:name
@@ -216,10 +216,10 @@
       :group [orderkey l:orderkey
               orderdate o:orderdate
               shippriority o:shippriority]
-      :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
+      :let [revenue (c/sum (* l:extendedprice (- 1 l:discount)))]
       :order [revenue :desc, orderdate :asc, orderkey :asc]
       :limit 10]
-    ($select
+    (c/tuple
       :l_orderkey orderkey
       :revenue revenue
       :o_orderdate orderdate
@@ -238,15 +238,15 @@
       :when (and (>= o:orderdate #inst "1993-07-01")
                  (< o:orderdate #inst "1993-10-01")
                  ;; todo $exists
-                 (S [l lineitem
-                     :when (and (= l:orderkey o:orderkey)
-                                (< l:commitdate l:receiptdate))]
-                    true))
+                 (c/scalar [l lineitem
+                            :when (and (= l:orderkey o:orderkey)
+                                       (< l:commitdate l:receiptdate))]
+                   true))
       :group [orderpriority o:orderpriority]
       :order [orderpriority :asc]]
-    ($select
+    (c/tuple
       :o_orderpriority orderpriority
-      :order_count ($count))))
+      :order_count (c/count))))
 
 (comment
 
@@ -274,9 +274,9 @@
                  (>= o:orderdate #inst "1994-01-01")
                  (< o:orderdate #inst "1995-01-01"))
       :group [nation-name n:name]
-      :let [revenue ($sum (* l:extendedprice (- 1 l:discount)))]
+      :let [revenue (c/sum (* l:extendedprice (- 1 l:discount)))]
       :order [revenue :desc]]
-    ($select :n_name nation-name
+    (c/tuple :n_name nation-name
              :revenue revenue)))
 
 (deftest q5-test (check-answer #'q5 @sf-001))
@@ -296,7 +296,7 @@
                  (<= l:discount 0.07)
                  (< l:quantity 24.0))
       :group []]
-    ($select :foo ($sum (* l:extendedprice l:discount)))))
+    (c/tuple :foo (c/sum (* l:extendedprice l:discount)))))
 
 (deftest q6-test (check-answer #'q6 @sf-001))
 
@@ -336,10 +336,10 @@
       :order [supp_nation :asc
               cust_nation :asc
               year :asc]]
-    ($select :supp_nation supp_nation
+    (c/tuple :supp_nation supp_nation
              :cust_nation cust_nation
              :l_year year
-             :revenue ($sum volume))))
+             :revenue (c/sum volume))))
 
 (deftest q7-test (check-answer #'q7 @sf-001))
 
@@ -375,13 +375,13 @@
             nation n2:name]
       :group [o_year o_year]
       :order [o_year :asc]]
-    ($select
+    (c/tuple
       :o_year o_year
-      :mkt_share (double (/ ($sum
+      :mkt_share (double (/ (c/sum
                               (if (= "BRAZIL" nation)
                                 volume
                                 0.0))
-                            ($sum volume))))))
+                            (c/sum volume))))))
 
 (deftest q8-test (check-answer #'q8 @sf-001))
 
@@ -409,9 +409,9 @@
       :group [nation n:name
               year (get-year o:orderdate)]
       :order [nation :asc, year :desc]]
-    ($select :nation nation
+    (c/tuple :nation nation
              :o_year year
-             :sum_profit ($sum amount))))
+             :sum_profit (c/sum amount))))
 
 (deftest q9-test (check-answer #'q9 @sf-001))
 
@@ -440,10 +440,10 @@
               n_name n:name
               c_address c:address
               c_comment c:comment]
-      :let [revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]
+      :let [revenue (c/sum (* l:extendedprice (- 1.0 l:discount)))]
       :order [revenue :desc, c_custkey :asc]
       :limit 20]
-    ($select :c_custkey c_custkey
+    (c/tuple :c_custkey c_custkey
              :c_name c_name
              :revenue revenue
              :c_acctbal c_acctbal
@@ -469,18 +469,18 @@
            (= s:nationkey n:nationkey)
            (= n:name "GERMANY"))
       :group [ps_partkey ps:partkey]
-      :let [value ($sum (* ps:supplycost ps:availqty))]
-      :when (> value (S [ps partsupp
-                         s supplier
-                         n nation
-                         :when
-                         (and (= ps:suppkey s:suppkey)
-                              (= s:nationkey n:nationkey)
-                              (= n:name "GERMANY"))
-                         :group []]
-                        (* 0.0001 ($sum (* ps:supplycost ps:availqty)))))
+      :let [value (c/sum (* ps:supplycost ps:availqty))]
+      :when (> value (c/scalar [ps partsupp
+                                s supplier
+                                n nation
+                                :when
+                                (and (= ps:suppkey s:suppkey)
+                                     (= s:nationkey n:nationkey)
+                                     (= n:name "GERMANY"))
+                                :group []]
+                       (* 0.0001 (c/sum (* ps:supplycost ps:availqty)))))
       :order [value :desc]]
-    ($select :ps_partkey ps_partkey
+    (c/tuple :ps_partkey ps_partkey
              :value value)))
 
 (deftest q11-test (check-answer #'q11 @sf-001))
@@ -502,10 +502,10 @@
                  (< l:receiptdate #inst "1995-01-01"))
       :group [shipmode l:shipmode]
       :order [shipmode :asc]]
-    ($select
+    (c/tuple
       :shipmode shipmode
-      :high_line_count ($sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
-      :low_line_count ($sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
+      :high_line_count (c/sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
+      :low_line_count (c/sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
 
 (deftest q12-test (check-answer #'q12 @sf-001))
 
@@ -519,9 +519,9 @@
   (q [c customer
       :left-join [o orders (and (= c:custkey o:custkey) (re-find #"^(?!.*?special.*?requests)" o:comment))]
       :group [custkey c:custkey]
-      :group [order-count ($count o:orderkey)]
-      :order [($count) :desc, order-count :desc]]
-    ($select :c_count order-count, :custdist ($count))))
+      :group [order-count (c/count o:orderkey)]
+      :order [(c/count) :desc, order-count :desc]]
+    (c/tuple :c_count order-count, :custdist (c/count))))
 
 (deftest q13-test (check-answer #'q13 @sf-001))
 
@@ -538,13 +538,13 @@
                  (>= l:shipdate #inst "1995-09-01")
                  (< l:shipdate #inst "1995-10-01"))
       :group []]
-    ($select
+    (c/tuple
       :promo_revenue
       (* 100.0
-         (/ ($sum (if (c/like p:type "PROMO%")
-                    (* l:extendedprice (- 1.0 l:discount))
-                    0.0))
-            ($sum (* l:extendedprice (- 1.0 l:discount))))))))
+         (/ (c/sum (if (c/like p:type "PROMO%")
+                     (* l:extendedprice (- 1.0 l:discount))
+                     0.0))
+            (c/sum (* l:extendedprice (- 1.0 l:discount))))))))
 
 (deftest q14-test (check-answer #'q14 @sf-001))
 
@@ -559,15 +559,15 @@
                     :when (and (>= l:shipdate #inst "1996-01-01")
                                (< l:shipdate #inst "1996-04-01"))
                     :group [suppkey l:suppkey]
-                    :let [total_revenue ($sum (* l:extendedprice (- 1.0 l:discount)))]]
+                    :let [total_revenue (c/sum (* l:extendedprice (- 1.0 l:discount)))]]
                   {:suppkey suppkey
                    :total_revenue total_revenue})]
     (q [s supplier
         r revenue
         :when (and (= s:suppkey r:suppkey)
-                   (= r:total_revenue (S [r revenue :group []] ($max r:total_revenue))))
+                   (= r:total_revenue (c/scalar [r revenue :group []] (c/max r:total_revenue))))
         :order [s:suppkey :asc]]
-      ($select :s_suppkey s:suppkey
+      (c/tuple :s_suppkey s:suppkey
                :s_name s:name
                :s_address s:address
                :s_phone s:phone
@@ -587,17 +587,17 @@
       :when (and (= p:partkey ps:partkey)
                  (not= p:brand "Brand#45")
                  (not (c/like p:type "MEDIUM POLISHED%"))
-                 (contains? #{49, 14, 23, 45, 19, 3, 36, 9 } p:size)
-                 (not (contains? (S [s supplier
-                                     ;; todo replace with like once it can handle everything
-                                     :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
-                                     :group []]
-                                    (set s:suppkey))
+                 (contains? #{49, 14, 23, 45, 19, 3, 36, 9} p:size)
+                 (not (contains? (c/scalar [s supplier
+                                            ;; todo replace with like once it can handle everything
+                                            :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
+                                            :group []]
+                                   (set s:suppkey))
                                  ps:suppkey)))
       :group [brand p:brand, type p:type, size p:size]
       :let [supplier-cnt (Long/valueOf (count (set ps:suppkey)))]
       :order [supplier-cnt :desc, brand :asc, type :asc, size :asc]]
-    ($select :p_brand brand
+    (c/tuple :p_brand brand
              :p_type type
              :p_size size
              :supplier_cnt supplier-cnt)))
@@ -617,12 +617,12 @@
                  (= p:brand "Brand#23")
                  (= p:container "MED BOX")
                  (< l:quantity
-                    (S [l2 lineitem
-                        :when (= l2:partkey p:partkey)
-                        :group []]
-                       (* 0.2 ($avg l2:quantity)))))
+                    (c/scalar [l2 lineitem
+                               :when (= l2:partkey p:partkey)
+                               :group []]
+                      (* 0.2 (c/avg l2:quantity)))))
       :group []]
-    ($select :avg_yearly (/ ($sum l:extendedprice) 7.0))))
+    (c/tuple :avg_yearly (/ (c/sum l:extendedprice) 7.0))))
 
 ;; q17 does not test as our aggregates always return something for an empty input
 (deftest q17-test #_(check-answer #'q17 @sf-001))
@@ -637,7 +637,7 @@
   ;; TODO make this a sub query without weirdness
   (let [orderkeys (set (q [l lineitem
                            :group [ok l:orderkey]
-                           :when (> ($sum l:quantity) 300)]
+                           :when (> (c/sum l:quantity) 300)]
                          ok))]
     (q [c customer
         o orders
@@ -652,12 +652,12 @@
                 totalprice o:totalprice]
         :order [totalprice :desc, orderdate :asc, orderkey :asc]
         :limit 100]
-      ($select :c_name name
+      (c/tuple :c_name name
                :c_custkey custkey
                :c_orderkey orderkey
                :c_orderdate orderdate
                :c_totalprice totalprice
-               :quantity ($sum l:quantity)))))
+               :quantity (c/sum l:quantity)))))
 
 (deftest q18-test (check-answer #'q18 @sf-001))
 
@@ -695,7 +695,7 @@
                           (contains? #{"AIR" "AIR REG"} l:shipmode)
                           (= l:shipinstruct "DELIVER IN PERSON"))))
       :group []]
-    ($select :revenue ($sum (* l:extendedprice (- 1.0 l:discount))))))
+    (c/tuple :revenue (c/sum (* l:extendedprice (- 1.0 l:discount))))))
 
 (deftest q19-test (check-answer #'q19 @sf-001))
 
@@ -708,27 +708,27 @@
 (defn q20 [{:keys [supplier, nation, partsupp, lineitem, part]}]
   (q [s supplier
       n nation
-      :when (and (contains? (S [ps partsupp
-                                :when (and (contains? (S [p part
-                                                          :when (str/starts-with? p:name "forest")
-                                                          :group []]
-                                                         (set p:partkey))
-                                                      ps:partkey)
-                                           (> ps:availqty (S [l lineitem
-                                                              :when (and (= l:partkey ps:partkey)
-                                                                         (= l:suppkey ps:suppkey)
-                                                                         (>= l:shipdate #inst "1994-01-01")
-                                                                         (< l:shipdate #inst "1995-01-01"))
-                                                              :group []]
-                                                             ;; this query can return nil, the left join
-                                                             (* 0.5 ($sum l:quantity)))))
-                                :group []]
-                               (set ps:suppkey))
+      :when (and (contains? (c/scalar [ps partsupp
+                                       :when (and (contains? (c/scalar [p part
+                                                                        :when (str/starts-with? p:name "forest")
+                                                                        :group []]
+                                                               (set p:partkey))
+                                                             ps:partkey)
+                                                  (> ps:availqty (c/scalar [l lineitem
+                                                                            :when (and (= l:partkey ps:partkey)
+                                                                                       (= l:suppkey ps:suppkey)
+                                                                                       (>= l:shipdate #inst "1994-01-01")
+                                                                                       (< l:shipdate #inst "1995-01-01"))
+                                                                            :group []]
+                                                                   ;; this query can return nil, the left join
+                                                                   (* 0.5 (c/sum l:quantity)))))
+                                       :group []]
+                              (set ps:suppkey))
                             s:suppkey)
                  (= s:nationkey n:nationkey)
                  (= n:name "CANADA"))
       :order [s:name :asc]]
-    ($select :name s:name, :address s:address)))
+    (c/tuple :name s:name, :address s:address)))
 
 (deftest q20-test (check-answer #'q20 @sf-001))
 
@@ -747,22 +747,22 @@
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
                  (> l1:receiptdate l1:commitdate)
-                 (S [l2 lineitem
-                     :when (and (= l2:orderkey l1:orderkey)
-                                (not= l2:suppkey l1:suppkey))]
-                    true)
-                 (not (S [l3 lineitem
-                          :when (and (= l3:orderkey l1:orderkey)
-                                     (not= l3:suppkey l1:suppkey)
-                                     (> l3:receiptdate l3:commitdate))]
-                         true))
+                 (c/scalar [l2 lineitem
+                            :when (and (= l2:orderkey l1:orderkey)
+                                       (not= l2:suppkey l1:suppkey))]
+                   true)
+                 (not (c/scalar [l3 lineitem
+                                 :when (and (= l3:orderkey l1:orderkey)
+                                            (not= l3:suppkey l1:suppkey)
+                                            (> l3:receiptdate l3:commitdate))]
+                        true))
                  (= n:nationkey s:nationkey)
                  (= n:name "SAUDI ARABIA"))
       :group [s_name s:name]
-      :let [numwait ($count)]
+      :let [numwait (c/count)]
       :order [numwait :desc]
       :limit 100]
-    ($select
+    (c/tuple
       :name s_name
       :numwait numwait)))
 
@@ -779,19 +779,19 @@
   (q [c customer
       :let [cntrycode (subs c:phone 0 2)]
       :when (and (contains? #{"13", "31", "23", "29", "30", "18", "17"} cntrycode)
-                 (> c:acctbal (S [c customer
-                                  :when (and (> c:acctbal 0.0)
-                                             (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
-                                  :group []]
-                                 ($avg c:acctbal)))
-                 (not (S [o orders
-                          :when (= o:custkey c:custkey)]
-                         true)))
+                 (> c:acctbal (c/scalar [c customer
+                                         :when (and (> c:acctbal 0.0)
+                                                    (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
+                                         :group []]
+                                (c/avg c:acctbal)))
+                 (not (c/scalar [o orders
+                                 :when (= o:custkey c:custkey)]
+                        true)))
       :group [cntrycode cntrycode]
       :order [cntrycode :asc]]
-    ($select :cntrycode cntrycode,
-             :numcust ($count),
-             :totacctbal ($sum c:acctbal))))
+    (c/tuple :cntrycode cntrycode,
+             :numcust (c/count),
+             :totacctbal (c/sum c:acctbal))))
 
 (deftest q22-test (check-answer #'q22 @sf-001))
 
