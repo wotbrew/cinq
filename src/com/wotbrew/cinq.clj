@@ -7,14 +7,19 @@
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 (defn optimize-plan [ra] (plan/rewrite ra))
 (defn compile-plan [ra] (aseq/compile-plan ra))
-(defmacro p [query selection] (list `quote (plan/stack-view (optimize-plan (parse query selection)))))
+
+(defmacro p [query selection]
+  (-> (parse query selection)
+      optimize-plan
+      plan/stack-view
+      (->> (list `quote))))
 
 (defmacro q [query selection]
   (let [code (binding [parse/*env* &env]
                (-> (parse query selection)
                    optimize-plan
                    compile-plan))]
-    ;; better representation
+    ;; todo better representation
     `(vec ~code)))
 
 (defn- throw-only-in-queries [v]
