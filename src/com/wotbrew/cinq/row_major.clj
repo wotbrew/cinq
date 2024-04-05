@@ -652,7 +652,7 @@
            :type-acc identity
            :form `(new ~iter-sym ~left-form nil (fn [] ~right-form) ~@(column-defaults joined-cols))})))
 
-    ))
+    _ (throw (ex-info (format "Unexpected relational operator %s" (first plan)) {:ra (plan/stack-view plan)}))))
 
 (defn compile-loop [plan cont]
   (let [{:keys [type-sym, type-acc, form]} (compile-plan* plan)
