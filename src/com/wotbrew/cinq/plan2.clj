@@ -85,7 +85,7 @@
       (->> (.getFields class)
            (some (fn [^Field f] (when (= munged-name (.getName f)) f)))))))
 
-(def %count-sym (with-meta '%count {:tag 'long}))
+(def %count-sym '%count)
 
 (def ^:dynamic *specialise-group-column-types*
   "Bind to false if you do not want to type hint group columns (aggregate macros use these hints to assume array types)
@@ -101,7 +101,9 @@
     `Column))
 
 (defn group-column-tag [column-sym]
-  (vary-meta column-sym assoc :tag (group-column-type column-sym)))
+  (if (= %count-sym column-sym)
+    column-sym
+    (vary-meta column-sym assoc :tag (group-column-type column-sym))))
 
 (defn optional-tag [column-sym] (vary-meta column-sym dissoc :tag))
 

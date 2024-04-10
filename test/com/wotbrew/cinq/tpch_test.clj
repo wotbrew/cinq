@@ -147,6 +147,7 @@
 (deftest q1-test (check-answer #'q1 @sf-001))
 
 (comment
+  (map vec (q1 @sf-001))
   (check-answer #'q1 @sf-001)
   ;; 0.05 70.801619 ms, sf1 1691ms
   (criterium.core/bench (count (q1 @sf-005)))
@@ -344,10 +345,10 @@
 (deftest q7-test (check-answer #'q7 @sf-001))
 
 (comment
-
   (time (count (q7 @sf-005)))
   (q7 @sf-001)
-  (check-answer #'q7 @sf-001))
+  (check-answer #'q7 @sf-001)
+  )
 
 (defn q8 [{:keys [part supplier region lineitem orders customer nation]}]
   (q [p part
@@ -388,7 +389,8 @@
 (comment
   (time (count (q8 @sf-005)))
   (q8 @sf-001)
-  (check-answer #'q8 @sf-001))
+  (check-answer #'q8 @sf-001)
+  )
 
 (defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
   (q [p part
@@ -418,7 +420,8 @@
 (comment
   (time (count (q9 @sf-005)))
   (q9 @sf-001)
-  (check-answer #'q9 @sf-001))
+  (check-answer #'q9 @sf-001)
+  )
 
 (defn q10 [{:keys [lineitem customer orders nation]}]
   (q [c customer

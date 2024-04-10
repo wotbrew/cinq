@@ -1,265 +1,276 @@
 (ns com.wotbrew.cinq.eager-loop
-  (:require [com.wotbrew.cinq.column :as col]
-            [com.wotbrew.cinq.parse :as parse]
+  (:require [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.plan2 :as plan]
-            [meander.epsilon :as m]
-            [com.wotbrew.cinq.array-seq :as aseq])
-  (:import (clojure.lang RT Util)
-           (java.lang.reflect Field)
-           (java.util ArrayList HashMap Iterator Spliterator)
-           (java.util.function BiConsumer Consumer)))
+            [com.wotbrew.cinq.column :as col]
+            [meander.epsilon :as m])
+  (:import (java.util ArrayList Comparator HashMap)
+           (java.util.function BiFunction)))
 
-;; todo push type tags in plan
-;; todo primitive aggregations for different array types
-;; todo PROBLEM: ::plan/limit,
-;; loop-ify should take an additional arg, each operator should try to be lazy up to the limit
-;; this may cause different loop strategies to be used to accommodate the additional counter in the loop (e.g iterator instead of .forEach)
+(declare emit-loop emit-array emit-iterator emit-iterable)
 
-(defn tuple-field-sym [i] (symbol (str "field" i)))
-(defn tuple-get-field-list [i expr] (list (symbol (str ".-field" i)) expr))
+(defn rewrite-expr [dependent-relations clj-expr]
+  (let [col-maps (mapv #(plan/dependent-cols % clj-expr) dependent-relations)]
+    (expr/rewrite col-maps clj-expr #(emit-iterable % 0))))
 
-(defmacro add-hash [hash1 hash2]
-  `(unchecked-multiply-int 31 (unchecked-add-int ~hash1 ~hash2)))
+(defn emit-list
+  ([ra]
+   (let [list-sym (gensym "list")
+         cols (plan/columns ra)]
+     `(let [~list-sym (ArrayList.)]
+        ~(emit-loop ra `(.add ~list-sym (doto (object-array ~(count cols))
+                                          ~@(for [[i col] (map-indexed vector cols)]
+                                              `(aset ~i (clojure.lang.RT/box ~col))))))
+        ~list-sym)))
+  ([ra col-idx]
+   (let [list-sym (gensym "list")
+         cols (plan/columns ra)
+         col (nth cols col-idx)]
+     `(let [~list-sym (ArrayList.)]
+        ~(emit-loop ra `(.add ~list-sym (clojure.lang.RT/box ~col)))
+        ~list-sym))))
 
-(def tuple-type*
-  (memoize
-    (fn tt* [k]
-      (let [s (gensym "TT")
-            osym (gensym "o")
-            tosym (with-meta osym {:tag s})
-            hsym (with-meta '__hashcode {:tag 'int, :unsynchronized-mutable true})]
-        (eval `(deftype ~s [~hsym ~@(for [[i tag] (map-indexed vector k)] (with-meta (tuple-field-sym i) {:type tag}))]
-                 Object
-                 (equals [_# ~osym]
-                   (and (instance? ~s ~osym)
-                        (let [~tosym ~osym]
-                          (and ~@(for [i (range (count k))]
-                                   `(= ~(tuple-field-sym i) ~(tuple-get-field-list i tosym)))))))
-                 (hashCode [_#]
-                   (if (= 0 ~hsym)
-                     (let [hc# ~(case (count k)
-                                  0 42
-                                  (reduce
-                                    (fn [form i] `(add-hash ~form (Util/hash ~(tuple-field-sym i))))
-                                    1
-                                    (range (count k))))]
-                       (set! ~hsym hc#)
-                       hc#)
-                     ~hsym))))))))
+(defn emit-array [ra] `(.toArray ~(emit-list ra)))
 
-(defn tuple-type ^Class [cols]
-  (let [k (mapv (fn [s] (:tag (meta s) `Object)) cols)]
-    (tuple-type* k)))
+;; todo use row-major.clj for the below, both namespaces should be symbiotic
+(defn emit-iterable ([ra] (emit-list ra)) ([ra col-idx] (emit-list ra col-idx)))
+(defn emit-iterator [ra] `(.iterator ~(emit-list ra)))
 
-(defn tuple-type-sym [cols] (symbol (.getName (tuple-type cols))))
+(defn emit-tuple-arg-list [obj cols]
+  (for [i (range (count cols))]
+    `(aget ~(with-meta obj {:tag 'objects}) ~i)))
 
-(defn construct-tuple [cols]
-  `(new ~(tuple-type-sym cols) 0 ~@cols))
+(defn emit-tuple-column-binding
+  ([obj cols]
+   (vec (interleave (map #(with-meta % {}) cols) (emit-tuple-arg-list obj cols))))
+  ([obj cols expr]
+   (let [used-in-expr (set (expr/possible-dependencies cols expr))]
+     (vec (for [[i col] (map-indexed vector cols)
+                :when (used-in-expr col)
+                form [(with-meta col {}) `(aget ~(with-meta obj {:tag 'objects}) ~i)]]
+            form)))))
 
-(defn key-lambda [key-syms]
-  `(fn key-function# [~@key-syms]
-     ~(case (count key-syms)
-        1 (first key-syms)
-        (construct-tuple key-syms))))
+(defn emit-key [expressions]
+  (mapv (fn [expr] `(clojure.lang.RT/box ~expr)) expressions))
 
-(defn rt-add-to-hm-group [^HashMap hm ^Object k tt]
-  (let [^ArrayList l (.get hm k)]
-    (if l
-      (.add l tt)
-      (.put hm k (doto (ArrayList.) (.add tt))))))
+(defn emit-key-args [k cols]
+  (for [i (range (count cols))]
+    `(nth ~k ~i)))
 
-(defn add-to-group [ht-sym keyfn-sym key-syms tt-expr]
-  `(rt-add-to-hm-group ~ht-sym (~keyfn-sym ~@key-syms) ~tt-expr))
+(defn emit-key-bindings [k cols]
+  (vec (interleave (map #(with-meta % {}) cols) (emit-key-args k cols))))
 
-(defn create-array [column-syms]
-  (let [arr-sym (gensym "arr")]
-    `(let [~arr-sym (object-array ~(count column-syms))]
-       ~@(for [[i csym] (map-indexed vector column-syms)]
-           `(aset ~arr-sym ~i (RT/box ~csym)))
-       ~arr-sym)))
+(defn emit-scan [src bindings body]
+  (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
+        self-tag (:tag (meta self-binding))
+        self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
+        o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
+        lambda `(fn scan-fn# [~o]
+                  (let [~@(for [[sym k] bindings
+                                form [(with-meta sym {})
+                                      (cond
+                                            (= :cinq/self k) o
+                                            (and self-class (class? self-class) (plan/kw-field self-class k))
+                                            (list (symbol (str ".-" (munge (name k)))) o)
+                                            (keyword? k) (list k o)
+                                            :else (list `get o k))]]
+                            form)]
+                    ~body))]
+    `(run! ~lambda ~(rewrite-expr [] src))))
 
-(defn destructure-group-bindings-from-key [key-sym binding-syms]
-  (assert (pos? (count binding-syms)))
-  (case (count binding-syms)
-    1 [(first binding-syms) key-sym]
-    (for [[i sym] (map-indexed vector binding-syms)
-          form [sym (tuple-get-field-list i key-sym)]]
-      form)))
+(defn emit-where [ra pred body]
+  (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))
 
-(defn create-grouped-column-bindings [column-syms list-sym]
-  (case (count column-syms)
-    1
-    (let [col-sym (first column-syms)]
-      [col-sym `(col/->Column nil (fn [] (.toArray ~list-sym)))])
+(defn emit-cross-join [left right body]
+  (emit-loop left (emit-loop right body)))
 
-    (let [t (with-meta (gensym "t") {:tag (tuple-type-sym column-syms)})]
-      (for [[i sym] (map-indexed vector column-syms)
-            form [sym `(col/->Column nil
-                                     (fn build-col# []
-                                       (let [arr# (object-array (.size ~list-sym))]
-                                         (dotimes [j# (.size ~list-sym)]
-                                           (let [~t (.get ~list-sym j#)]
-                                             (aset arr# j# (RT/box ~(tuple-get-field-list i t)))))
-                                         arr#)))]]
-        form))))
+(defn emit-apply-left-join [left right body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        right-cols (plan/columns right)]
+    (emit-loop
+      left
+      `(let [rs# ~(emit-iterator right)
+             has-any# (.hasNext rs#)
+             f# (fn [~@right-cols] ~body)]
+         (if has-any#
+           (loop [~o (.next rs#)]
+             (f# ~@(emit-tuple-arg-list o right-cols))
+             (when (.hasNext rs#) (recur (.next rs#))))
+           (f# ~@(repeat (count right-cols) nil)))))))
 
-(declare to-array-list)
+(defn emit-single-join [left right body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        right-cols (plan/columns right)]
+    (emit-loop
+      left
+      `(let [rs# ~(emit-iterator right)
+             has-any# (.hasNext rs#)
+             f# (fn [~@right-cols] ~body)]
+         (if has-any#
+           (let [~o (.next rs#)]
+             (f# ~@(emit-tuple-arg-list o right-cols)))
+           (f# ~@(repeat (count right-cols) nil)))))))
 
-(defn has-kw-field? [^Class class kw]
-  (and (isa? class clojure.lang.IRecord)
-       (let [munged-name (munge (name kw))]
-         (->> (.getFields class)
-              (some (fn [^Field f] (= munged-name (.getName f))))))))
+(defn emit-semi-join [left right pred body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        right-cols (plan/columns right)]
+    (emit-loop
+      left
+      `(let [rs# ~(emit-iterator right)]
+         (loop []
+           (when (.hasNext rs#)
+             (let [~o (.next rs#)]
+               (if (let ~(emit-tuple-column-binding o right-cols)
+                     ~(rewrite-expr [left right] pred))
+                 ~body
+                 (recur)))))))))
 
-(defn iterator ^Iterator [obj]
-  (cond
-    (instance? Iterable obj) (.iterator ^Iterable obj)
-    (nil? obj) (.iterator ())
-    :else (.iterator ^Iterable (seq obj))))
+(defn emit-anti-join [left right pred body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        right-cols (plan/columns right)]
+    (emit-loop
+      left
+      `(let [rs# ~(emit-iterator right)]
+         (when-not
+           (loop []
+             (when (.hasNext rs#)
+               (let [~o (.next rs#)
+                     ~@(emit-tuple-column-binding o right-cols)]
+                 (if ~(rewrite-expr [left right] pred) true (recur)))))
+           ~body)))))
 
-'
-(deftype ScanSpliterator [src-spliterator
-                          ^:unsynchronized-mutable ^boolean match
-                          ^:unsynchronized-mutable col0
-                          ^:unsynchronized-mutable col1]
-  Consumer
-  (accept [_ o]
-    (let [o o
-          foo (.-foo o)]
-      (if ~pred
-        (do (set! col0 row-count o)
-            (set! col1 row-count foo)
-            (set! match true))
-        (set! match false))))
-  Spliterator
-  (tryAdvance [this c]
-    (loop []
-      (if (.tryAdvance src-spliterator this)
-        (if (.-match this)
-          (do (.accept c this) true)
-          (recur))
-        false))))
+(defn emit-group-by [ra bindings body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        cols (plan/columns ra)
+        k (gensym "k")
+        al (with-meta (gensym "al") {:tag `ArrayList})]
+    `(let [rs# ~(emit-list ra)
+           ht# (HashMap.)]
+       ;; agg
+       (run!
+         (fn [~o]
+           (let [~@(emit-tuple-column-binding o cols (mapv second bindings))
+                 ~k ~(emit-key (rewrite-expr [ra] (map second bindings)))
+                 f# (reify BiFunction
+                      (apply [_# _# ~(with-meta al {})]
+                        (let [~al (or ~al (ArrayList.))]
+                          (.add ~al ~o)
+                          ~al)))]
+             (.compute ht# ~k f#)))
+         rs#)
+       ;; emit results
+       (run!
+         (fn [[~k ~al]]
+           (let [~@(for [[i col] (map-indexed vector (plan/columns ra))
+                         form
+                         [(with-meta col {})
+                          `(col/->Column
+                             nil
+                             (fn []
+                               (let [arr# (object-array (.size ~al))]
+                                 (dotimes [j# (.size ~al)]
+                                   (let [~o (.get ~al j#)]
+                                     (aset arr# j# (aget ~o ~i))))
+                                 arr#)))]]
+                     form)
+                 ~@(emit-key-bindings k (map first bindings))
+                 ~(with-meta plan/%count-sym {}) (.size ~al)]
+             ~body))
+         ht#))))
 
-'(deftype NestedLoop [left-spliterator
-                      right-spliterable
-                      ^:unsynchronized-mutable right-spliterator
-                      ^:unsynchronized-mutable ^boolean match
-                      ^:unsynchronized-mutable col0
-                      ^:unsynchronized-mutable col1
-                      ^:unsynchronized-mutable col2]
-   Consumer
-   ;; accept left
-   (accept [_ o]
-     (let [t
-           o (.getCol0 t)
-           foo (.getCol1 t)]
-       (if ~pred
-         (do (set! col0 row-count o)
-             (set! col1 row-count foo)
-             (set! match true))
-         (set! match false))))
-   Spliterator
-   (tryAdvance [this c]
-     (if right-spliterator
+(defn emit-order-by [ra order-clauses body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
+        a (with-meta (gensym "a") {:tag 'objects})
+        b (with-meta (gensym "b") {:tag 'objects})
+        cols (plan/columns ra)
+        comparator `(reify Comparator
+                      (compare [_# a# b#]
+                        (let [~a a#
+                              ~b b#]
+                          ~((fn ! [[[expr dir] & more]]
+                              ;; todo emit only cols used in expr
+                              `(let [res# (compare (let ~(emit-tuple-column-binding a cols expr) ~(rewrite-expr [ra] expr))
+                                                   (let ~(emit-tuple-column-binding b cols expr) ~(rewrite-expr [ra] expr)))]
+                                 (if (= 0 res#)
+                                   ~(if (seq more) (! more) 0)
+                                   (* res# ~(if (= :desc dir) -1 1)))))
+                            order-clauses))))]
+    `(let [rs# ~(emit-array ra)]
+       (java.util.Arrays/sort rs# ~comparator)
+       (dotimes [i# (alength rs#)]
+         (let [~o (aget rs# i#)
+               ~@(emit-tuple-column-binding o cols)]
+           ~body)))))
 
-       (loop []
-         (if (.tryAdvance left-spliterator this)
-           (let [spliterator (.spliterator right-spliterable)]
-             )
-           (if (.-match this)
-             (do (.accept c this) true)
-             (recur))
-           false)))))
-
-;; consider ::plan/limit feedback
-;; extra args limit (if nil no limit), cont (if nil, return an iterable?).
-;; we should know whether the return is materialized and how?
-(defn loop-ify
-  [ra cont]
-  (letfn [(rewrite-expr [expr & ra] (aseq/rewrite-expr (mapv #(plan/dependent-cols % expr) ra) expr))]
-    (m/match ra
-      [::plan/scan ?src ?bindings]
-      (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) ?bindings))
-            self-tag (:tag (meta self-binding))
-            self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
-            osym (with-meta (gensym "o") {:tag self-tag})]
-        `(let [run-step# (fn [~osym]
-                           (let [~@(for [[sym k] ?bindings
-                                         form [sym (cond
-                                                     (= :cinq/self k) osym
-                                                     ;; specialisation for records
-                                                     (and self-class (class? self-class) (has-kw-field? self-class k))
-                                                     (list (symbol (str ".-" (munge (name k)))) osym)
-                                                     ;; this gives you a KeywordLookupSite, which can sometimes be faster than RT.get
-                                                     ;; needs testing as to whether worth given the IRecord specialisation above
-                                                     (keyword? k) (list k osym)
-                                                     :else (list `get osym k))]]
-                                     form)]
-                             ~cont))]
-           (run! run-step# ~?src)))
-
-      [::plan/project ?ra [[?sym ?expr]]]
-      (loop-ify ?ra `(let [~?sym ~(rewrite-expr ?expr ?ra)] ~cont))
-
-      [::plan/where ?ra ?pred]
-      (loop-ify ?ra `(when ~(rewrite-expr ?pred ?ra) ~cont))
-
-      [::plan/cross-join ?ra1 ?ra2]
-      (loop-ify [::plan/join ?ra1 ?ra2 ::no-pred] cont)
-
-      ;; todo a block nested loop, we would need to be able to control the start/stop from the underlying iterator
-      ;; again like limit there would be an iterator-control requirement.
-      [::plan/join ?ra1 ?ra2 ?pred]
-      (if (= :no-pred ?pred)
-        (loop-ify ?ra1 (loop-ify ?ra2 cont))
-        (loop-ify ?ra1 (loop-ify ?ra2 `(when (rewrite-expr ?pred ?ra1 ?ra2) ~cont))))
-
-      [::plan/apply :cross-join ?ra1 ?ra2]
-      (loop-ify ?ra1 (loop-ify ?ra2 cont))
-
-
-      [::plan/group-by ?ra ?bindings]
-      (let [bindings (vec (for [[sym e] ?bindings]
-                            [sym (aseq/rewrite-expr [(plan/dependent-cols ?ra e)] e)]))
-            cols (plan/columns ?ra)]
-        (case (count ?bindings)
-          0
-          (let [list-sym (gensym "list")]
-            `(let [~list-sym ((fn [] ~(to-array-list ?ra)))
-                   ~@(create-grouped-column-bindings cols list-sym)]
-               ~cont))
-          (let [ht-sym (gensym "ht")
-                keyfn-sym (gensym "kfn")
-                key-syms (mapv first bindings)
-                key-sym (with-meta (gensym "key") (if (= 1 (count ?bindings)) {} {:tag (tuple-type-sym key-syms)}))
-                val-sym (with-meta (gensym "val") {:tag `ArrayList})]
-            `(let [~ht-sym (HashMap.)
-                   ~keyfn-sym ~(key-lambda key-syms)
-                   run-entry-step#
-                   (reify BiConsumer
-                     (accept [_# k# v#]
-                       (let [~key-sym k#
-                             ~val-sym v#
-                             ~@(destructure-group-bindings-from-key key-sym (map first ?bindings))
-                             ~@(create-grouped-column-bindings (plan/columns ?ra) val-sym)
-                             ~'%count (.size ~val-sym)]
-                         ~cont)))]
-               ((fn [] ~(loop-ify ?ra `(let [~@(mapcat identity bindings)] ~(add-to-group ht-sym keyfn-sym key-syms (construct-tuple cols))))))
-               (.forEach ~ht-sym run-entry-step#)))))
-      _
-      (throw (ex-info "Unknown ra" {:ra ra})))))
-
-(defn to-array-list [ra]
-  (let [lsym (gensym "l")
+(defn emit-limit [ra n body]
+  (let [o (with-meta (gensym "o") {:tag 'objects})
         cols (plan/columns ra)]
-    `(let [~lsym (ArrayList.)]
-       ~(loop-ify ra `(.add ~lsym ~(case (count cols) 1 (first cols) (create-array cols))))
-       ~lsym)))
+    `(let [rs# ~(emit-iterator ra)]
+       (loop [n# ~n]
+         (when (pos? n#)
+           (when (.hasNext rs#)
+             (let [~o (.next rs#)
+                   ~@(emit-tuple-column-binding o cols)]
+               ~body
+               (recur (dec n#)))))))))
 
+(defn emit-loop
+  [ra body]
+  (m/match ra
+    [::plan/scan ?src ?bindings]
+    (emit-scan ?src ?bindings body)
 
-(defmacro q
-  ([ra] `(q ~ra :cinq/*))
-  ([ra expr]
-   (let [lp (parse/parse (list 'q ra expr))
-         lp' (plan/rewrite lp)]
-     (to-array-list lp'))))
+    [::plan/where ?ra ?pred]
+    (emit-where ?ra ?pred body)
+
+    ;; joins
+    [::plan/cross-join ?left ?right]
+    (emit-cross-join ?left ?right body)
+
+    [::plan/apply :cross-join ?left ?right]
+    (emit-cross-join ?left ?right body)
+
+    [::plan/apply :left-join ?left ?right]
+    (emit-apply-left-join ?left ?right body)
+
+    [::plan/apply :single-join ?left ?right]
+    (emit-single-join ?left ?right body)
+
+    ;; todo equi-join
+    [::plan/join ?left ?right ?pred]
+    (emit-loop [::plan/apply :cross-join ?left [::plan/where ?right ?pred]] body)
+
+    [::plan/left-join ?left ?right ?pred]
+    (emit-loop [::plan/apply :left-join ?left [::plan/where ?right ?pred]] body)
+
+    [::plan/single-join ?left ?right ?pred]
+    (emit-loop [::plan/apply :single-join ?left [::plan/where ?right ?pred]] body)
+
+    [::plan/semi-join ?left ?right ?pred]
+    (emit-semi-join ?left ?right ?pred body)
+
+    [::plan/anti-join ?left ?right ?pred]
+    (emit-anti-join ?left ?right ?pred body)
+
+    [::plan/let ?ra ?bindings]
+    (emit-loop ?ra `(let [~@(for [[col expr] ?bindings
+                                  form [(with-meta col {}) (rewrite-expr [?ra] expr)]]
+                              form)]
+                      ~body))
+
+    [::plan/project ?ra ?bindings]
+    (emit-loop [::plan/let ?ra ?bindings] body)
+
+    [::plan/group-by ?ra ?bindings]
+    (emit-group-by ?ra ?bindings body)
+
+    [::plan/order-by ?ra ?order-clauses]
+    (emit-order-by ?ra ?order-clauses body)
+
+    [::plan/limit ?ra ?n]
+    (emit-limit ?ra ?n body)
+
+    _
+    (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra}))))
+
+(let [orders []
+      customer []])

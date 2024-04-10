@@ -1,12 +1,15 @@
 (ns com.wotbrew.cinq
   (:refer-clojure :exclude [use, for, max, min, count, set, update, run!])
   (:require [com.wotbrew.cinq.array-seq :as aseq]
+            [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]))
 
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 (defn optimize-plan [ra] (plan/rewrite ra))
-(defn compile-plan [ra] (aseq/compile-plan ra))
+(defn compile-plan [ra]
+  #_(aseq/compile-plan ra)
+  (el/emit-list ra 0))
 
 (defmacro p [query selection]
   (-> (parse query selection)
