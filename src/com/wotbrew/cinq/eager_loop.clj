@@ -187,7 +187,6 @@
                         (let [~a a#
                               ~b b#]
                           ~((fn ! [[[expr dir] & more]]
-                              ;; todo emit only cols used in expr
                               `(let [res# (compare (let ~(emit-tuple-column-binding a cols expr) ~(rewrite-expr [ra] expr))
                                                    (let ~(emit-tuple-column-binding b cols expr) ~(rewrite-expr [ra] expr)))]
                                  (if (= 0 res#)
