@@ -270,6 +270,3 @@
 
     _
     (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra}))))
-
-(let [orders []
-      customer []])
