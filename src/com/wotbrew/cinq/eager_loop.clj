@@ -22,6 +22,10 @@
        ~@(for [[i col] (map-indexed vector cols)]
            `(aset ~i (clojure.lang.RT/box ~col))))))
 
+(defn emit-null-tuple [ra]
+  (let [cols (plan/columns ra)]
+    `(object-array ~(count cols))))
+
 (defn emit-list
   ([ra]
    (let [list-sym (gensym "list")]
@@ -113,28 +117,6 @@
     1 `(when ~(first theta) ~body)
     `(when (and ~@theta) ~body)))
 
-(defn emit-equi-join [left right left-key-expr right-key-expr theta body]
-  (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
-        t (tuple-local left)
-        left-cols (plan/columns left)
-        right-cols (plan/columns right)]
-    `(let [build-fn# ~(build-side-function left left-key-expr)
-           ~ht (build-fn#)]
-       ~(emit-loop
-          right
-          `(when-some [~al (.get ~ht ~(rewrite-expr [right] right-key-expr))]
-             (dotimes [i# (.size ~al)]
-               (let [~t (.get ~al i#)
-                     ~@(emit-tuple-column-binding
-                         t
-                         (plan/columns left)
-                         ;; right shadows left if there is a collision
-                         ;; todo planner should ensure this cannot happen by auto gensym
-                         (set/difference (set left-cols)
-                                         (set right-cols)))]
-                 ~(emit-join-theta (rewrite-expr [left right] theta) body))))))))
-
 (defn emit-apply-left-join [left right body]
   (let [o (with-meta (gensym "o") {:tag 'objects})
         right-cols (plan/columns right)]
@@ -189,6 +171,64 @@
                      ~@(emit-tuple-column-binding o right-cols)]
                  (if ~(rewrite-expr [left right] pred) true (recur)))))
            ~body)))))
+
+(defn emit-equi-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        t (tuple-local left)
+        left-cols (plan/columns left)
+        right-cols (plan/columns right)]
+    `(let [build-fn# ~(build-side-function left left-key-expr)
+           ~ht (build-fn#)]
+       ~(emit-loop
+          right
+          `(when-some [~al (.get ~ht ~(rewrite-expr [right] right-key-expr))]
+             (dotimes [i# (.size ~al)]
+               (let [~t (.get ~al i#)
+                     ~@(emit-tuple-column-binding
+                         t
+                         (plan/columns left)
+                         ;; right shadows left if there is a collision
+                         ;; todo planner should ensure this cannot happen by auto gensym
+                         (set/difference (set left-cols)
+                                         (set right-cols)))]
+                 ~(emit-join-theta (rewrite-expr [left right] theta) body))))))))
+
+(defn emit-equi-left-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        left-t (tuple-local left)
+        right-t (tuple-local right)
+        left-cols (plan/columns left)
+        right-cols (plan/columns right)
+        cont-lambda (gensym "cont-lambda")
+        theta-expressions (rewrite-expr [left right] theta)
+        null-right-tuple (tuple-local right)]
+    `(let [build-fn# ~(build-side-function right right-key-expr)
+           ~ht (build-fn#)
+           ~cont-lambda
+           (fn [~left-t ~right-t]
+             (let [~@(emit-tuple-column-binding left-t left-cols (vec (remove (set right-cols) left-cols)))
+                   ~@(emit-tuple-column-binding right-t right-cols)]
+               ~body))
+           ~null-right-tuple ~(emit-null-tuple right)]
+       ~(emit-loop
+          left
+          `(let [~left-t ~(emit-tuple left)]
+             (if-some [~al (.get ~ht ~(rewrite-expr [left] left-key-expr))]
+               (dotimes [i# (.size ~al)]
+                 (let [~right-t (.get ~al i#)]
+                   ~(case (count theta-expressions)
+                      0
+                      `(~cont-lambda ~left-t ~right-t)
+                      1
+                      `(if ~(first theta-expressions)
+                           (~cont-lambda ~left-t ~right-t)
+                           (~cont-lambda ~left-t ~null-right-tuple))
+                      `(if ~(and ~@theta-expressions)
+                         (~cont-lambda ~left-t ~right-t)
+                         (~cont-lambda ~left-t ~null-right-tuple)))))
+               (~cont-lambda ~left-t ~null-right-tuple)))))))
 
 (defn emit-group-by [ra bindings body]
   (let [o (with-meta (gensym "o") {:tag 'objects})
@@ -292,10 +332,13 @@
         (emit-equi-join ?left ?right left-key right-key theta body))
       (emit-loop [::plan/apply :cross-join ?left [::plan/where ?right ?pred]] body))
 
-    ;; todo equi-join
     [::plan/left-join ?left ?right ?pred]
-    (emit-loop [::plan/apply :left-join ?left [::plan/where ?right ?pred]] body)
+    (if (plan/equi-join? ?left ?right ?pred)
+      (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
+        (emit-equi-left-join ?left ?right left-key right-key theta body))
+      (emit-loop [::plan/apply :left-join ?left [::plan/where ?right ?pred]] body))
 
+    ;; todo equi-join
     [::plan/single-join ?left ?right ?pred]
     (emit-loop [::plan/apply :single-join ?left [::plan/where ?right ?pred]] body)
 
