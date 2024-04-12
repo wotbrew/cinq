@@ -1,5 +1,6 @@
 (ns com.wotbrew.cinq.eager-loop
-  (:require [com.wotbrew.cinq.expr :as expr]
+  (:require [clojure.set :as set]
+            [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
@@ -12,14 +13,20 @@
   (let [col-maps (mapv #(plan/dependent-cols % clj-expr) dependent-relations)]
     (expr/rewrite col-maps clj-expr #(emit-iterable % 0))))
 
+(defn tuple-local [ra]
+  (with-meta (gensym "t") {:tag 'objects}))
+
+(defn emit-tuple [ra]
+  (let [cols (plan/columns ra)]
+    `(doto (object-array ~(count cols))
+       ~@(for [[i col] (map-indexed vector cols)]
+           `(aset ~i (clojure.lang.RT/box ~col))))))
+
 (defn emit-list
   ([ra]
-   (let [list-sym (gensym "list")
-         cols (plan/columns ra)]
+   (let [list-sym (gensym "list")]
      `(let [~list-sym (ArrayList.)]
-        ~(emit-loop ra `(.add ~list-sym (doto (object-array ~(count cols))
-                                          ~@(for [[i col] (map-indexed vector cols)]
-                                              `(aset ~i (clojure.lang.RT/box ~col))))))
+        ~(emit-loop ra `(.add ~list-sym ~(emit-tuple ra)))
         ~list-sym)))
   ([ra col-idx]
    (let [list-sym (gensym "list")
@@ -68,11 +75,11 @@
                   (let [~@(for [[sym k] bindings
                                 form [(with-meta sym {})
                                       (cond
-                                            (= :cinq/self k) o
-                                            (and self-class (class? self-class) (plan/kw-field self-class k))
-                                            (list (symbol (str ".-" (munge (name k)))) o)
-                                            (keyword? k) (list k o)
-                                            :else (list `get o k))]]
+                                        (= :cinq/self k) o
+                                        (and self-class (class? self-class) (plan/kw-field self-class k))
+                                        (list (symbol (str ".-" (munge (name k)))) o)
+                                        (keyword? k) (list k o)
+                                        :else (list `get o k))]]
                             form)]
                     ~body))]
     `(run! ~lambda ~(rewrite-expr [] src))))
@@ -82,6 +89,51 @@
 
 (defn emit-cross-join [left right body]
   (emit-loop left (emit-loop right body)))
+
+(defn build-side-function [ra key-expr]
+  (let [ht (gensym "ht")
+        al (with-meta (gensym "al") {:tag `ArrayList})]
+    `(fn build-side# []
+       (let [~ht (HashMap.)]
+         ~(emit-loop
+            ra
+            `(let [t# ~(emit-tuple ra)]
+               (.compute ~ht
+                         ~(rewrite-expr [ra] key-expr)
+                         (reify BiFunction
+                           (apply [_ _ al#]
+                             (let [~al (or al# (ArrayList.))]
+                               (.add ~al t#)
+                               ~al))))))
+         ~ht))))
+
+(defn emit-join-theta [theta body]
+  (case (count theta)
+    0 body
+    1 `(when ~(first theta) ~body)
+    `(when (and ~@theta) ~body)))
+
+(defn emit-equi-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        t (tuple-local left)
+        left-cols (plan/columns left)
+        right-cols (plan/columns right)]
+    `(let [build-fn# ~(build-side-function left left-key-expr)
+           ~ht (build-fn#)]
+       ~(emit-loop
+          right
+          `(when-some [~al (.get ~ht ~(rewrite-expr [right] right-key-expr))]
+             (dotimes [i# (.size ~al)]
+               (let [~t (.get ~al i#)
+                     ~@(emit-tuple-column-binding
+                         t
+                         (plan/columns left)
+                         ;; right shadows left if there is a collision
+                         ;; todo planner should ensure this cannot happen by auto gensym
+                         (set/difference (set left-cols)
+                                         (set right-cols)))]
+                 ~(emit-join-theta (rewrite-expr [left right] theta) body))))))))
 
 (defn emit-apply-left-join [left right body]
   (let [o (with-meta (gensym "o") {:tag 'objects})
@@ -234,10 +286,13 @@
     [::plan/apply :single-join ?left ?right]
     (emit-single-join ?left ?right body)
 
-    ;; todo equi-join
     [::plan/join ?left ?right ?pred]
-    (emit-loop [::plan/apply :cross-join ?left [::plan/where ?right ?pred]] body)
+    (if (plan/equi-join? ?left ?right ?pred)
+      (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
+        (emit-equi-join ?left ?right left-key right-key theta body))
+      (emit-loop [::plan/apply :cross-join ?left [::plan/where ?right ?pred]] body))
 
+    ;; todo equi-join
     [::plan/left-join ?left ?right ?pred]
     (emit-loop [::plan/apply :left-join ?left [::plan/where ?right ?pred]] body)
 
