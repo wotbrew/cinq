@@ -7,6 +7,7 @@
 
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 (defn optimize-plan [ra] (plan/rewrite ra))
+
 (defn compile-plan [ra]
   #_(aseq/compile-plan ra)
   (el/emit-list ra 0))

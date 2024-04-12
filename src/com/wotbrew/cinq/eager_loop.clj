@@ -4,8 +4,12 @@
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (java.util ArrayList Comparator HashMap Iterator)
+  (:import (clojure.lang Indexed)
+           (com.wotbrew.cinq CinqUtil)
+           (java.util ArrayList Arrays Comparator HashMap Iterator)
            (java.util.function BiFunction)))
+
+(set! *warn-on-reflection* true)
 
 (declare emit-loop emit-array emit-iterator emit-iterable)
 
@@ -71,12 +75,30 @@
                 form [(with-meta col {}) `(aget ~(with-meta obj {:tag 'objects}) ~i)]]
             form)))))
 
-(defn emit-key [expressions]
-  (mapv (fn [expr] `(clojure.lang.RT/box ~expr)) expressions))
+(deftype ArrayKey [^int hc ^objects arr]
+  Object
+  (equals [_ o]
+    ;; assume the cast as we will only ever use this internally
+    (Arrays/equals ^objects arr ^objects (.-arr ^ArrayKey o)))
+  (hashCode [_] hc)
+  Indexed
+  (nth [_ i] (aget arr i)))
+
+(defn emit-key [key-expr]
+  (case (count key-expr)
+    0 []
+    1 (first key-expr)
+    `(let [arr# (doto (object-array ~(count key-expr))
+                  ~@(for [[i expr] (map-indexed vector key-expr)]
+                      `(aset ~i ~expr)))]
+       (->ArrayKey (CinqUtil/hashArray arr#) arr#))))
 
 (defn emit-key-args [k cols]
-  (for [i (range (count cols))]
-    `(nth ~k ~i)))
+  (case (count cols)
+    0 ()
+    1 [k]
+    (for [i (range (count cols))]
+      `(.nth ~(with-meta k {:tag `Indexed}) ~i))))
 
 (defn emit-key-bindings [k cols]
   (vec (interleave (map #(with-meta % {}) cols) (emit-key-args k cols))))
@@ -114,7 +136,7 @@
             ra
             `(let [t# ~(emit-tuple ra)]
                (.compute ~ht
-                         ~(rewrite-expr [ra] key-expr)
+                         ~(emit-key (rewrite-expr [ra] key-expr))
                          (reify BiFunction
                            (apply [_ _ al#]
                              (let [~al (or al# (ArrayList.))]
@@ -243,12 +265,12 @@
            ~ht (build-fn#)]
        ~(emit-loop
           right
-          `(when-some [~al (.get ~ht ~(rewrite-expr [right] right-key-expr))]
+          `(when-some [~al (.get ~ht ~(emit-key (rewrite-expr [right] right-key-expr)))]
              (dotimes [i# (.size ~al)]
                (let [~t (.get ~al i#)
                      ~@(emit-tuple-column-binding
                          t
-                         (plan/columns left)
+                         left-cols
                          ;; right shadows left if there is a collision
                          ;; todo planner should ensure this cannot happen by auto gensym
                          (set/difference (set left-cols)
@@ -277,7 +299,7 @@
        ~(emit-loop
           left
           `(let [~left-t ~(emit-tuple left)]
-             (if-some [~al (.get ~ht ~(rewrite-expr [left] left-key-expr))]
+             (if-some [~al (.get ~ht ~(emit-key (rewrite-expr [left] left-key-expr)))]
                (loop [~i 0
                       matched# false]
                  (if (< ~i (.size ~al))
@@ -313,7 +335,7 @@
        ~(emit-loop
           left
           `(let [~left-t ~(emit-tuple left)]
-             (if-some [~al (.get ~ht ~(rewrite-expr [left] left-key-expr))]
+             (if-some [~al (.get ~ht ~(emit-key (rewrite-expr [left] left-key-expr)))]
                (loop [~i 0]
                  (if (= ~i (.size ~al))
                    (~cont-lambda ~left-t ~null-right-tuple)
@@ -337,7 +359,7 @@
            ~ht (build-fn#)]
        ~(emit-loop
           left
-          `(when-some [~al (.get ~ht ~(rewrite-expr [left] left-key-expr))]
+          `(when-some [~al (.get ~ht ~(emit-key (rewrite-expr [left] left-key-expr)))]
              (loop [~i 0]
                (when (< ~i (.size ~al))
                  ~(case (count theta-expressions)
@@ -361,7 +383,7 @@
            ~empty-array-list (ArrayList.)]
        ~(emit-loop
           left
-          `(let [~al (.getOrDefault ~ht ~(rewrite-expr [left] left-key-expr) ~empty-array-list)]
+          `(let [~al (.getOrDefault ~ht ~(emit-key (rewrite-expr [left] left-key-expr)) ~empty-array-list)]
              (loop [~i 0]
                (if (= ~i (.size ~al))
                  ~body

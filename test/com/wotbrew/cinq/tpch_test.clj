@@ -829,17 +829,24 @@
   (clj-async-profiler.core/profile
 
     (time
-      (do (doseq [q [#'q1, #'q2, #'q3,
-                     #'q4, #'q5, #'q6,
-                     #'q7, #'q8, #'q9
-                     #'q10, #'q11, #'q12,
-                     #'q13, #'q14, #'q15,
-                     #'q16 #'q17, #'q18
-                     #'q19, #'q20, #'q21
-                     #'q22]]
-            (println q)
-            (time (count (q dataset))))
-          (println "done")))
+      (let [timings
+            (vec (for [q [#'q1, #'q2, #'q3,
+                          #'q4, #'q5, #'q6,
+                          #'q7, #'q8, #'q9
+                          #'q10, #'q11, #'q12,
+                          #'q13, #'q14, #'q15,
+                          #'q16 #'q17, #'q18
+                          #'q19, #'q20, #'q21
+                          #'q22]]
+                   (let [_ (prn q)
+                         start-ns (System/nanoTime)
+                         _ (count (q dataset))
+                         end-ns (System/nanoTime)]
+                     [(name (.toSymbol q)) (* 1e-6 (- end-ns start-ns))])))]
+        {:timings timings
+         :total (reduce + 0.0 (map second timings))}
+
+        ))
 
     )
 
