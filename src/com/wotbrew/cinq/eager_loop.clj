@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
-  (:import (java.util ArrayList Comparator HashMap)
+  (:import (java.util ArrayList Comparator HashMap Iterator)
            (java.util.function BiFunction)))
 
 (declare emit-loop emit-array emit-iterator emit-iterable)
@@ -50,6 +50,12 @@
   `(let [iter# ~(emit-iterator ra)]
      (when (.hasNext iter#)
        (.next iter#))))
+
+(defn emit-first-or-null [ra]
+  `(let [iter# ~(emit-iterator ra)]
+     (if (.hasNext iter#)
+       (.next iter#)
+       ~(emit-null-tuple ra))) )
 
 (defn emit-tuple-arg-list [obj cols]
   (for [i (range (count cols))]
@@ -122,7 +128,7 @@
     1 `(when ~(first theta) ~body)
     `(when (and ~@theta) ~body)))
 
-(defn emit-left-join [left right theta body]
+(defn emit-apply-left-join [left right theta body]
   (let [left-t (tuple-local left)
         right-t (tuple-local right)
         left-cols (plan/columns left)
@@ -152,16 +158,23 @@
                  (when-not matched#
                    (~cont-lambda ~left-t ~null-right-tuple)))))))))
 
-(defn emit-single-join [left right theta body]
-  (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        left-t (tuple-local left)
+(defn emit-const-single-join [left right body]
+  (let [right-t (tuple-local right)
+        right-cols (plan/columns right)]
+    `(let [~right-t ~(emit-first-or-null right)]
+       ~(emit-loop
+          left
+          `(let [~@(emit-tuple-column-binding right-t right-cols)]
+             ~body)))))
+
+(defn emit-apply-single-join [left right theta body]
+  (let [left-t (tuple-local left)
         right-t (tuple-local right)
         left-cols (plan/columns left)
         right-cols (plan/columns right)
         cont-lambda (gensym "cont-lambda")
         theta-expressions (rewrite-expr [left right] theta)
-        null-right-tuple (tuple-local right)
-        i (gensym "i")]
+        null-right-tuple (tuple-local right)]
     `(let [~cont-lambda
            (fn [~left-t ~right-t]
              (let [~@(emit-tuple-column-binding left-t left-cols (vec (remove (set right-cols) left-cols)))
@@ -176,40 +189,49 @@
                (if (.hasNext iter#)
                  (let [~right-t (.next iter#)]
                    ~(case (count theta-expressions)
-                      0 `(~cont-lambda ~left-t (.get ~al ~i))
+                      0 `(~cont-lambda ~left-t ~right-t)
                       `(let [~@(emit-tuple-column-binding right-t right-cols theta)]
                          (if (and ~@theta-expressions)
                            (~cont-lambda ~left-t ~right-t)
                            (recur)))))
                  (~cont-lambda ~left-t ~null-right-tuple))))))))
 
-(defn emit-semi-join [left right pred body]
-  (let [o (with-meta (gensym "o") {:tag 'objects})
-        right-cols (plan/columns right)]
+(defn emit-apply-semi-join [left right theta body]
+  (let [right-t (tuple-local right)
+        right-cols (plan/columns right)
+        theta-expressions (rewrite-expr [left right] theta)
+        iter (with-meta (gensym "iter") {:tag `Iterator})]
     (emit-loop
       left
-      `(let [rs# ~(emit-iterator right)]
+      `(let [~iter ~(emit-iterator right)]
          (loop []
-           (when (.hasNext rs#)
-             (let [~o (.next rs#)]
-               (if (let ~(emit-tuple-column-binding o right-cols)
-                     ~(rewrite-expr [left right] pred))
-                 ~body
-                 (recur)))))))))
+           (when (.hasNext ~iter)
+             ~(case (count theta-expressions)
+                0 body
+                `(if (let [~right-t (.next ~iter)
+                           ~@(emit-tuple-column-binding right-t right-cols theta)]
+                       (and ~@theta-expressions))
+                   ~body
+                   (recur)))))))))
 
-(defn emit-anti-join [left right pred body]
-  (let [o (with-meta (gensym "o") {:tag 'objects})
-        right-cols (plan/columns right)]
+(defn emit-apply-anti-join [left right theta body]
+  (let [right-t (tuple-local right)
+        right-cols (plan/columns right)
+        theta-expressions (rewrite-expr [left right] theta)
+        iter (with-meta (gensym "iter") {:tag `Iterator})]
     (emit-loop
       left
-      `(let [rs# ~(emit-iterator right)]
-         (when-not
-           (loop []
-             (when (.hasNext rs#)
-               (let [~o (.next rs#)
-                     ~@(emit-tuple-column-binding o right-cols)]
-                 (if ~(rewrite-expr [left right] pred) true (recur)))))
-           ~body)))))
+      `(let [~iter ~(emit-iterator right)]
+         (loop []
+           (if-not (.hasNext ~iter)
+             ~body
+             ~(case (count theta-expressions)
+                0 nil
+                `(if (let [~right-t (.next ~iter)
+                           ~@(emit-tuple-column-binding right-t right-cols theta)]
+                       (and ~@theta-expressions))
+                   nil
+                   (recur)))))))))
 
 (defn emit-equi-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
@@ -304,6 +326,53 @@
                            (recur (unchecked-inc-int ~i)))))))
                (~cont-lambda ~left-t ~null-right-tuple)))))))
 
+(defn emit-equi-semi-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        right-t (tuple-local right)
+        right-cols (plan/columns right)
+        theta-expressions (rewrite-expr [left right] theta)
+        i (gensym "i")]
+    `(let [build-fn# ~(build-side-function right right-key-expr)
+           ~ht (build-fn#)]
+       ~(emit-loop
+          left
+          `(when-some [~al (.get ~ht ~(rewrite-expr [left] left-key-expr))]
+             (loop [~i 0]
+               (when (< ~i (.size ~al))
+                 ~(case (count theta-expressions)
+                    0 body
+                    `(if (let [~right-t (.get ~al ~i)
+                               ~@(emit-tuple-column-binding right-t right-cols theta)]
+                           (and ~@theta-expressions))
+                       ~body
+                       (recur (unchecked-inc-int ~i)))))))))))
+
+(defn emit-equi-anti-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        right-t (tuple-local right)
+        right-cols (plan/columns right)
+        theta-expressions (rewrite-expr [left right] theta)
+        i (gensym "i")
+        empty-array-list (gensym "empty-array-list")]
+    `(let [build-fn# ~(build-side-function right right-key-expr)
+           ~ht (build-fn#)
+           ~empty-array-list (ArrayList.)]
+       ~(emit-loop
+          left
+          `(let [~al (.getOrDefault ~ht ~(rewrite-expr [left] left-key-expr) ~empty-array-list)]
+             (loop [~i 0]
+               (if (= ~i (.size ~al))
+                 ~body
+                 ~(case (count theta-expressions)
+                    0 nil
+                    `(if (let [~right-t (.get ~al ~i)
+                               ~@(emit-tuple-column-binding right-t right-cols theta)]
+                           (and ~@theta-expressions))
+                       nil
+                       (recur (unchecked-inc-int ~i)))))))))))
+
 (defn emit-group-by [ra bindings body]
   (let [o (with-meta (gensym "o") {:tag 'objects})
         cols (plan/columns ra)
@@ -395,10 +464,10 @@
     (emit-cross-join ?left ?right body)
 
     [::plan/apply :left-join ?left ?right]
-    (emit-left-join ?left ?right [] body)
+    (emit-apply-left-join ?left ?right [] body)
 
     [::plan/apply :single-join ?left ?right]
-    (emit-single-join ?left ?right [] body)
+    (emit-apply-single-join ?left ?right [] body)
 
     [::plan/join ?left ?right ?pred]
     (if (plan/equi-join? ?left ?right ?pred)
@@ -410,17 +479,27 @@
     (if (plan/equi-join? ?left ?right ?pred)
       (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
         (emit-equi-left-join ?left ?right left-key right-key theta body))
-      (emit-left-join ?left ?right [?pred] body))
+      (emit-apply-left-join ?left ?right [?pred] body))
 
-    ;; todo equi-join
     [::plan/single-join ?left ?right ?pred]
-    (emit-single-join ?left ?right [?pred] body)
+    (if (plan/equi-join? ?left ?right ?pred)
+      (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
+        (emit-equi-single-join ?left ?right left-key right-key theta body))
+      (if (= true ?pred)
+        (emit-const-single-join ?left ?right body)
+        (emit-apply-single-join ?left ?right [?pred] body)))
 
     [::plan/semi-join ?left ?right ?pred]
-    (emit-semi-join ?left ?right ?pred body)
+    (if (plan/equi-join? ?left ?right ?pred)
+      (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
+        (emit-equi-semi-join ?left ?right left-key right-key theta body))
+      (emit-apply-semi-join ?left ?right [?pred] body))
 
     [::plan/anti-join ?left ?right ?pred]
-    (emit-anti-join ?left ?right ?pred body)
+    (if (plan/equi-join? ?left ?right ?pred)
+      (let [{:keys [left-key right-key theta]} (plan/equi-theta ?left ?right ?pred)]
+        (emit-equi-anti-join ?left ?right left-key right-key theta body))
+      (emit-apply-anti-join ?left ?right [?pred] body))
 
     [::plan/let ?ra ?bindings]
     (emit-loop ?ra `(let [~@(for [[col expr] ?bindings

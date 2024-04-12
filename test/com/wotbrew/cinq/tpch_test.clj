@@ -807,6 +807,9 @@
 (deftest q22-test (check-answer #'q22 @sf-001))
 
 (comment
+
+  (run-tests 'com.wotbrew.cinq.tpch-test)
+
   ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
   ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
 

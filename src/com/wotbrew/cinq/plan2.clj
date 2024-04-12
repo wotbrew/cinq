@@ -905,3 +905,6 @@
            r/bottom-up))
 
       ))
+
+(defn const-true-theta? [theta]
+  (or (empty? theta) (every? true? theta)))
