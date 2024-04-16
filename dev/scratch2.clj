@@ -514,3 +514,19 @@
                 %count]]
               (.add list228548 (clojure.lang.RT/box col228544))))))
       list228548)))
+
+
+(do
+  (require '[com.wotbrew.cinq :as c])
+  (set! *warn-on-reflection* true)
+  (defn q1 [{:keys [lineitem]}]
+    (c/q [^Lineitem l lineitem
+        :group []]
+       (c/tuple #_#_:sum_qty (c/sum l:quantity)
+                #_#_:sum_base_price (c/sum l:extendedprice)
+                :sum_disc_price (c/sum (* l:extendedprice (- 1.0 l:discount)))
+                :sum_charge (c/sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
+                #_#_:avg_qty (c/avg l:quantity)
+                #_#_:avg_price (c/avg l:extendedprice)
+                #_#_:avg_disc (c/avg l:discount)
+                #_#_:count_order (c/count)))))

@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [com.wotbrew.cinq.column :as col]
-            [meander.epsilon :as m]))
+            [meander.epsilon :as m])
+  (:import (com.wotbrew.cinq CinqUtil)))
 
 (create-ns 'com.wotbrew.cinq.plan2)
 (alias 'plan 'com.wotbrew.cinq.plan2)
@@ -52,6 +53,33 @@
 
       :else
       `(= ~expr ~pat))))
+
+(defn apply-n2n
+  ([f] (f))
+  ([f a]
+   (when (some? a)
+     (f a)))
+  ([f a b]
+   (when (and (some? a) (some? b))
+     (f a b)))
+  ([f a b c]
+   (when (and (some? a) (some? b) (some? c))
+     (f a b c)))
+  ([f a b c d]
+   (when (and (some? a) (some? b) (some? c) (some? d))
+     (f a b c d)))
+  ([f a b c d e]
+   (when (and (some? a) (some? b) (some? c) (some? d) (some? e))
+     (f a b c e)))
+  ([f a b c d e & args]
+   (when (and (some? a) (some? b) (some? c) (some? d) (some? e) (every? some? args))
+     (apply f a b c d e args))))
+
+(defn rewrite-vararg-apply-to-binop [bin-form x y args]
+  (case (count args)
+    0 `(~bin-form ~x ~y)
+    1 `(~bin-form ~x (~bin-form ~y ~(first args)))
+    `(~bin-form ~x ~(rewrite-vararg-apply-to-binop bin-form y (first args) (rest args)))))
 
 (defn rewrite [col-maps clj-expr compile-plan]
   (let [dep-cols (apply merge-with (fn [_ b] b) col-maps)
@@ -124,6 +152,18 @@
                [::plan/in ?expr ?set]
                `(contains? ~?set ~?expr)
 
+               [::plan/apply-n2n clojure.core/+ ?a ?b & ?args]
+               (rewrite-vararg-apply-to-binop `CinqUtil/add ?a ?b ?args)
+               [::plan/apply-n2n clojure.core/* ?a ?b & ?args]
+               (rewrite-vararg-apply-to-binop `CinqUtil/mul ?a ?b ?args)
+               [::plan/apply-n2n clojure.core/- ?a ?b & ?args]
+               (rewrite-vararg-apply-to-binop `CinqUtil/sub ?a ?b ?args)
+               [::plan/apply-n2n clojure.core// ?a ?b & ?args]
+               (rewrite-vararg-apply-to-binop `CinqUtil/div ?a ?b ?args)
+
+               [::plan/apply-n2n ?sym & ?args]
+               `(apply-n2n ~?sym ~@?args)
+
                _ form))]
     ;; todo should keep meta on this walk? (e.g return hints on lists)
     (walk/prewalk rw clj-expr)))
@@ -151,6 +191,7 @@
     [::plan/not ?expr] (pred-can-be-reordered? ?expr)
     [::plan/in ?expr ?set] (pred-can-be-reordered? ?expr)
     [::plan/contains ?coll ?expr] (and (pred-can-be-reordered? ?coll) (pred-can-be-reordered? ?expr))
+    [::plan/apply-n2n ?sym & ?args] (every? pred-can-be-reordered? ?args)
     (m/guard (symbol? expr)) true
     (m/guard (map? expr)) (every? #(and (pred-can-be-reordered? (key %)) (pred-can-be-reordered? (val %))) expr)
     (m/guard (vector? expr)) (every? pred-can-be-reordered? expr)
@@ -159,3 +200,5 @@
     (m/guard (seq? expr)) false
     ;; reader literals should be ok as they have no env access
     _ true))
+
+

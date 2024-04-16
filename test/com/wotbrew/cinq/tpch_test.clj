@@ -30,8 +30,18 @@
               (symbol (str/join "_" (rest (str/split (.getColumnName c) #"_" 2))))))))
 
   )
-(defrecord Customer [custkey name address nationkey phone acctbal mktsegment comment])
-(defrecord Order [orderkey custkey orderstatus totalprice orderdate orderpriority clerk shippriority comment])
+(defrecord Customer [^long custkey name address nationkey phone acctbal mktsegment comment])
+
+(defrecord Order [^long orderkey
+                  ^long custkey
+                  orderstatus
+                  ^double totalprice
+                  orderdate
+                  orderpriority
+                  clerk
+                  shippriority
+                  comment])
+
 (defrecord Lineitem
   [^long orderkey
    ^long partkey
@@ -49,11 +59,11 @@
    shipinstruct
    shipmode
    comment])
-(defrecord Part [partkey name mfgr brand type size container retailprice comment])
-(defrecord Partsupp [partkey suppkey availqty supplycost comment])
-(defrecord Supplier [suppkey name address nationkey phone acctbal comment])
-(defrecord Nation [nationkey name regionkey comment])
-(defrecord Region [regionkey name comment])
+(defrecord Part [^long partkey name mfgr brand type size container ^double retailprice comment])
+(defrecord Partsupp [^long partkey ^long suppkey ^long availqty ^double supplycost comment])
+(defrecord Supplier [^long suppkey name address ^long nationkey phone ^double acctbal comment])
+(defrecord Nation [^long nationkey name ^long regionkey comment])
+(defrecord Region [^long regionkey name comment])
 
 (def record-ctor
   {"customer" ->Customer
@@ -167,7 +177,7 @@
         (= p:partkey ps:partkey)
         (= s:suppkey ps:suppkey)
         (= p:size 15)
-        (c/like p:type "%BRASS")
+        (str/ends-with? p:type "BRASS")
         (= s:nationkey n:nationkey)
         (= n:regionkey r:regionkey)
         (= r:name "EUROPE")
@@ -406,7 +416,7 @@
            (= p:partkey l:partkey)
            (= o:orderkey l:orderkey)
            (= s:nationkey n:nationkey)
-           (c/like p:name "%green%"))
+           (str/includes? p:name "green"))
       :let [amount (- (* l:extendedprice (- 1.0 l:discount)) (* ps:supplycost l:quantity))]
       :group [nation n:name
               year (get-year o:orderdate)]
@@ -520,7 +530,8 @@
 
 (defn q13 [{:keys [customer orders]}]
   (q [^Customer c customer
-      :left-join [o orders (and (= c:custkey o:custkey) (re-find #"^(?!.*?special.*?requests)" o:comment))]
+      :left-join [o orders (and (= c:custkey o:custkey)
+                                (re-find #"^(?!.*?special.*?requests)" o:comment))]
       :group [custkey c:custkey]
       :group [order-count (c/count o:orderkey)]
       :order [(c/count) :desc, order-count :desc]]
@@ -544,7 +555,7 @@
     (c/tuple
       :promo_revenue
       (* 100.0
-         (/ (c/sum (if (c/like p:type "PROMO%")
+         (/ (c/sum (if (str/starts-with? p:type "PROMO")
                      (* l:extendedprice (- 1.0 l:discount))
                      0.0))
             (c/sum (* l:extendedprice (- 1.0 l:discount))))))))
@@ -589,7 +600,7 @@
       ^Partsupp ps partsupp
       :when (and (= p:partkey ps:partkey)
                  (not= p:brand "Brand#45")
-                 (not (c/like p:type "MEDIUM POLISHED%"))
+                 (not (str/starts-with? p:type "MEDIUM POLISHED"))
                  (contains? #{49, 14, 23, 45, 19, 3, 36, 9} p:size)
                  (not (contains? (c/scalar [s supplier
                                             ;; todo replace with like once it can handle everything
@@ -620,7 +631,7 @@
                  (= p:brand "Brand#23")
                  (= p:container "MED BOX")
                  (< l:quantity
-                    (c/scalar [l2 lineitem
+                    (c/scalar [^Lineitem l2 lineitem
                                :when (= l2:partkey p:partkey)
                                :group []]
                       (* 0.2 (c/avg l2:quantity)))))
@@ -749,11 +760,11 @@
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
                  (> l1:receiptdate l1:commitdate)
-                 (c/scalar [l2 lineitem
+                 (c/scalar [^Lineitem l2 lineitem
                             :when (and (= l2:orderkey l1:orderkey)
                                        (not= l2:suppkey l1:suppkey))]
                    true)
-                 (not (c/scalar [l3 lineitem
+                 (not (c/scalar [^Lineitem l3 lineitem
                                  :when (and (= l3:orderkey l1:orderkey)
                                             (not= l3:suppkey l1:suppkey)
                                             (> l3:receiptdate l3:commitdate))]

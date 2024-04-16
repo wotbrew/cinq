@@ -1,5 +1,6 @@
 (ns com.wotbrew.cinq.column
   (:import (clojure.lang ArrayIter Counted IDeref Indexed RT)
+           (com.wotbrew.cinq CinqUtil)
            (java.io Writer)))
 
 (definterface IColumn
@@ -20,7 +21,7 @@
   (nth [this i] (aget (get-longs this) i))
   (nth [this i not-found] (let [data (get-longs this)] (if (< i (alength data)) (aget data i) not-found)))
   Iterable
-  (iterator [this] (ArrayIter/create (get-longs this)))
+  (iterator [this] (ArrayIter/createFromObject (get-longs this)))
   IColumn
   ;; require forcing
   (getObject [_ i] (aget data i))
@@ -41,7 +42,7 @@
   (nth [this i] (aget (get-doubles this) i))
   (nth [this i not-found] (let [data (get-doubles this)] (if (< i (alength data)) (aget data i) not-found)))
   Iterable
-  (iterator [this] (ArrayIter/create (get-doubles this)))
+  (iterator [this] (ArrayIter/createFromObject (get-doubles this)))
   IColumn
   ;; require forcing
   (getObject [_ i] (aget data i))
@@ -179,7 +180,7 @@
   ([binding expr]
    (if (simple-sum? binding expr)
      `(sum1 ~(first binding))
-     `(broadcast-reduce ~binding ~(sum-default binding expr) + ~expr))))
+     `(broadcast-reduce ~binding ~(sum-default binding expr) ~`CinqUtil/sumStep ~expr))))
 
 (defmacro avg
   ([col] `(let [col# ~col] (if (< 0 (count col#)) (/ (sum col#) (count col#)) 0.0)))

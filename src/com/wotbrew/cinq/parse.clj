@@ -59,6 +59,27 @@
           {:kw (keyword (namespace s) b)
            :a (symbol a)})))
 
+(def ^:redef n2n-rewrites #{})
+
+(defn add-n2n-rewrites [& rewrites]
+  (alter-var-root #'n2n-rewrites into rewrites))
+
+(add-n2n-rewrites
+
+  `+
+  `*
+  `-
+  `/
+  `quot
+  `rem
+  `subs
+  `clojure.string/includes?
+  `clojure.string/starts-with?
+  `clojure.string/ends-with?
+  `re-find
+
+  )
+
 (def expr-rewrites
   (r/match
     ;; sub query flavors
@@ -126,8 +147,8 @@
 
     (m/and (?sym & ?args)
            (m/guard (symbol? ?sym))
-           (m/guard (resolve *env* ?sym )))
-    (condp = (.toSymbol (resolve *env* ?sym ))
+           (m/guard (resolve *env* ?sym)))
+    (condp = (.toSymbol (resolve *env* ?sym))
       'com.wotbrew.cinq/sum
       (into [::plan/sum] ?args)
       'com.wotbrew.cinq/max
@@ -142,7 +163,12 @@
       (into [::plan/like] ?args)
       'com.wotbrew.cinq/scalar
       [::plan/scalar-sq (parse (list* 'q ?args))]
-      (list* ?sym ?args))
+
+      (if (and (n2n-rewrites (some-> (resolve *env* ?sym) .toSymbol))
+               (seq ?args))
+        ;; todo scoping problem!
+        (into [::plan/apply-n2n (some-> (resolve *env* ?sym) .toSymbol)] ?args)
+        (list* ?sym ?args)))
 
     ?any ?any))
 
