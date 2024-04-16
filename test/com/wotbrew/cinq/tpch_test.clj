@@ -248,11 +248,9 @@
   (q [^Order o orders
       :when (and (>= o:orderdate #inst "1993-07-01")
                  (< o:orderdate #inst "1993-10-01")
-                 ;; todo $exists
-                 (c/scalar [l lineitem
+                 (c/exists [l lineitem
                             :when (and (= l:orderkey o:orderkey)
-                                       (< l:commitdate l:receiptdate))]
-                   true))
+                                       (< l:commitdate l:receiptdate))]))
       :group [orderpriority o:orderpriority]
       :order [orderpriority :asc]]
     (c/tuple
@@ -760,15 +758,15 @@
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
                  (> l1:receiptdate l1:commitdate)
-                 (c/scalar [^Lineitem l2 lineitem
-                            :when (and (= l2:orderkey l1:orderkey)
-                                       (not= l2:suppkey l1:suppkey))]
-                   true)
-                 (not (c/scalar [^Lineitem l3 lineitem
-                                 :when (and (= l3:orderkey l1:orderkey)
-                                            (not= l3:suppkey l1:suppkey)
-                                            (> l3:receiptdate l3:commitdate))]
-                        true))
+                 (c/exists
+                   [^Lineitem l2 lineitem
+                    :when (and (= l2:orderkey l1:orderkey)
+                               (not= l2:suppkey l1:suppkey))])
+                 (not (c/exists
+                        [^Lineitem l3 lineitem
+                         :when (and (= l3:orderkey l1:orderkey)
+                                    (not= l3:suppkey l1:suppkey)
+                                    (> l3:receiptdate l3:commitdate))]))
                  (= n:nationkey s:nationkey)
                  (= n:name "SAUDI ARABIA"))
       :group [s_name s:name]
@@ -797,9 +795,7 @@
                                                     (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
                                          :group []]
                                 (c/avg c:acctbal)))
-                 (not (c/scalar [o orders
-                                 :when (= o:custkey c:custkey)]
-                        true)))
+                 (not (c/exists [o orders :when (= o:custkey c:custkey)])))
       :group [cntrycode cntrycode]
       :order [cntrycode :asc]]
     (c/tuple :cntrycode cntrycode,

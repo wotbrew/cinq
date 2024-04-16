@@ -39,6 +39,8 @@
 
 (defmacro scalar [query selection] `(first (q ~query ~selection)))
 
+(defmacro exists [query] `(scalar ~query true))
+
 (defmacro run! [query & body]
   `(doseq [f# (q ~query (fn [] ~@body))] (f#)))
 
