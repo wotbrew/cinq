@@ -202,7 +202,11 @@
 
     [::let ?ra ?bindings]
     (let [cols (columns ?ra)]
-      (into cols (map first ?bindings)))))
+      (into cols (map first ?bindings)))
+
+    [::without ?ra ?not-needed]
+    (let [cols (columns ?ra)]
+      (filterv (complement (set ?not-needed)) cols))))
 
 (defn dependent-cols* [cmap expr]
   (let [dmap (atom {})]
@@ -906,5 +910,68 @@
 
       ))
 
-(defn const-true-theta? [theta]
-  (or (empty? theta) (every? true? theta)))
+(declare prune-cols)
+
+(defn prune-cols* [ra expr req-cols]
+  (let [cols (columns ra)
+        req-cols (->> (expr/possible-dependencies cols expr)
+                      (into (set req-cols)))
+        new-ra (prune-cols ra req-cols)
+        not-needed (set (remove (set req-cols) (columns new-ra)))]
+    (if (seq not-needed)
+      [::without new-ra not-needed]
+      new-ra)))
+
+(defn prune-cols
+  [ra req-cols]
+  (m/match ra
+    [::project ?ra ?bindings]
+    [::project (prune-cols* ?ra (map second ?bindings) #{}) ?bindings]
+
+    [::where ?ra ?pred]
+    [::where (prune-cols* ?ra ?pred req-cols) ?pred]
+
+    [::join ?left ?right ?pred]
+    [::join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred req-cols) ?pred]
+
+    [::left-join ?left ?right ?pred]
+    [::left-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred req-cols) ?pred]
+
+    [::single-join ?left ?right ?pred]
+    [::single-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred req-cols) ?pred]
+
+    [::semi-join ?left ?right ?pred]
+    [::semi-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred #{}) ?pred]
+
+    [::anti-join ?left ?right ?pred]
+    [::anti-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred #{}) ?pred]
+
+    ;; todo scan
+    #_#_
+    [::scan ?src ?bindings]
+    nil
+
+
+    ;; todo group-project
+    #_#_
+    [::group-project ?ra ?bindings ?aggregates ?projection]
+            nil
+
+    [::apply ?mode ?left ?right]
+    [::apply ?mode (prune-cols* ?left ?right req-cols) (prune-cols* ?right nil req-cols)]
+
+    [::group-by ?ra ?bindings]
+    [::group-by (prune-cols* ?ra (map second ?bindings) req-cols) ?bindings]
+
+    [::order-by ?ra ?order-clauses]
+    [::order-by (prune-cols* ?ra (map first ?order-clauses) req-cols) ?order-clauses]
+
+    [::limit ?ra ?n]
+    [::limit (prune-cols* ?ra nil req-cols) ?n]
+
+    [::let ?ra ?bindings]
+    [::let (prune-cols* ?ra (map second ?bindings) req-cols) ?bindings]
+
+    _ ra
+
+    ))

@@ -182,7 +182,7 @@
      `(broadcast-reduce ~binding ~(sum-default binding expr) + ~expr))))
 
 (defmacro avg
-  ([col] `(let [col# ~col] (/ (sum col#) (count col#))))
+  ([col] `(let [col# ~col] (if (< 0 (count col#)) (/ (sum col#) (count col#)) 0.0)))
   ([binding expr]
    (if (simple-sum? binding expr)
      `(avg ~(first binding))

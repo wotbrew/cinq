@@ -15,13 +15,21 @@
 (defmacro p [query selection]
   (-> (parse query selection)
       optimize-plan
+      (plan/prune-cols #{})
       plan/stack-view
+      (->> (list `quote))))
+
+(defmacro ptree [query selection]
+  (-> (parse query selection)
+      optimize-plan
+      (plan/prune-cols #{})
       (->> (list `quote))))
 
 (defmacro q [query selection]
   (let [code (binding [parse/*env* &env]
                (-> (parse query selection)
                    optimize-plan
+                   (plan/prune-cols #{})
                    compile-plan))]
     ;; todo better representation
     `(vec ~code)))

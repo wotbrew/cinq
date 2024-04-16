@@ -106,7 +106,6 @@
     (> ?a ?b)
     [::plan/> ?a ?b]
 
-
     ;; bools
     (and & ?clause)
     (into [::plan/and] ?clause)

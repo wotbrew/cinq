@@ -3,7 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.instant :as inst]
-            [com.wotbrew.cinq :as c :refer [q]]
+            [com.wotbrew.cinq :as c :refer [q p ptree]]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
@@ -129,7 +129,7 @@
 (def sf-1 (delay (all-tables 1.0)))
 
 (defn q1 [{:keys [lineitem]}]
-  (q [l lineitem
+  (q [^Lineitem l lineitem
       :when (<= l:shipdate #inst "1998-09-02")
       :group [returnflag l:returnflag, linestatus l:linestatus]
       :order [returnflag :asc, linestatus :asc]]
@@ -157,11 +157,11 @@
   )
 
 (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
-  (q [p part
-      s supplier
-      ps partsupp
-      n nation
-      r region
+  (q [^Part p part
+      ^Supplier s supplier
+      ^Partsupp ps partsupp
+      ^Nation n nation
+      ^Region r region
       :when
       (and
         (= p:partkey ps:partkey)
@@ -205,9 +205,9 @@
 (deftest q2-test (check-answer #'q2 @sf-001))
 
 (defn q3 [{:keys [customer orders lineitem]}]
-  (q [c customer
-      o orders
-      l lineitem
+  (q [^Customer c customer
+      ^Order o orders
+      ^Lineitem l lineitem
       :when
       (and (= c:mktsegment "BUILDING")
            (= c:custkey o:custkey)
@@ -235,7 +235,7 @@
 
 (defn q4 [{:keys [orders, lineitem]}]
   ;; needs decor + semijoin
-  (q [o orders
+  (q [^Order o orders
       :when (and (>= o:orderdate #inst "1993-07-01")
                  (< o:orderdate #inst "1993-10-01")
                  ;; todo $exists
@@ -259,12 +259,12 @@
 (deftest q4-test (check-answer #'q4 @sf-001))
 
 (defn q5 [{:keys [customer, orders, lineitem, supplier, nation, region]}]
-  (q [c customer
-      o orders
-      l lineitem
-      s supplier
-      n nation
-      r region
+  (q [^Customer c customer
+      ^Order o orders
+      ^Lineitem l lineitem
+      ^Supplier s supplier
+      ^Nation n nation
+      ^Region r region
       :when (and (= c:custkey o:custkey)
                  (= l:orderkey o:orderkey)
                  (= l:suppkey s:suppkey)
@@ -290,7 +290,7 @@
   )
 
 (defn q6 [{:keys [lineitem]}]
-  (q [l lineitem
+  (q [^Lineitem l lineitem
       :when (and (>= l:shipdate #inst "1994-01-01")
                  (< l:shipdate #inst "1995-01-01")
                  (>= l:discount 0.05)
@@ -312,12 +312,12 @@
   (+ 1900 (.getYear date)))
 
 (defn q7 [{:keys [supplier lineitem orders customer nation]}]
-  (q [s supplier
-      l lineitem
-      o orders
-      c customer
-      n1 nation
-      n2 nation
+  (q [^Supplier s supplier
+      ^Lineitem l lineitem
+      ^Order o orders
+      ^Customer c customer
+      ^Nation n1 nation
+      ^Nation n2 nation
       :when (and (= s:suppkey l:suppkey)
                  (= o:orderkey l:orderkey)
                  (= c:custkey o:custkey)
@@ -351,14 +351,14 @@
   )
 
 (defn q8 [{:keys [part supplier region lineitem orders customer nation]}]
-  (q [p part
-      s supplier
-      l lineitem
-      o orders
-      c customer
-      n1 nation
-      n2 nation
-      r region
+  (q [^Part p part
+      ^Supplier s supplier
+      ^Lineitem l lineitem
+      ^Order o orders
+      ^Customer c customer
+      ^Nation n1 nation
+      ^Nation n2 nation
+      ^Region r region
       :when
       (and (= p:partkey l:partkey)
            (= s:suppkey l:suppkey)
@@ -393,12 +393,12 @@
   )
 
 (defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
-  (q [p part
-      s supplier
-      l lineitem
-      ps partsupp
-      o orders
-      n nation
+  (q [^Part p part
+      ^Supplier s supplier
+      ^Lineitem l lineitem
+      ^Partsupp ps partsupp
+      ^Order o orders
+      ^Nation n nation
       :when
       (and (= s:suppkey l:suppkey)
            (= ps:suppkey l:suppkey)
@@ -424,10 +424,10 @@
   )
 
 (defn q10 [{:keys [lineitem customer orders nation]}]
-  (q [c customer
-      o orders
-      l lineitem
-      n nation
+  (q [^Customer c customer
+      ^Order o orders
+      ^Lineitem l lineitem
+      ^Nation n nation
       :when
       (and (= c:custkey o:custkey)
            (= l:orderkey o:orderkey)
@@ -464,9 +464,9 @@
   )
 
 (defn q11 [{:keys [partsupp supplier nation]}]
-  (q [ps partsupp
-      s supplier
-      n nation
+  (q [^Partsupp ps partsupp
+      ^Supplier s supplier
+      ^Nation n nation
       :when
       (and (= ps:suppkey s:suppkey)
            (= s:nationkey n:nationkey)
@@ -495,8 +495,8 @@
   )
 
 (defn q12 [{:keys [orders lineitem]}]
-  (q [o orders
-      l lineitem
+  (q [^Order o orders
+      ^Lineitem l lineitem
       :when (and (= o:orderkey l:orderkey)
                  (contains? #{"MAIL", "SHIP"} l:shipmode)
                  (< l:commitdate l:receiptdate)
@@ -519,7 +519,7 @@
   )
 
 (defn q13 [{:keys [customer orders]}]
-  (q [c customer
+  (q [^Customer c customer
       :left-join [o orders (and (= c:custkey o:custkey) (re-find #"^(?!.*?special.*?requests)" o:comment))]
       :group [custkey c:custkey]
       :group [order-count (c/count o:orderkey)]
@@ -535,8 +535,8 @@
   )
 
 (defn q14 [{:keys [lineitem part]}]
-  (q [l lineitem
-      p part
+  (q [^Lineitem l lineitem
+      ^Part p part
       :when (and (= l:partkey p:partkey)
                  (>= l:shipdate #inst "1995-09-01")
                  (< l:shipdate #inst "1995-10-01"))
@@ -565,7 +565,7 @@
                     :let [total_revenue (c/sum (* l:extendedprice (- 1.0 l:discount)))]]
                   {:suppkey suppkey
                    :total_revenue total_revenue})]
-    (q [s supplier
+    (q [^Supplier s supplier
         r revenue
         :when (and (= s:suppkey r:suppkey)
                    (= r:total_revenue (c/scalar [r revenue :group []] (c/max r:total_revenue))))
@@ -585,8 +585,8 @@
   )
 
 (defn q16 [{:keys [partsupp part supplier]}]
-  (q [p part
-      ps partsupp
+  (q [^Part p part
+      ^Partsupp ps partsupp
       :when (and (= p:partkey ps:partkey)
                  (not= p:brand "Brand#45")
                  (not (c/like p:type "MEDIUM POLISHED%"))
@@ -614,8 +614,8 @@
   )
 
 (defn q17 [{:keys [lineitem part]}]
-  (q [l lineitem
-      p part
+  (q [^Lineitem l lineitem
+      ^Part p part
       :when (and (= p:partkey l:partkey)
                  (= p:brand "Brand#23")
                  (= p:container "MED BOX")
@@ -625,10 +625,9 @@
                                :group []]
                       (* 0.2 (c/avg l2:quantity)))))
       :group []]
-    (c/tuple :avg_yearly (/ (c/sum l:extendedprice) 7.0))))
+    (c/tuple :avg_yearly (when (pos? %count) (/ (c/sum l:extendedprice) 7.0)))))
 
-;; q17 does not test as our aggregates always return something for an empty input
-(deftest q17-test #_(check-answer #'q17 @sf-001))
+(deftest q17-test (check-answer #'q17 @sf-001))
 
 (comment
   (time (count (q17 @sf-005)))
@@ -642,9 +641,9 @@
                            :group [ok l:orderkey]
                            :when (> (c/sum l:quantity) 300)]
                          ok))]
-    (q [c customer
-        o orders
-        l lineitem
+    (q [^Customer c customer
+        ^Order o orders
+        ^Lineitem l lineitem
         :when (and (contains? orderkeys o:orderkey)
                    (= c:custkey o:custkey)
                    (= o:orderkey l:orderkey))
@@ -673,8 +672,8 @@
 ;; allow this with the l:partkey p:partkey condition in the OR as god intended
 
 (defn q19 [{:keys [lineitem part]}]
-  (q [l lineitem
-      p part
+  (q [^Lineitem l lineitem
+      ^Part p part
       :when (and (= l:partkey p:partkey)
                  (or (and (= p:brand "Brand#12")
                           (contains? #{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p:container)
@@ -709,8 +708,8 @@
   )
 
 (defn q20 [{:keys [supplier, nation, partsupp, lineitem, part]}]
-  (q [s supplier
-      n nation
+  (q [^Supplier s supplier
+      ^Nation n nation
       :when (and (contains? (c/scalar [ps partsupp
                                        :when (and (contains? (c/scalar [p part
                                                                         :when (str/starts-with? p:name "forest")
@@ -742,10 +741,10 @@
   )
 
 (defn q21 [{:keys [supplier lineitem orders nation]}]
-  (q [s supplier
-      l1 lineitem
-      o orders
-      n nation
+  (q [^Supplier s supplier
+      ^Lineitem l1 lineitem
+      ^Order o orders
+      ^Nation n nation
       :when (and (= s:suppkey l1:suppkey)
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
@@ -779,7 +778,7 @@
   )
 
 (defn q22 [{:keys [customer orders]}]
-  (q [c customer
+  (q [^Customer c customer
       :let [cntrycode (subs c:phone 0 2)]
       :when (and (contains? #{"13", "31", "23", "29", "30", "18", "17"} cntrycode)
                  (> c:acctbal (c/scalar [c customer
@@ -804,14 +803,12 @@
   (check-answer #'q22 @sf-001)
   )
 
-(deftest q22-test (check-answer #'q22 @sf-001))
-
 (comment
 
   (run-tests 'com.wotbrew.cinq.tpch-test)
 
-  ((requiring-resolve 'clj-async-profiler.core/serve-ui) 5000)
-  ((requiring-resolve 'clojure.java.browse/browse-url) "http://localhost:5000")
+  ((requiring-resolve 'clj-async-profiler.core/serve-ui) "localhost" 5000)
+  ((requiring-resolve 'clojure.java.browse/browse-url) "http://127.0.0.1:5000")
 
   (require 'criterium.core)
 
@@ -825,28 +822,34 @@
   (update-vals dataset count)
   (type (first (:lineitem dataset)))
 
+  (System/gc)
+
+  (defn run-tpch []
+    (let [timings
+          (vec (for [q [#'q1, #'q2, #'q3,
+                        #'q4, #'q5, #'q6,
+                        #'q7, #'q8, #'q9
+                        #'q10, #'q11, #'q12,
+                        #'q13, #'q14, #'q15,
+                        #'q16 #'q17, #'q18
+                        #'q19, #'q20, #'q21
+                        #'q22]]
+                 (let [start-ns (System/nanoTime)
+                       _ (count (q dataset))
+                       end-ns (System/nanoTime)]
+                   [(name (.toSymbol q)) (* 1e-6 (- end-ns start-ns))])))]
+      {:timings timings
+       :total (reduce + 0.0 (map second timings))}))
+
+  (run-tpch)
+
   ;; 0.05 graal array-seq 639ms
+  ;; 0.05 graal eager-loop 291ms
+  ;; 1.0 graal array-seq 15835ms
+  ;; 1.0 graal eager-loop 14965ms
+  ;; 1.0 graal eager-loop hinted 9314ms
   (clj-async-profiler.core/profile
-
-    (time
-      (let [timings
-            (vec (for [q [#'q1, #'q2, #'q3,
-                          #'q4, #'q5, #'q6,
-                          #'q7, #'q8, #'q9
-                          #'q10, #'q11, #'q12,
-                          #'q13, #'q14, #'q15,
-                          #'q16 #'q17, #'q18
-                          #'q19, #'q20, #'q21
-                          #'q22]]
-                   (let [_ (prn q)
-                         start-ns (System/nanoTime)
-                         _ (count (q dataset))
-                         end-ns (System/nanoTime)]
-                     [(name (.toSymbol q)) (* 1e-6 (- end-ns start-ns))])))]
-        {:timings timings
-         :total (reduce + 0.0 (map second timings))}
-
-        ))
+    (dotimes [x 1] (run-tpch))
 
     )
 
