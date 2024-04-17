@@ -5,9 +5,7 @@
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
-  (:import (clojure.lang Indexed RT)
-           (com.wotbrew.cinq CinqUtil)
-           (java.util ArrayList Arrays Comparator HashMap Iterator)
+  (:import (java.util ArrayList Comparator HashMap Iterator)
            (java.util.function BiConsumer BiFunction)))
 
 (set! *warn-on-reflection* true)
