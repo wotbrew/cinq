@@ -248,7 +248,7 @@
   (q [^Order o orders
       :when (and (>= o:orderdate #inst "1993-07-01")
                  (< o:orderdate #inst "1993-10-01")
-                 (c/exists [l lineitem
+                 (c/exists? [l lineitem
                             :when (and (= l:orderkey o:orderkey)
                                        (< l:commitdate l:receiptdate))]))
       :group [orderpriority o:orderpriority]
@@ -338,7 +338,7 @@
                  (<= #inst "1995-01-01" l:shipdate)
                  (<= l:shipdate #inst "1996-12-31"))
       :let [year (get-year l:shipdate)
-            volume (Double/valueOf (* l:extendedprice (- 1.0 l:discount)))]
+            volume (* l:extendedprice (- 1.0 l:discount))]
       :group [supp_nation n1:name
               cust_nation n2:name
               year year]
@@ -758,11 +758,11 @@
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
                  (> l1:receiptdate l1:commitdate)
-                 (c/exists
+                 (c/exists?
                    [^Lineitem l2 lineitem
                     :when (and (= l2:orderkey l1:orderkey)
                                (not= l2:suppkey l1:suppkey))])
-                 (not (c/exists
+                 (not (c/exists?
                         [^Lineitem l3 lineitem
                          :when (and (= l3:orderkey l1:orderkey)
                                     (not= l3:suppkey l1:suppkey)
@@ -795,7 +795,7 @@
                                                     (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
                                          :group []]
                                 (c/avg c:acctbal)))
-                 (not (c/exists [o orders :when (= o:custkey c:custkey)])))
+                 (not (c/exists? [o orders :when (= o:custkey c:custkey)])))
       :group [cntrycode cntrycode]
       :order [cntrycode :asc]]
     (c/tuple :cntrycode cntrycode,
@@ -851,10 +851,10 @@
   (run-tpch)
 
   ;; 0.05 graal array-seq 639ms
-  ;; 0.05 graal eager-loop 291ms
+  ;; 0.05 graal eager-loop 265ms
   ;; 1.0 graal array-seq 15835ms
   ;; 1.0 graal eager-loop 14965ms
-  ;; 1.0 graal eager-loop hinted 9314ms
+  ;; 1.0 graal eager-loop hinted 8184ms
   (clj-async-profiler.core/profile
     (dotimes [x 1] (run-tpch))
 

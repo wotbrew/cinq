@@ -10,6 +10,10 @@
 (defn field-sym [i]
   (symbol (str "field" i)))
 
+(definterface CinqMark
+  (getCinqMark ^Boolean [])
+  (setCinqMark ^void []))
+
 (def ^{:arglists '([sig])} compile-tuple-type
   (memoize
     (fn [sig]
@@ -17,8 +21,12 @@
             fields (for [[i tag] (map-indexed vector sig)]
                      (with-meta (field-sym i) {:tag (or tag `Object)}))
             o (gensym "o")
+            mark (gensym "mark")
             t (eval
-                `(deftype ~s ~(vec fields)
+                `(deftype ~s [~(with-meta mark {:unsynchronized-mutable true, :tag `Boolean}) ~@fields]
+                   CinqMark
+                   (getCinqMark [_#] ~mark)
+                   (setCinqMark [_#] (set! ~mark true))
                    Object
                    (equals [_# ~o]
                      (and (instance? ~s ~o)
@@ -39,11 +47,7 @@
 ;; compile tuple type and return ctor form
 (defn emit-tuple [ra]
   (let [{:keys [sym]} (compile-tuple-type (sig ra))]
-    `(new ~sym ~@(for [col (plan/columns ra)] col))))
-
-;; compile null type and return ctor form
-(defn emit-null-tuple [ra]
-  `(object-array ~(count (plan/columns ra))))
+    `(new ~sym false ~@(for [col (plan/columns ra)] col))))
 
 ;; return a hinted local for the ra tuple
 (defn tuple-local [ra]
@@ -56,6 +60,9 @@
   (if (= 'objects (:tag (meta t)))
     `(aget ~t ~i)
     `(~(symbol (str ".-" (field-sym i))) ~t)))
+
+(defn get-mark [t] `(.getCinqMark ~t))
+(defn set-mark [t] `(.setCinqMark ~t))
 
 (defn last-index-of [x xs]
   (loop [i 0
@@ -81,7 +88,7 @@
     (first key-exprs)
     (let [key-sig (mapv infer-type key-exprs)
           {:keys [sym]} (compile-tuple-type key-sig)]
-      `(new ~sym ~@(for [expr key-exprs] (if (= `Object (infer-type expr)) (clojure.lang.RT/box expr) expr))))))
+      `(new ~sym false ~@(for [expr key-exprs] (if (= `Object (infer-type expr)) (clojure.lang.RT/box expr) expr))))))
 
 ;; return a seq of get-col exprs against k for the (key) bindings
 (defn emit-key-args [k cols]
@@ -99,10 +106,11 @@
 (defn emit-tuple-column-binding
   ([t cols]
    (vec (interleave (map #(with-meta % {}) cols) (emit-tuple-arg-list t cols))))
-  ([t cols expr]
+  ([t cols expr] (emit-tuple-column-binding t cols expr #{}))
+  ([t cols expr remove-set]
    (let [used-in-expr (set (expr/possible-dependencies cols expr))]
      (vec (for [[i col] (map-indexed vector cols)
-                :when (used-in-expr col)
+                :when (and (used-in-expr col) (not (contains? remove-set col)))
                 form [(with-meta col {}) (get-field t i)]]
             form)))))
 

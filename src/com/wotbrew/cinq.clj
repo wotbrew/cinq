@@ -13,11 +13,13 @@
   (el/emit-list ra 0))
 
 (defmacro p [query selection]
-  (-> (parse query selection)
-      optimize-plan
-      (plan/prune-cols #{})
-      plan/stack-view
-      (->> (list `quote))))
+  (let [ctr (atom -1)]
+    (binding [plan/*gensym* (fn [pref] (symbol (str pref "__" (swap! ctr inc))))]
+      (-> (parse query selection)
+          optimize-plan
+          (plan/prune-cols #{})
+          plan/stack-view
+          (->> (list `quote))))))
 
 (defmacro ptree [query selection]
   (-> (parse query selection)
@@ -39,7 +41,7 @@
 
 (defmacro scalar [query selection] `(first (q ~query ~selection)))
 
-(defmacro exists [query] `(scalar ~query true))
+(defmacro exists? [query] `(scalar ~query true))
 
 (defmacro run! [query & body]
   `(doseq [f# (q ~query (fn [] ~@body))] (f#)))

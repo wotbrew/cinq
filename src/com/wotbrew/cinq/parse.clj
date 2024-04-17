@@ -163,7 +163,7 @@
       (into [::plan/like] ?args)
       'com.wotbrew.cinq/scalar
       [::plan/scalar-sq (parse (list* 'q ?args))]
-      'com.wotbrew.cinq/exists
+      'com.wotbrew.cinq/exists?
       [::plan/scalar-sq (parse (list* 'q (concat ?args [true])))]
 
       (if (and (n2n-rewrites (some-> (resolve *env* ?sym) .toSymbol))

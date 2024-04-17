@@ -8,7 +8,7 @@
   (:import (clojure.lang Indexed RT)
            (com.wotbrew.cinq CinqUtil)
            (java.util ArrayList Arrays Comparator HashMap Iterator)
-           (java.util.function BiFunction)))
+           (java.util.function BiConsumer BiFunction)))
 
 (set! *warn-on-reflection* true)
 
@@ -226,9 +226,8 @@
         right-cols (plan/columns right)
         cont-lambda (gensym "cont-lambda")
         theta-expressions (rewrite-expr [left right] theta)
-        right-t (t/tuple-local right)
-        i (gensym "i")]
-    `(let [build-fn# ~(build-side-function right right-key-expr)
+        right-t (t/tuple-local right)]
+    `(let [build-fn# ~(build-side-function left left-key-expr)
            ~ht (build-fn#)
            ~cont-lambda
            (fn [~left-t ~right-t]
@@ -236,21 +235,25 @@
                    ~@(t/emit-optional-column-binding right-t right-cols)]
                ~body))]
        ~(emit-loop
-          left
-          `(let [~left-t ~(t/emit-tuple left)]
-             (if-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [left] left-key-expr)))]
-               (loop [~i 0
-                      matched# false]
-                 (if (< ~i (.size ~al))
-                   (let [~right-t (.get ~al ~i)]
-                     ~(case (count theta-expressions)
-                        0
-                        `(do (~cont-lambda ~left-t ~right-t) (recur (unchecked-inc-int ~i) true))
-                        `(if ~(and ~@theta-expressions)
-                           (do (~cont-lambda ~left-t ~right-t) (recur (unchecked-inc-int ~i) true))
-                           (recur (unchecked-inc-int ~i) matched#))))
-                   (when-not matched# (~cont-lambda ~left-t nil))))
-               (~cont-lambda ~left-t nil)))))))
+          right
+          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
+             (dotimes [i# (.size ~al)]
+               (let [~left-t (.get ~al i#)
+                     ~@(t/emit-tuple-column-binding
+                         left-t
+                         left-cols
+                         ;; right shadows left if there is a collision
+                         ;; todo planner should ensure this cannot happen by auto gensym
+                         (set/difference (set left-cols)
+                                         (set right-cols)))]
+                 ~(emit-join-theta theta-expressions `(do ~(t/set-mark left-t) (~cont-lambda ~left-t ~(t/emit-tuple right))))))))
+       (.forEach ~ht (reify BiConsumer
+                       (accept [_# _# al#]
+                         (let [~al al#]
+                           (dotimes [i# (.size ~al)]
+                             (let [~left-t (.get ~al i#)]
+                               (when-not ~(t/get-mark left-t)
+                                 (~cont-lambda ~left-t nil)))))))))))
 
 (defn emit-equi-single-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
@@ -262,7 +265,45 @@
         cont-lambda (gensym "cont-lambda")
         theta-expressions (rewrite-expr [left right] theta)
         i (gensym "i")]
-    `(let [build-fn# ~(build-side-function right right-key-expr)
+    `(let [build-fn# ~(build-side-function left left-key-expr)
+           ~ht (build-fn#)
+           ~cont-lambda
+           (fn [~left-t ~right-t]
+             ~(t/set-mark left-t)
+             (let [~@(t/emit-tuple-column-binding left-t left-cols (vec (remove (set right-cols) left-cols)))
+                   ~@(t/emit-optional-column-binding right-t right-cols)]
+               ~body))]
+       ~(emit-loop
+          right
+          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
+             (loop [~i 0]
+               (when (< ~i (.size ~al))
+                 ~(case (count theta-expressions)
+                    0 `(~cont-lambda (.get ~al ~i) ~(t/emit-tuple right))
+                    `(let [~left-t (.get ~al ~i)
+                           ~@(t/emit-tuple-column-binding left-t left-cols theta (set right-cols))]
+                       (if (and ~@theta-expressions)
+                         (~cont-lambda ~left-t ~(t/emit-tuple right))
+                         (recur (unchecked-inc-int ~i)))))))
+             (~cont-lambda ~left-t nil)))
+       (.forEach ~ht (reify BiConsumer
+                       (accept [_# _# al#]
+                         (let [~al al#]
+                           (dotimes [i# (.size ~al)]
+                             (let [~left-t (.get ~al i#)]
+                               (when-not ~(t/get-mark left-t)
+                                 (~cont-lambda ~left-t nil)))))))))))
+
+(defn emit-equi-semi-join [left right left-key-expr right-key-expr theta body]
+  (let [al (with-meta (gensym "al") {:tag `ArrayList})
+        ht (with-meta (gensym "ht") {:tag `HashMap})
+        left-t (t/tuple-local left)
+        left-cols (plan/columns left)
+        right-cols (plan/columns right)
+        cont-lambda (gensym "cont-lambda")
+        theta-expressions (rewrite-expr [left right] theta)
+        right-t (t/tuple-local right)]
+    `(let [build-fn# ~(build-side-function left left-key-expr)
            ~ht (build-fn#)
            ~cont-lambda
            (fn [~left-t ~right-t]
@@ -270,67 +311,64 @@
                    ~@(t/emit-optional-column-binding right-t right-cols)]
                ~body))]
        ~(emit-loop
-          left
-          `(let [~left-t ~(t/emit-tuple left)]
-             (if-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [left] left-key-expr)))]
-               (loop [~i 0]
-                 (if (= ~i (.size ~al))
-                   (~cont-lambda ~left-t nil)
-                   ~(case (count theta-expressions)
-                      0 `(~cont-lambda ~left-t (.get ~al ~i))
-                      `(let [~right-t (.get ~al ~i)
-                             ~@(t/emit-tuple-column-binding right-t right-cols theta)]
-                         (if (and ~@theta-expressions)
-                           (~cont-lambda ~left-t ~right-t)
-                           (recur (unchecked-inc-int ~i)))))))
-               (~cont-lambda ~left-t nil)))))))
-
-(defn emit-equi-semi-join [left right left-key-expr right-key-expr theta body]
-  (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
-        right-t (t/tuple-local right)
-        right-cols (plan/columns right)
-        theta-expressions (rewrite-expr [left right] theta)
-        i (gensym "i")]
-    `(let [build-fn# ~(build-side-function right right-key-expr)
-           ~ht (build-fn#)]
-       ~(emit-loop
-          left
-          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [left] left-key-expr)))]
-             (loop [~i 0]
-               (when (< ~i (.size ~al))
-                 ~(case (count theta-expressions)
-                    0 body
-                    `(if (let [~right-t (.get ~al ~i)
-                               ~@(t/emit-tuple-column-binding right-t right-cols theta)]
-                           (and ~@theta-expressions))
-                       ~body
-                       (recur (unchecked-inc-int ~i)))))))))))
+          right
+          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
+             (dotimes [i# (.size ~al)]
+               (let [~left-t (.get ~al i#)]
+                 (when-not ~(t/get-mark left-t)
+                   (let [~@(t/emit-tuple-column-binding
+                             left-t
+                             left-cols
+                             ;; right shadows left if there is a collision
+                             ;; todo planner should ensure this cannot happen by auto gensym
+                             (set/difference (set left-cols)
+                                             (set right-cols)))]
+                     ~(emit-join-theta theta-expressions (t/set-mark left-t))))))))
+       (.forEach ~ht (reify BiConsumer
+                       (accept [_# _# al#]
+                         (let [~al al#]
+                           (dotimes [i# (.size ~al)]
+                             (let [~left-t (.get ~al i#)]
+                               (when ~(t/get-mark left-t)
+                                 (~cont-lambda ~left-t nil)))))))))))
 
 (defn emit-equi-anti-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
         ht (with-meta (gensym "ht") {:tag `HashMap})
-        right-t (t/tuple-local right)
+        left-t (t/tuple-local left)
+        left-cols (plan/columns left)
         right-cols (plan/columns right)
+        cont-lambda (gensym "cont-lambda")
         theta-expressions (rewrite-expr [left right] theta)
-        i (gensym "i")
-        empty-array-list (gensym "empty-array-list")]
-    `(let [build-fn# ~(build-side-function right right-key-expr)
+        right-t (t/tuple-local right)]
+    `(let [build-fn# ~(build-side-function left left-key-expr)
            ~ht (build-fn#)
-           ~empty-array-list (ArrayList.)]
+           ~cont-lambda
+           (fn [~left-t ~right-t]
+             (let [~@(t/emit-tuple-column-binding left-t left-cols (vec (remove (set right-cols) left-cols)))
+                   ~@(t/emit-optional-column-binding right-t right-cols)]
+               ~body))]
        ~(emit-loop
-          left
-          `(let [~al (.getOrDefault ~ht ~(t/emit-key (rewrite-expr [left] left-key-expr)) ~empty-array-list)]
-             (loop [~i 0]
-               (if (= ~i (.size ~al))
-                 ~body
-                 ~(case (count theta-expressions)
-                    0 nil
-                    `(if (let [~right-t (.get ~al ~i)
-                               ~@(t/emit-tuple-column-binding right-t right-cols theta)]
-                           (and ~@theta-expressions))
-                       nil
-                       (recur (unchecked-inc-int ~i)))))))))))
+          right
+          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
+             (dotimes [i# (.size ~al)]
+               (let [~left-t (.get ~al i#)]
+                 (when-not ~(t/get-mark left-t)
+                   (let [~@(t/emit-tuple-column-binding
+                             left-t
+                             left-cols
+                             ;; right shadows left if there is a collision
+                             ;; todo planner should ensure this cannot happen by auto gensym
+                             (set/difference (set left-cols)
+                                             (set right-cols)))]
+                     ~(emit-join-theta theta-expressions (t/set-mark left-t))))))))
+       (.forEach ~ht (reify BiConsumer
+                       (accept [_# _# al#]
+                         (let [~al al#]
+                           (dotimes [i# (.size ~al)]
+                             (let [~left-t (.get ~al i#)]
+                               (when-not ~(t/get-mark left-t)
+                                 (~cont-lambda ~left-t nil)))))))))))
 
 (defn emit-column [al o col i]
   (let [[col-ctor a-ctor prim-conv]

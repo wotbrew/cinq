@@ -637,7 +637,7 @@
 
 (defn hoist-aggregates [group-columns projection-bindings]
   (let [smap (atom {})
-        new-sym (fn [expr] (or (get @smap expr) (get (swap! smap assoc expr (gensym "agg")) expr)))
+        new-sym (fn [expr] (or (get @smap expr) (get (swap! smap assoc expr (*gensym* "agg")) expr)))
         aggregates (->> (tree-seq seqable? seq (mapv second projection-bindings))
                         (keep (fn [expr] (when (aggregate? expr) [(new-sym expr) expr])))
                         (distinct)
@@ -946,11 +946,10 @@
     [::anti-join ?left ?right ?pred]
     [::anti-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred #{}) ?pred]
 
-    ;; todo scan
+    ;; todo only add this one conveying self tag is done differently (right now removing self when redudant stops type hints)
     #_#_
     [::scan ?src ?bindings]
-    nil
-
+    [::scan ?src (filterv (fn [[col]] (contains? req-cols col)) ?bindings)]
 
     ;; todo group-project
     #_#_
