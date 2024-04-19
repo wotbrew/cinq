@@ -944,7 +944,8 @@
       push-lookups
       rewrite-fuse
       rewrite-join-collect
-      rewrite-join-order))
+      rewrite-join-order
+      rewrite-logical))
 
 (defn equi-theta [left right pred]
   (m/match pred
