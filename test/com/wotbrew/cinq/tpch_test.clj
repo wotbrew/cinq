@@ -30,7 +30,7 @@
               (symbol (str/join "_" (rest (str/split (.getColumnName c) #"_" 2))))))))
 
   )
-(defrecord Customer [^long custkey name address nationkey phone acctbal mktsegment comment])
+(defrecord Customer [^long custkey name address ^long nationkey phone ^double acctbal mktsegment comment])
 
 (defrecord Order [^long orderkey
                   ^long custkey
@@ -59,7 +59,7 @@
    shipinstruct
    shipmode
    comment])
-(defrecord Part [^long partkey name mfgr brand type size container ^double retailprice comment])
+(defrecord Part [^long partkey name mfgr brand type ^long size container ^double retailprice comment])
 (defrecord Partsupp [^long partkey ^long suppkey ^long availqty ^double supplycost comment])
 (defrecord Supplier [^long suppkey name address ^long nationkey phone ^double acctbal comment])
 (defrecord Nation [^long nationkey name ^long regionkey comment])
@@ -199,10 +199,10 @@
         (= s:nationkey n:nationkey)
         (= n:regionkey r:regionkey)
         (= r:name "EUROPE")
-        (= ps:supplycost (c/scalar [ps partsupp
-                                    s supplier
-                                    n nation
-                                    r region
+        (= ps:supplycost (c/scalar [^Partsupp ps partsupp
+                                    ^Supplier s supplier
+                                    ^Nation n nation
+                                    ^Region r region
                                     :when (and (= p:partkey ps:partkey)
                                                (= s:suppkey ps:suppkey)
                                                (= s:nationkey n:nationkey)
@@ -266,9 +266,9 @@
   (q [^Order o orders
       :when (and (>= o:orderdate #inst "1993-07-01")
                  (< o:orderdate #inst "1993-10-01")
-                 (c/exists? [l lineitem
-                            :when (and (= l:orderkey o:orderkey)
-                                       (< l:commitdate l:receiptdate))]))
+                 (c/exists? [^Lineitem l lineitem
+                             :when (and (= l:orderkey o:orderkey)
+                                        (< l:commitdate l:receiptdate))]))
       :group [orderpriority o:orderpriority]
       :order [orderpriority :asc]]
     (c/tuple
@@ -499,9 +499,9 @@
            (= n:name "GERMANY"))
       :group [ps_partkey ps:partkey]
       :let [value (c/sum (* ps:supplycost ps:availqty))]
-      :when (> value (c/scalar [ps partsupp
-                                s supplier
-                                n nation
+      :when (> value (c/scalar [^Partsupp ps partsupp
+                                ^Supplier s supplier
+                                ^Nation n nation
                                 :when
                                 (and (= ps:suppkey s:suppkey)
                                      (= s:nationkey n:nationkey)
@@ -618,8 +618,7 @@
                  (not= p:brand "Brand#45")
                  (not (str/starts-with? p:type "MEDIUM POLISHED"))
                  (contains? #{49, 14, 23, 45, 19, 3, 36, 9} p:size)
-                 (not (contains? (c/scalar [s supplier
-                                            ;; todo replace with like once it can handle everything
+                 (not (contains? (c/scalar [^Supplier s supplier
                                             :when (re-find #".*?Customer.*?Complaints.*?" s:comment)
                                             :group []]
                                    (set s:suppkey))
@@ -664,7 +663,7 @@
 
 (defn q18 [{:keys [customer orders lineitem]}]
   ;; TODO make this a sub query without weirdness
-  (let [orderkeys (set (q [l lineitem
+  (let [orderkeys (set (q [^Lineitem l lineitem
                            :group [ok l:orderkey]
                            :when (> (c/sum l:quantity) 300)]
                          ok))]
@@ -738,12 +737,12 @@
   (q [^Supplier s supplier
       ^Nation n nation
       :when (and (contains? (c/scalar [ps partsupp
-                                       :when (and (contains? (c/scalar [p part
+                                       :when (and (contains? (c/scalar [^Part p part
                                                                         :when (str/starts-with? p:name "forest")
                                                                         :group []]
                                                                (set p:partkey))
                                                              ps:partkey)
-                                                  (> ps:availqty (c/scalar [l lineitem
+                                                  (> ps:availqty (c/scalar [^Lineitem l lineitem
                                                                             :when (and (= l:partkey ps:partkey)
                                                                                        (= l:suppkey ps:suppkey)
                                                                                        (>= l:shipdate #inst "1994-01-01")
@@ -808,7 +807,7 @@
   (q [^Customer c customer
       :let [cntrycode (subs c:phone 0 2)]
       :when (and (contains? #{"13", "31", "23", "29", "30", "18", "17"} cntrycode)
-                 (> c:acctbal (c/scalar [c customer
+                 (> c:acctbal (c/scalar [^Customer c customer
                                          :when (and (> c:acctbal 0.0)
                                                     (contains? #{"13", "31", "23", "29", "30", "18", "17"} (subs c:phone 0 2)))
                                          :group []]
