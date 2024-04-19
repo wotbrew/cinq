@@ -805,7 +805,9 @@
               original-order (zipmap ?rels (range))]
 
             ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
+            ;; this is not good. Look at minimum spanning tree algs
             ;; todo if the user hints cards to us we will want to use that for ordering
+            ;; See https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf
             (loop [unsatisfied-predicates reordable-preds
                    pending-relations (set ?rels)
                    ra nil
