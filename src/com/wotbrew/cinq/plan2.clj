@@ -801,7 +801,8 @@
   (-> (r/match
         [::join* ?rels ?preds]
         (let [_ (assert (seq ?rels))
-              {reordable-preds true, outer-preds false} (group-by expr/pred-can-be-reordered? ?preds)]
+              {reordable-preds true, outer-preds false} (group-by expr/pred-can-be-reordered? ?preds)
+              original-order (zipmap ?rels (range))]
 
             ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
             ;; todo if the user hints cards to us we will want to use that for ordering
@@ -811,9 +812,12 @@
                    outer-where outer-preds]
               (if (seq unsatisfied-predicates)
                 (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
-                      cost (fn [pred] (count (dependent-relations pred)))
+                      cost (fn [pred]
+                             (let [dep-rels (dependent-relations pred)]
+                               [(count dep-rels)
+                                (reduce min Long/MAX_VALUE (map original-order dep-rels))]))
                       [pred & unsatisfied-predicates] (sort-by cost unsatisfied-predicates)
-                      add-relations (dependent-relations pred)]
+                      add-relations (sort-by original-order (dependent-relations pred))]
                   (recur unsatisfied-predicates
                          (reduce disj pending-relations add-relations)
                          (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra add-relations)]
