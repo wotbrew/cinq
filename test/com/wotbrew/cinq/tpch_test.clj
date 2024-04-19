@@ -185,11 +185,11 @@
   )
 
 (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
-  (q [^Part p part
-      ^Supplier s supplier
-      ^Partsupp ps partsupp
+  (q [^Region r region
       ^Nation n nation
-      ^Region r region
+      ^Supplier s supplier
+      ^Part p part
+      ^Partsupp ps partsupp
       :when
       (and
         (= p:partkey ps:partkey)
@@ -285,12 +285,12 @@
 (deftest q4-test (check-answer #'q4 @sf-001))
 
 (defn q5 [{:keys [customer, orders, lineitem, supplier, nation, region]}]
-  (q [^Customer c customer
-      ^Order o orders
+  (q [^Order o orders
+      ^Customer c customer
       ^Lineitem l lineitem
       ^Supplier s supplier
-      ^Nation n nation
       ^Region r region
+      ^Nation n nation
       :when (and (= c:custkey o:custkey)
                  (= l:orderkey o:orderkey)
                  (= l:suppkey s:suppkey)
@@ -349,6 +349,11 @@
                  (= c:custkey o:custkey)
                  (= s:nationkey n1:nationkey)
                  (= c:nationkey n2:nationkey)
+
+                 ;; good speed up if we can push down preds like this
+                 #_(or (= "FRANCE" n1:name) (= "GERMANY" n1:name))
+                 #_(or (= "FRANCE" n2:name) (= "GERMANY" n2:name))
+
                  (or (and (= "FRANCE" n1:name)
                           (= "GERMANY" n2:name))
                      (and (= "GERMANY" n1:name)
@@ -377,14 +382,14 @@
   )
 
 (defn q8 [{:keys [part supplier region lineitem orders customer nation]}]
-  (q [^Part p part
+  (q [^Region r region
+      ^Part p part
       ^Supplier s supplier
       ^Lineitem l lineitem
       ^Order o orders
       ^Customer c customer
       ^Nation n1 nation
       ^Nation n2 nation
-      ^Region r region
       :when
       (and (= p:partkey l:partkey)
            (= s:suppkey l:suppkey)
@@ -420,11 +425,11 @@
 
 (defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
   (q [^Part p part
-      ^Supplier s supplier
       ^Lineitem l lineitem
+      ^Supplier s supplier
       ^Partsupp ps partsupp
-      ^Order o orders
       ^Nation n nation
+      ^Order o orders
       :when
       (and (= s:suppkey l:suppkey)
            (= ps:suppkey l:suppkey)
@@ -450,10 +455,10 @@
   )
 
 (defn q10 [{:keys [lineitem customer orders nation]}]
-  (q [^Customer c customer
+  (q [^Nation n nation
+      ^Customer c customer
       ^Order o orders
       ^Lineitem l lineitem
-      ^Nation n nation
       :when
       (and (= c:custkey o:custkey)
            (= l:orderkey o:orderkey)
@@ -490,9 +495,9 @@
   )
 
 (defn q11 [{:keys [partsupp supplier nation]}]
-  (q [^Partsupp ps partsupp
+  (q [^Nation n nation
       ^Supplier s supplier
-      ^Nation n nation
+      ^Partsupp ps partsupp
       :when
       (and (= ps:suppkey s:suppkey)
            (= s:nationkey n:nationkey)
@@ -547,7 +552,7 @@
 (defn q13 [{:keys [customer orders]}]
   (q [^Customer c customer
       :left-join [o orders (and (= c:custkey o:custkey)
-                                (re-find #"^(?!.*?special.*?requests)" o:comment))]
+                                (not (re-find #"special.*?requests" o:comment)))]
       :group [custkey c:custkey]
       :group [order-count (c/count o:orderkey)]
       :order [(c/count) :desc, order-count :desc]]
@@ -640,8 +645,8 @@
   )
 
 (defn q17 [{:keys [lineitem part]}]
-  (q [^Lineitem l lineitem
-      ^Part p part
+  (q [^Part p part
+      ^Lineitem l lineitem
       :when (and (= p:partkey l:partkey)
                  (= p:brand "Brand#23")
                  (= p:container "MED BOX")
@@ -667,8 +672,8 @@
                            :group [ok l:orderkey]
                            :when (> (c/sum l:quantity) 300)]
                          ok))]
-    (q [^Customer c customer
-        ^Order o orders
+    (q [^Order o orders
+        ^Customer c customer
         ^Lineitem l lineitem
         :when (and (contains? orderkeys o:orderkey)
                    (= c:custkey o:custkey)
@@ -701,27 +706,23 @@
   (q [^Lineitem l lineitem
       ^Part p part
       :when (and (= l:partkey p:partkey)
+                 (= l:shipinstruct "DELIVER IN PERSON")
+                 (contains? #{"AIR" "AIR REG"} l:shipmode)
                  (or (and (= p:brand "Brand#12")
                           (contains? #{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p:container)
                           (>= l:quantity 1)
                           (<= l:quantity 11)
-                          (<= 1 p:size 5)
-                          (contains? #{"AIR" "AIR REG"} l:shipmode)
-                          (= l:shipinstruct "DELIVER IN PERSON"))
+                          (<= 1 p:size 5))
                      (and (= p:brand "Brand#23")
                           (contains? #{"MED BAG" "MED BOX" "MED PKG" "MED PACK"} p:container)
                           (>= l:quantity 10)
                           (<= l:quantity 20)
-                          (<= 1 p:size 10)
-                          (contains? #{"AIR" "AIR REG"} l:shipmode)
-                          (= l:shipinstruct "DELIVER IN PERSON"))
+                          (<= 1 p:size 10))
                      (and (= p:brand "Brand#34")
                           (contains? #{"LG CASE" "LG BOX" "LG PACK" "LG PKG"} p:container)
                           (>= l:quantity 20)
                           (<= l:quantity 30)
-                          (<= 1 p:size 15)
-                          (contains? #{"AIR" "AIR REG"} l:shipmode)
-                          (= l:shipinstruct "DELIVER IN PERSON"))))
+                          (<= 1 p:size 15))))
       :group []]
     (c/tuple :revenue (c/sum (* l:extendedprice (- 1.0 l:discount))))))
 
@@ -734,9 +735,9 @@
   )
 
 (defn q20 [{:keys [supplier, nation, partsupp, lineitem, part]}]
-  (q [^Supplier s supplier
-      ^Nation n nation
-      :when (and (contains? (c/scalar [ps partsupp
+  (q [^Nation n nation
+      ^Supplier s supplier
+      :when (and (contains? (c/scalar [^Partsupp ps partsupp
                                        :when (and (contains? (c/scalar [^Part p part
                                                                         :when (str/starts-with? p:name "forest")
                                                                         :group []]
@@ -767,10 +768,10 @@
   )
 
 (defn q21 [{:keys [supplier lineitem orders nation]}]
-  (q [^Supplier s supplier
-      ^Lineitem l1 lineitem
+  (q [^Nation n nation
+      ^Supplier s supplier
       ^Order o orders
-      ^Nation n nation
+      ^Lineitem l1 lineitem
       :when (and (= s:suppkey l1:suppkey)
                  (= o:orderkey l1:orderkey)
                  (= o:orderstatus "F")
@@ -865,13 +866,15 @@
       {:timings timings
        :total (reduce + 0.0 (map second timings))}))
 
-  (run-tpch)
+  (require 'criterium.core)
+  (criterium.core/quick-bench
+   (run-tpch)
+   )
 
   ;; 0.05 graal array-seq 639ms
-  ;; 0.05 graal eager-loop 265ms
   ;; 1.0 graal array-seq 15835ms
-  ;; 1.0 graal eager-loop 14965ms
-  ;; 1.0 graal eager-loop hinted 8184ms
+  ;; 0.05 graal eager-loop 168ms
+  ;; 1.0 graal eager-loop 4398ms
   (clj-async-profiler.core/profile
     (dotimes [x 1] (run-tpch))
 
