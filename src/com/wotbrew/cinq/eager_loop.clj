@@ -431,6 +431,9 @@
   (if (empty? bindings)
     ;; group all
     (let [t (t/tuple-local ra)]
+      ;; a better form might be (emit-iter-loop ra variables loop-variables loop-body loop-finished)
+      ;; would allow a totally eager pass without the emit-iterator here
+      ;; could emit specialised loops for Vector etc as IReduce is often the fastest thing to do even with the virtual calls
       `(let [iter# ~(emit-iterator ra)]
          (loop [~@(for [[_ agg] agg-bindings
                         [acc init] agg
