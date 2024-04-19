@@ -541,7 +541,7 @@
                                 (expr/pred-can-be-reordered? %))
                           ?preds)))
     ;; =>
-    (let [[push-left keep-pred] ((juxt filter remove #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds))]
+    (let [[push-left keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds)]
       [::join [::where ?left (reduce conjoin-predicates true push-left)]
        ?right
        (reduce conjoin-predicates true keep-pred)])
@@ -557,7 +557,7 @@
                                 (expr/pred-can-be-reordered? %))
                           ?preds)))
     ;; =>
-    (let [[push-right keep-pred] ((juxt filter remove #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds))]
+    (let [[push-right keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds)]
       [::join ?left
        [::where ?right (reduce conjoin-predicates true push-right)]
        (reduce conjoin-predicates true keep-pred)])
