@@ -529,17 +529,39 @@
     ;;endregion
 
     ;; region non dependent pred past join
+
     (m/and [::join ?left ?right ?pred]
            (m/guard (not-dependent? ?right ?pred))
            (m/guard (expr/pred-can-be-reordered? ?pred)))
     ;; =>
     [::join [::where ?left ?pred] ?right true]
 
+    (m/and [::join ?left ?right [::and & ?preds]]
+           (m/guard (some #(and (not-dependent? ?right %)
+                                (expr/pred-can-be-reordered? %))
+                          ?preds)))
+    ;; =>
+    (let [[push-left keep-pred] ((juxt filter remove #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds))]
+      [::join [::where ?left (reduce conjoin-predicates true push-left)]
+       ?right
+       (reduce conjoin-predicates true keep-pred)])
+
     (m/and [::join ?left ?right ?pred]
            (m/guard (not-dependent? ?left ?pred))
            (m/guard (expr/pred-can-be-reordered? ?pred)))
     ;; =>
     [::join ?left [::where ?right ?pred] true]
+
+    (m/and [::join ?left ?right [::and & ?preds]]
+           (m/guard (some #(and (not-dependent? ?left %)
+                                (expr/pred-can-be-reordered? %))
+                          ?preds)))
+    ;; =>
+    (let [[push-right keep-pred] ((juxt filter remove #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds))]
+      [::join ?left
+       [::where ?right (reduce conjoin-predicates true push-right)]
+       (reduce conjoin-predicates true keep-pred)])
+
     ;; endregion
 
     ;; region where fusion
