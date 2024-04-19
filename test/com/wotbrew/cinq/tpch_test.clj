@@ -139,6 +139,24 @@
 (def sf-1 (delay (all-tables 1.0)))
 
 (defn q1 [{:keys [lineitem]}]
+
+  #_
+  (->> linetem
+       (filter (fn [{:keys [shipdate]}] (<= (compare shipdate #inst "1998-09-02") 0)))
+       (group-by (juxt :returnflag :linestatus))
+       (sort-by key)
+       (map (fn [[returnflag linestatus] lineitems]
+              (c/tuple :l_returnflag returnflag
+                       :l_linestatus linestatus
+                       :sum_qty (reduce + (map :quantity lineitems))
+                       :sum_base_price (reduce + (map :extendedprice lineitems))
+                       :sum_disc_price (reduce + (map (fn [{:keys [extendedprice, discount]}] (* extendedprice (- 1.0 discount))) lineitems))
+                       :sum_charge (reduce + (map (fn [{:keys [extendedprice, discount, tax]}] (* extendedprice (- 1.0 discount) (+ 1.0 tax))) lineitems))
+                       :avg_qty (/ (reduce + (map :quantity lineitems)) (max 1 (count lineitems)))
+                       :avg_price (/ (reduce + (map :extendedprice lineitems)) (max 1 (count lineitems)))
+                       :avg_disc (/ (reduce + (map :discount lineitems)) (max 1 (count lineitems)))
+                       :count_order (count lineitems)))))
+
   (q [^Lineitem l lineitem
       :when (<= l:shipdate #inst "1998-09-02")
       :group [returnflag l:returnflag, linestatus l:linestatus]
