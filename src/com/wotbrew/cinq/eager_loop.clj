@@ -427,6 +427,81 @@
              ~body))
          ht#))))
 
+(defn emit-group-project [ra bindings agg-bindings new-projection body]
+  (if (empty? bindings)
+    ;; group all
+    (let [t (t/tuple-local ra)]
+      `(let [iter# ~(emit-iterator ra)]
+         (loop [~@(for [[_ agg] agg-bindings
+                        [acc init] agg
+                        form [acc (rewrite-expr [] init)]]
+                    form)]
+           (if (.hasNext iter#)
+             (let [~t (.next iter#)
+                   ~@(t/emit-tuple-column-binding t
+                                                  (plan/columns ra)
+                                                  (rewrite-expr [ra]
+                                                                (->> (mapcat second agg-bindings)
+                                                                     (map (fn [[_acc _init expr]] expr))
+                                                                     vec)))]
+               (recur ~@(for [[_ agg] agg-bindings
+                              [_ _ expr] agg]
+                          (rewrite-expr [ra] expr))))
+             (let [~@(for [[sym _ completion] agg-bindings
+                           form [sym (rewrite-expr [] completion)]]
+                       form)
+                   ~@(mapcat (fn [[sym expr]] [sym (rewrite-expr [] expr)]) new-projection)]
+               ~body)))))
+
+    ;; group bindings
+    (let [o (t/tuple-local ra)
+          cols (plan/columns ra)
+          k (t/key-local (mapv second bindings))
+          al (with-meta (gensym "al") {:tag `ArrayList})]
+      `(let [rs# ~(emit-list ra)
+             ht# (HashMap.)]
+         ;; agg
+         (run!
+           (fn [~o]
+             (let [~@(t/emit-tuple-column-binding o cols (mapv second bindings))
+                   ~k ~(t/emit-key (rewrite-expr [ra] (map second bindings)))
+                   f# (reify BiFunction
+                        (apply [_# _# ~(with-meta al {})]
+                          (let [~al (or ~al (ArrayList.))]
+                            (.add ~al ~o)
+                            ~al)))]
+               (.compute ht# ~k f#)))
+           rs#)
+         ;; emit results
+         (run!
+           (fn [[~k ~al]]
+             (let [~@(t/emit-key-bindings k (map first bindings))]
+               (loop [i# 0
+                      ~@(for [[_ agg] agg-bindings
+                              [acc init] agg
+                              form [acc (rewrite-expr [] init)]]
+                          form)]
+                 (if (< i# (.size ~al))
+                   (let [~o (.get ~al i#)
+                         ~@(t/emit-tuple-column-binding o
+                                                        (plan/columns ra)
+                                                        (rewrite-expr [ra]
+                                                                      (->> (mapcat second agg-bindings)
+                                                                           (map (fn [[_acc _init expr]] expr))
+                                                                           vec)))]
+                     (recur (unchecked-inc-int i#)
+                            ~@(for [[_ agg] agg-bindings
+                                    [_ _ expr] agg]
+                                (rewrite-expr [ra] expr))))
+                   (let [~@(for [[sym _ completion] agg-bindings
+                                 form [sym (rewrite-expr [] completion)]]
+                             form)
+                         ~@(mapcat (fn [[sym expr]] [sym (rewrite-expr [] expr)]) new-projection)]
+                     ~body)))))
+           ht#)))
+
+    ))
+
 (defn emit-order-by [ra order-clauses body]
   (let [o (t/tuple-local ra)
         a (t/tuple-local ra)
@@ -529,6 +604,9 @@
     (if (empty? ?bindings)
       (emit-group-all ?ra body)
       (emit-group-by ?ra ?bindings body))
+
+    [::plan/group-project ?ra ?bindings ?aggs ?new-projection]
+    (emit-group-project ?ra ?bindings ?aggs ?new-projection body)
 
     [::plan/order-by ?ra ?order-clauses]
     (emit-order-by ?ra ?order-clauses body)

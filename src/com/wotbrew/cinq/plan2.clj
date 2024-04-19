@@ -6,6 +6,7 @@
             [com.wotbrew.cinq.column]
             [meander.strategy.epsilon :as r])
   (:import (clojure.lang IRecord)
+           (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.column Column DoubleColumn LongColumn)
            (java.lang.reflect Field)))
 
@@ -164,7 +165,7 @@
     (mapv first ?bindings)
 
     [::group-project ?ra ?bindings ?aggregates ?projection]
-    (mapv first ?bindings)
+    (mapv first ?projection)
 
     [::apply :left-join ?left ?right]
     (into (columns ?left) (mapv optional-tag (columns ?right)))
@@ -185,7 +186,7 @@
     (into (columns ?left) (mapv optional-tag (columns ?right)))
 
     [::single-join ?left ?right _]
-    (into (columns ?left) (columns ?right))
+    (into (columns ?left) (mapv optional-tag (columns ?right)))
 
     [::group-by ?ra ?bindings]
     (let [cols (columns ?ra)]
@@ -597,15 +598,64 @@
 ;; where columns do not leak out of the projection
 (def ^:dynamic *group-project-fusion* false)
 
+(defn infer-type [cols expr]
+  (let [col-types (zipmap cols (map (comp :tag meta) cols))
+        lower-bound
+        (fn [a b]
+          (cond
+            (nil? a) nil
+            (nil? b) nil
+            (= 'double a) 'double
+            (= 'double b) 'double
+            (and (= 'long a) (= 'long b)) 'long
+            :else nil))
+        local-infer
+        (fn local-infer [expr]
+          (cond
+            (symbol? expr) (col-types expr nil)
+
+            (int? expr) 'long
+            (float? expr) 'double
+
+            :else
+            (m/match expr
+
+              [::apply-n2n clojure.core/+ ?a ?b]
+              (let [a-t (local-infer ?a)
+                    b-t (local-infer ?b)]
+                (lower-bound a-t b-t))
+
+              [::apply-n2n clojure.core/* ?a ?b]
+              (let [a-t (local-infer ?a)
+                    b-t (local-infer ?b)]
+                (lower-bound a-t b-t))
+
+              [::apply-n2n clojure.core/- ?a ?b]
+              (let [a-t (local-infer ?a)
+                    b-t (local-infer ?b)]
+                (lower-bound a-t b-t))
+
+              [::apply-n2n clojure.core// ?a ?b]
+              (let [a-t (local-infer ?a)
+                    b-t (local-infer ?b)]
+                (lower-bound a-t b-t))
+              _ nil)))]
+    (local-infer expr)))
+
 (defn aggregate-defaults [cols expr]
-  (m/match expr
-    [::count] [`0]
-    [::count ?expr] [`(Long/valueOf 0)]
-    [::sum ?expr] [`(Long/valueOf 0)]
-    [::avg ?expr] [`(Long/valueOf 0) 0]
-    [::min ?expr] [nil]
-    [::max ?expr] [nil]
-    _ (throw (ex-info "Unknown aggregate" {:expr expr}))))
+  (let [zero (fn [expr]
+               (condp = (infer-type cols expr)
+                 'double 0.0
+                 'long 0
+                 `(Long/valueOf 0)))]
+    (m/match expr
+      [::count] [`0]
+      [::count ?expr] [(zero ?expr)]
+      [::sum ?expr] [(zero ?expr)]
+      [::avg ?expr] [(zero ?expr) 0]
+      [::min ?expr] [nil]
+      [::max ?expr] [nil]
+      _ (throw (ex-info "Unknown aggregate" {:expr expr})))))
 
 (defn aggregate-reduction [acc-syms expr]
   ;; multiples
@@ -613,10 +663,21 @@
     (m/match expr
       [::count] [`(unchecked-inc ~acc-sym)]
       [::count ?expr] [`(if ~?expr (unchecked-inc ~acc-sym) ~acc-sym)]
-      [::sum ?expr] [`(+ ~acc-sym ?expr)]
-      [::avg ?expr] [`(+ ~acc-sym ?expr) (unchecked-inc-int ~(second acc-syms))]
+      [::sum ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr)]
+      [::avg ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr) `(unchecked-inc-int ~(second acc-syms))]
+      [::min ?expr] [`(CinqUtil/minStep ~acc-sym ~?expr)]
+      [::max ?expr] [`(CinqUtil/maxStep ~acc-sym ~?expr)]
       ;; todo min/max
       _ (throw (ex-info "Unknown aggregate" {:expr expr})))))
+
+(defn aggregate-completion [acc-syms expr]
+  (let [acc-sym (first acc-syms)]
+    (m/match expr
+      [::count] acc-sym
+      [::count ?expr] acc-sym
+      [::sum ?expr] acc-sym
+      [::avg ?expr] `[::apply-n2n / ~acc-sym [::apply-n2n max 1 ~(second acc-syms)]]
+      _ acc-sym)))
 
 (defn aggregate? [expr]
   (m/match expr
@@ -656,14 +717,21 @@
     [::where ?ra (conjoin-predicates ?pred-a ?pred-b)]
 
     ;; it might be better to have something like ::group-let and an ana pass
+    ;; this only works in a tiny subset of occasions
     ;; to determine whether group columns leak
     (m/and [::project [::group-by ?ra ?bindings] ?projection]
            (m/guard *group-project-fusion*))
     (let [;; filter out shadowed group columns
           group-columns (filterv (complement (set (map first ?bindings))) (columns ?ra))
-          [agg-bindings new-projection] (hoist-aggregates group-columns ?projection)]
-      [::group-project ?ra ?bindings agg-bindings new-projection])
-    ))
+          [agg-bindings new-projection :as no-leakage] (hoist-aggregates group-columns ?projection)
+          agg-bindings (for [[sym agg] agg-bindings
+                             :let [inits (aggregate-defaults (columns ?ra) agg)
+                                   acc-syms (mapv #(*gensym* (str "acc-" % "-" sym)) (range (count inits)))
+                                   exprs (aggregate-reduction acc-syms agg)]]
+                         [sym (mapv vector acc-syms inits exprs) (aggregate-completion acc-syms agg)])]
+      (if no-leakage
+        [::group-project ?ra ?bindings (vec agg-bindings) new-projection]
+        [::project [::group-by ?ra ?bindings] ?projection]))))
 
 (def rewrite-logical
   (-> #'rewrites
@@ -846,11 +914,11 @@
       rewrite-logical
       rewrite-pull-correlated-select
       rewrite-logical
+      push-lookups-sub-queries
+      push-lookups
       rewrite-fuse
       rewrite-join-collect
-      rewrite-join-order
-      push-lookups-sub-queries
-      push-lookups))
+      rewrite-join-order))
 
 (defn equi-theta [left right pred]
   (m/match pred
@@ -947,6 +1015,8 @@
     [::anti-join (prune-cols* ?left ?pred req-cols) (prune-cols* ?right ?pred #{}) ?pred]
 
     ;; todo only add this one conveying self tag is done differently (right now removing self when redudant stops type hints)
+    ;; check perf - seems slower branch prune-scans, even when re-conveying the self tag (using meta)
+    ;; jvm weirdness, maybe cache coincidence
     #_#_
     [::scan ?src ?bindings]
     [::scan ?src (filterv (fn [[col]] (contains? req-cols col)) ?bindings)]

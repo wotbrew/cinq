@@ -1,6 +1,7 @@
 package com.wotbrew.cinq;
 
 import clojure.lang.Murmur3;
+import clojure.lang.Util;
 import org.checkerframework.checker.units.qual.A;
 
 import java.util.ArrayList;
@@ -34,6 +35,24 @@ public class CinqUtil {
       l.add(t);
       return l;
     });
+  }
+
+  public static Object minStep(Object acc, Object n) {
+    if (n == null) return acc;
+    if (acc == null) return n;
+    if (Util.compare(acc, n) < 0) {
+      return acc;
+    }
+    return n;
+  }
+
+  public static Object maxStep(Object acc, Object n) {
+    if (n == null) return acc;
+    if (acc == null) return n;
+    if (Util.compare(acc, n) > 0) {
+      return acc;
+    }
+    return n;
   }
 
   public static Object add(Object a, Object b) {
