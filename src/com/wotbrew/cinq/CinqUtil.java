@@ -2,11 +2,9 @@ package com.wotbrew.cinq;
 
 import clojure.lang.Murmur3;
 import clojure.lang.Util;
-import org.checkerframework.checker.units.qual.A;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.function.BiFunction;
 
 public class CinqUtil {
 
