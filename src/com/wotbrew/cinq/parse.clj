@@ -159,8 +159,6 @@
       (into [::plan/avg] ?args)
       'com.wotbrew.cinq/count
       (into [::plan/count] ?args)
-      'com.wotbrew.cinq/like
-      (into [::plan/like] ?args)
       'com.wotbrew.cinq/scalar
       [::plan/scalar-sq (parse (list* 'q ?args))]
       'com.wotbrew.cinq/exists?

@@ -54,8 +54,6 @@
 
 (defmacro avg [expr] (#'throw-only-in-queries #'avg))
 
-(defmacro like [expr pattern] (#'throw-only-in-queries #'like))
-
 (defmacro count
   ([] (#'throw-only-in-queries #'count))
   ([expr] (#'throw-only-in-queries #'count)))

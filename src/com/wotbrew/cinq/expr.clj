@@ -19,41 +19,6 @@
                     (= [::plan/count] %) (some-> (find dep-cols count-sym) key)))
            (distinct)))))
 
-(defn like-includes? [s pat]
-  (if s
-    (str/includes? s pat)
-    false))
-
-(defn like-starts? [s pat]
-  (if s
-    (str/starts-with? s pat)
-    false))
-
-(defn like-ends? [s pat]
-  (if s
-    (str/ends-with? s pat)
-    false))
-
-(defn- emit-like [expr pattern]
-  (let [re #"(%?)([^%]*)(%?)"
-        [_ ends pat starts] (re-find re pattern)
-        ends (not-empty ends)
-        starts (not-empty starts)]
-    ;; todo escaping, re fallback (for complicated cases)
-    (cond
-
-      (and starts ends)
-      `(like-includes? ~expr ~pat)
-
-      starts
-      `(like-starts? ~expr ~pat)
-
-      ends
-      `(like-ends? ~expr ~pat)
-
-      :else
-      `(= ~expr ~pat))))
-
 (defn apply-n2n
   ([f] (f))
   ([f a]
@@ -110,11 +75,6 @@
                [::plan/max ?expr]
                (let [deps (possible-dependencies dep-cols ?expr)]
                  (list `col/maximum (vec (interleave deps deps)) ?expr))
-
-               [::plan/like ?expr ?pattern]
-               (do
-                 (assert (string? ?pattern) "Only constant like patterns are supported")
-                 (emit-like ?expr ?pattern))
 
                [::plan/= ?a ?b]
                `(= ~?a ~?b)
