@@ -24,17 +24,6 @@ public class CinqUtil {
     return h;
   }
 
-  public static void htCompute(HashMap m, Object k, Object t) {
-    m.compute(k, (o, o2) -> {
-      ArrayList l = (ArrayList) o2;
-      if (l == null) {
-        l = new ArrayList();
-      }
-      l.add(t);
-      return l;
-    });
-  }
-
   public static Object minStep(Object acc, Object n) {
     if (n == null) return acc;
     if (acc == null) return n;
