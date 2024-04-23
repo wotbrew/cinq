@@ -2,6 +2,7 @@ package com.wotbrew.cinq;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public class CinqMultimap {
@@ -9,7 +10,6 @@ public class CinqMultimap {
 
     int entries;
     List<Object> nils;
-
     private Node[] table;
 
     public CinqMultimap() {
@@ -18,7 +18,7 @@ public class CinqMultimap {
     }
 
     static int hash(Object key) {
-        if(key == null) return 0;
+        if (key == null) return 0;
         int h = key.hashCode();
         return h ^ (h >>> 16);
     }
@@ -35,6 +35,7 @@ public class CinqMultimap {
         public int hash;
         public Object key;
         public List<Object> value;
+
         public Node(int h, Object key, List<Object> value) {
             this.hash = h;
             this.key = key;
@@ -54,10 +55,10 @@ public class CinqMultimap {
         entries++;
     }
 
-    int psl(int h, int i) {
-        int expected = h & (table.length - 1);
+    int psl(int h, int i, int m) {
+        int expected = h & m;
         if (i < expected) {
-            return ((table.length - 1) - expected) + i;
+            return (m - expected) + i;
         } else {
             return i - expected;
         }
@@ -75,40 +76,40 @@ public class CinqMultimap {
             resize();
         }
 
-        int i = h & (table.length - 1);
+        int m = (table.length - 1);
+        int i = h & m;
 
         while (true) {
             Node node = table[i];
             if (node == null) {
                 insertNode(i, h, key, value);
                 return;
-            }
-            else if (node.hash == h && eq(node.key, key)) {
+            } else if (node.hash == h && eq(node.key, key)) {
                 node.value.add(value);
                 return;
-            }
-            else if (psl(h, i) > psl(node.hash, i)) {
+            } else if (psl(h, i, m) > psl(node.hash, i, m)) {
                 insertNode(i, h, key, value);
-                continueNode(i+1, node);
+                continueNode(i + 1, node);
                 return;
             }
-            i = (i + 1) & (table.length - 1);
+            i = (i + 1) & m;
         }
     }
 
     private void continueNode(int i, Node contNode) {
-        i = i & (table.length - 1);
+        int m = (table.length - 1);
+        i = i & m;
         while (true) {
             Node node = table[i];
             if (node == null) {
                 table[i] = contNode;
                 return;
             }
-            if (psl(contNode.hash, i) > psl(node.hash, i)) {
+            if (psl(contNode.hash, i, m) > psl(node.hash, i, m)) {
                 table[i] = contNode;
                 contNode = node;
             }
-            i = (i + 1) & (table.length - 1);
+            i = (i + 1) & m;
         }
     }
 
@@ -118,7 +119,7 @@ public class CinqMultimap {
 
         for (int i = 0; i < oldTable.length; i++) {
             Node n = oldTable[i];
-            if(n != null) {
+            if (n != null) {
                 continueNode(n.hash & (table.length - 1), n);
             }
         }
@@ -129,18 +130,19 @@ public class CinqMultimap {
             return nils;
         }
         int h = hash(key);
-        int i = h & (table.length - 1);
+        int m = (table.length - 1);
+        int i = h & m;
         Node node;
         while ((node = table[i]) != null) {
-            if (psl(h, i) > psl(node.hash, i)) {
-                return null;
-            }
 
             if (node.hash == h && eq(node.key, key)) {
                 return node.value;
             }
+            else if (psl(h, i, m) > psl(node.hash, i, m)) {
+                return null;
+            }
 
-            i = (i + 1) & (table.length - 1);
+            i = (i + 1) & m;
         }
         return null;
     }
@@ -157,11 +159,26 @@ public class CinqMultimap {
         for (int i = 0; i < table.length; i++) {
             Node n = table[i];
 
-            if(n == null) {
+            if (n == null) {
                 continue;
             }
 
             n.value.forEach(f);
+        }
+    }
+
+    public void forEachEntry(BiConsumer<Object, List<Object>> f) {
+        if (nils != null) {
+            f.accept(null, nils);
+        }
+
+        for (int i = 0; i < table.length; i++) {
+            Node n = table[i];
+
+            if (n == null) {
+                continue;
+            }
+            f.accept(n.key, n.value);
         }
     }
 }
