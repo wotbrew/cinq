@@ -20,7 +20,9 @@ public class CinqMultimap {
     }
 
     static int hash(Object key) {
-        return Util.hash(key);
+        if(key == null) return 0;
+        int h = key.hashCode();
+        return h ^ (h >>> 16);
     }
 
     static boolean eq(Object key1, Object key2) {
@@ -58,7 +60,7 @@ public class CinqMultimap {
             resize();
         }
 
-        int i = h % table.length;
+        int i = h & (table.length - 1);;
         while (true) {
             Node node = table[i];
             if (node == null) {
@@ -73,7 +75,7 @@ public class CinqMultimap {
                 node.value.add(value);
                 return;
             }
-            i = (i + 1) % table.length;
+            i = (i + 1) & (table.length - 1);
         }
     }
 
@@ -84,14 +86,14 @@ public class CinqMultimap {
         for (int i = 0; i < oldTable.length; i++) {
             Node n = oldTable[i];
             if(n != null) {
-                int j = n.hash % table.length;;
+                int j = n.hash & (table.length - 1);
                 while (true) {
                     Node node = table[j];
                     if (node == null) {
                         table[j] = n;
                         break;
                     }
-                    j = (j + 1) % table.length;
+                    j = (j + 1) & (table.length - 1);
                 }
             }
         }
@@ -102,13 +104,13 @@ public class CinqMultimap {
             return nils;
         }
         int h = hash(key);
-        int i = h % table.length;
+        int i = h & (table.length - 1);
         Node node;
         while ((node = table[i]) != null) {
             if (node.hash == h && eq(node.key, key)) {
                 return node.value;
             }
-            i = (i + 1) % table.length;
+            i = (i + 1) & (table.length - 1);
         }
         return null;
     }
