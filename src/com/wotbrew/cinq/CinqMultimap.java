@@ -1,13 +1,11 @@
 package com.wotbrew.cinq;
 
-import clojure.lang.Util;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
 public class CinqMultimap {
-    // linear probing multi-map for now
+    // linear probing (robin-hood) multi-map for now
 
     int entries;
     List<Object> nils;
@@ -48,6 +46,23 @@ public class CinqMultimap {
         return entries + (nils == null ? 0 : 1);
     }
 
+    private void insertNode(int i, int h, Object key, Object value) {
+        List<Object> al = new ArrayList<>();
+        al.add(value);
+        Node newNode = new Node(h, key, al);
+        table[i] = newNode;
+        entries++;
+    }
+
+    int psl(int h, int i) {
+        int expected = h & (table.length - 1);
+        if (i < expected) {
+            return ((table.length - 1) - expected) + i;
+        } else {
+            return i - expected;
+        }
+    }
+
     private void doPutTuple(int h, Object key, Object value) {
         if (key == null) {
             if (nils == null) {
@@ -60,20 +75,38 @@ public class CinqMultimap {
             resize();
         }
 
-        int i = h & (table.length - 1);;
+        int i = h & (table.length - 1);
+
         while (true) {
             Node node = table[i];
             if (node == null) {
-                List<Object> al = new ArrayList<>();
-                al.add(value);
-                Node newNode = new Node(h, key, al);
-                table[i] = newNode;
-                entries++;
+                insertNode(i, h, key, value);
                 return;
             }
             else if (node.hash == h && eq(node.key, key)) {
                 node.value.add(value);
                 return;
+            }
+            else if (psl(h, i) > psl(node.hash, i)) {
+                insertNode(i, h, key, value);
+                continueNode(i+1, node);
+                return;
+            }
+            i = (i + 1) & (table.length - 1);
+        }
+    }
+
+    private void continueNode(int i, Node contNode) {
+        i = i & (table.length - 1);
+        while (true) {
+            Node node = table[i];
+            if (node == null) {
+                table[i] = contNode;
+                return;
+            }
+            if (psl(contNode.hash, i) > psl(node.hash, i)) {
+                table[i] = contNode;
+                contNode = node;
             }
             i = (i + 1) & (table.length - 1);
         }
@@ -86,15 +119,7 @@ public class CinqMultimap {
         for (int i = 0; i < oldTable.length; i++) {
             Node n = oldTable[i];
             if(n != null) {
-                int j = n.hash & (table.length - 1);
-                while (true) {
-                    Node node = table[j];
-                    if (node == null) {
-                        table[j] = n;
-                        break;
-                    }
-                    j = (j + 1) & (table.length - 1);
-                }
+                continueNode(n.hash & (table.length - 1), n);
             }
         }
     }
@@ -107,9 +132,14 @@ public class CinqMultimap {
         int i = h & (table.length - 1);
         Node node;
         while ((node = table[i]) != null) {
+            if (psl(h, i) > psl(node.hash, i)) {
+                return null;
+            }
+
             if (node.hash == h && eq(node.key, key)) {
                 return node.value;
             }
+
             i = (i + 1) & (table.length - 1);
         }
         return null;
