@@ -5,8 +5,9 @@
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
-  (:import (java.util ArrayList Comparator HashMap Iterator)
-           (java.util.function BiConsumer BiFunction)))
+  (:import (com.wotbrew.cinq CinqMultimap)
+           (java.util ArrayList Comparator HashMap Iterator)
+           (java.util.function BiConsumer BiFunction Consumer)))
 
 (set! *warn-on-reflection* true)
 
@@ -71,20 +72,13 @@
   (emit-loop left (emit-loop right body)))
 
 (defn build-side-function [ra key-expr]
-  (let [ht (gensym "ht")
-        al (with-meta (gensym "al") {:tag `ArrayList})]
+  (let [ht (gensym "ht")]
     `(fn build-side# []
-       (let [~ht (HashMap.)]
+       (let [~ht (CinqMultimap.)]
          ~(emit-loop
             ra
             `(let [t# ~(t/emit-tuple ra)]
-               (.compute ~ht
-                         ~(t/emit-key (rewrite-expr [ra] key-expr))
-                         (reify BiFunction
-                           (apply [_ _ al#]
-                             (let [~al (or al# (ArrayList.))]
-                               (.add ~al t#)
-                               ~al))))))
+               (.put ~ht ~(t/emit-key (rewrite-expr [ra] key-expr)) t#)))
          ~ht))))
 
 (defn emit-join-theta [theta body]
@@ -196,7 +190,7 @@
 
 (defn emit-equi-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
+        ht (with-meta (gensym "ht") {:tag `CinqMultimap})
         t (t/tuple-local left)
         left-cols (plan/columns left)
         right-cols (plan/columns right)]
@@ -218,7 +212,7 @@
 
 (defn emit-equi-left-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
+        ht (with-meta (gensym "ht") {:tag `CinqMultimap})
         left-t (t/tuple-local left)
         left-cols (plan/columns left)
         right-cols (plan/columns right)
@@ -245,17 +239,15 @@
                          (set/difference (set left-cols)
                                          (set right-cols)))]
                  ~(emit-join-theta theta-expressions `(do ~(t/set-mark left-t) (~cont-lambda ~left-t ~(t/emit-tuple right))))))))
-       (.forEach ~ht (reify BiConsumer
-                       (accept [_# _# al#]
-                         (let [~al al#]
-                           (dotimes [i# (.size ~al)]
-                             (let [~left-t (.get ~al i#)]
-                               (when-not ~(t/get-mark left-t)
-                                 (~cont-lambda ~left-t nil)))))))))))
+       (.forEach ~ht (reify Consumer
+                       (accept [_# t#]
+                         (let [~left-t t#]
+                           (when-not ~(t/get-mark left-t)
+                             (~cont-lambda ~left-t nil)))))))))
 
 (defn emit-equi-single-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
+        ht (with-meta (gensym "ht") {:tag `CinqMultimap})
         left-t (t/tuple-local left)
         right-t (t/tuple-local right)
         left-cols (plan/columns left)
@@ -284,17 +276,15 @@
                          (~cont-lambda ~left-t ~(t/emit-tuple right))
                          (recur (unchecked-inc-int ~i)))))))
              (~cont-lambda ~left-t nil)))
-       (.forEach ~ht (reify BiConsumer
-                       (accept [_# _# al#]
-                         (let [~al al#]
-                           (dotimes [i# (.size ~al)]
-                             (let [~left-t (.get ~al i#)]
-                               (when-not ~(t/get-mark left-t)
-                                 (~cont-lambda ~left-t nil)))))))))))
+       (.forEach ~ht (reify Consumer
+                       (accept [_# t#]
+                         (let [~left-t t#]
+                           (when-not ~(t/get-mark left-t)
+                             (~cont-lambda ~left-t nil)))))))))
 
 (defn emit-equi-semi-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
+        ht (with-meta (gensym "ht") {:tag `CinqMultimap})
         left-t (t/tuple-local left)
         left-cols (plan/columns left)
         right-cols (plan/columns right)
@@ -322,17 +312,15 @@
                              (set/difference (set left-cols)
                                              (set right-cols)))]
                      ~(emit-join-theta theta-expressions (t/set-mark left-t))))))))
-       (.forEach ~ht (reify BiConsumer
-                       (accept [_# _# al#]
-                         (let [~al al#]
-                           (dotimes [i# (.size ~al)]
-                             (let [~left-t (.get ~al i#)]
-                               (when ~(t/get-mark left-t)
-                                 (~cont-lambda ~left-t nil)))))))))))
+       (.forEach ~ht (reify Consumer
+                       (accept [_# t#]
+                         (let [~left-t t#]
+                           (when ~(t/get-mark left-t)
+                             (~cont-lambda ~left-t nil)))))))))
 
 (defn emit-equi-anti-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})
-        ht (with-meta (gensym "ht") {:tag `HashMap})
+        ht (with-meta (gensym "ht") {:tag `CinqMultimap})
         left-t (t/tuple-local left)
         left-cols (plan/columns left)
         right-cols (plan/columns right)
@@ -360,13 +348,11 @@
                              (set/difference (set left-cols)
                                              (set right-cols)))]
                      ~(emit-join-theta theta-expressions (t/set-mark left-t))))))))
-       (.forEach ~ht (reify BiConsumer
-                       (accept [_# _# al#]
-                         (let [~al al#]
-                           (dotimes [i# (.size ~al)]
-                             (let [~left-t (.get ~al i#)]
-                               (when-not ~(t/get-mark left-t)
-                                 (~cont-lambda ~left-t nil)))))))))))
+       (.forEach ~ht (reify Consumer
+                       (accept [_# t#]
+                         (let [~left-t t#]
+                           (when-not ~(t/get-mark left-t)
+                             (~cont-lambda ~left-t nil)))))))))
 
 (defn emit-column [al o col i]
   (let [[col-ctor a-ctor prim-conv]

@@ -101,15 +101,12 @@ public class CinqUtil {
   public static long sumStep(long acc, long n) {
     return clojure.lang.Numbers.add(acc, n);
   }
-
   public static double sumStep(double acc, double n) {
     return clojure.lang.Numbers.add(acc, n);
   }
-
   public static double sumStep(double acc, long n) {
     return clojure.lang.Numbers.add(acc, n);
   }
-
   public static double sumStep(long acc, double n) {
     return clojure.lang.Numbers.add(acc, n);
   }
@@ -181,6 +178,7 @@ public class CinqUtil {
   public static double mul(double a, long b) {
     return clojure.lang.Numbers.multiply(a, b);
   }
+
   public static Object div(Object a, Object b) {
     if (a == null) return null;
     if (b == null) return null;
@@ -214,4 +212,40 @@ public class CinqUtil {
   public static double div(double a, long b) {
     return clojure.lang.Numbers.divide(a, b);
   }
+
+  // null != null, null != any-obj
+  public static boolean eq(Object a, Object b) {
+    if (a == null) return false;
+    if (b == null) return false;
+    return Util.equiv(a, b);
+  }
+  public static boolean eq(long a, Object b) {
+    if (b == null) return false;
+    return Util.equiv(a, b);
+  }
+  public static boolean eq(Object a, long b) {
+    if (a == null) return false;
+    return Util.equiv(a, b);
+  }
+  public static boolean eq(double a, Object b) {
+    if (b == null) return false;
+    return Util.equiv(a, b);
+  }
+  public static boolean eq(Object a, double b) {
+    if (a == null) return false;
+    return Util.equiv(a, b);
+  }
+  public static boolean eq(long a, long b) {
+    return a == b;
+  }
+  public static boolean eq(double a, double b) {
+    return a == b;
+  }
+  public static boolean eq(double a, long b) {
+    return a == b;
+  }
+  public static boolean eq(long a, double b) {
+    return a == b;
+  }
+
 }
