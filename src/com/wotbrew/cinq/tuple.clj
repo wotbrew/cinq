@@ -1,6 +1,7 @@
 (ns com.wotbrew.cinq.tuple
   (:require [com.wotbrew.cinq.expr :as expr]
-            [com.wotbrew.cinq.plan2 :as plan]))
+            [com.wotbrew.cinq.plan2 :as plan])
+  (:import (com.wotbrew.cinq CinqUtil)))
 
 (defn sig
   "Returns a vector of type tags for each of the columns. This is the structural signature of the tuple."
@@ -31,7 +32,7 @@
                    (equals [_# ~o]
                      (and (instance? ~s ~o)
                           ~@(for [i (range (count sig))]
-                              `(= ~(field-sym i) (. ~(with-meta o {:tag s}) ~(field-sym i))))))
+                              `(CinqUtil/eq ~(field-sym i) (. ~(with-meta o {:tag s}) ~(field-sym i))))))
                    (hashCode [_#]
                      ~((fn nh
                          ([] (nh 1 0))

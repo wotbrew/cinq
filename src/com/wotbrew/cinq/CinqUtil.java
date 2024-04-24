@@ -217,23 +217,24 @@ public class CinqUtil {
   public static boolean eq(Object a, Object b) {
     if (a == null) return false;
     if (b == null) return false;
-    return Util.equiv(a, b);
+    // equiv very slow - investigate options
+    return a.equals(b);
   }
   public static boolean eq(long a, Object b) {
     if (b == null) return false;
-    return Util.equiv(a, b);
+    return b.equals(a);
   }
   public static boolean eq(Object a, long b) {
     if (a == null) return false;
-    return Util.equiv(a, b);
+    return a.equals(b);
   }
   public static boolean eq(double a, Object b) {
     if (b == null) return false;
-    return Util.equiv(a, b);
+    return b.equals(a);
   }
   public static boolean eq(Object a, double b) {
     if (a == null) return false;
-    return Util.equiv(a, b);
+    return a.equals(b);
   }
   public static boolean eq(long a, long b) {
     return a == b;

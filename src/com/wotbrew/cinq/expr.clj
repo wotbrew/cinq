@@ -77,7 +77,7 @@
                  (list `col/maximum (vec (interleave deps deps)) ?expr))
 
                [::plan/= ?a ?b]
-               `(= ~?a ~?b)
+               `(CinqUtil/eq ~?a ~?b)
 
                [::plan/<= ?a ?b]
                `(<= (compare ~?a ~?b) 0)
