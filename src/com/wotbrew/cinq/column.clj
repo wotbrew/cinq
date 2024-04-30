@@ -30,7 +30,7 @@
       (loop [ret 0
              i 0]
         (if (< i (alength arr))
-          (recur (+ ret (aget arr i)) (unchecked-inc-int i))
+          (recur (+ ret (aget arr i)) (unchecked-inc i))
           (RT/box ret))))))
 
 (deftype DoubleColumn [^:unsynchronized-mutable ^doubles data thunk]
@@ -51,7 +51,7 @@
       (loop [ret 0.0
              i 0]
         (if (< i (alength arr))
-          (recur (+ ret (aget arr i)) (unchecked-inc-int i))
+          (recur (+ ret (aget arr i)) (unchecked-inc i))
           (RT/box ret))))))
 
 (deftype Column [^:unsynchronized-mutable ^objects data thunk]
@@ -74,8 +74,8 @@
         (if (< i (alength arr))
           (let [o (aget arr i)]
             (if (nil? o)
-              (recur ret (unchecked-inc-int i))
-              (recur (+ ret o) (unchecked-inc-int i))))
+              (recur ret (unchecked-inc i))
+              (recur (+ ret o) (unchecked-inc i))))
           ret)))))
 
 (defmethod print-method IColumn [^IColumn col ^Writer w]
@@ -150,7 +150,7 @@
                 (let ~(vec (for [[sym _] (partition 2 binding)
                                  form [(with-meta sym {}) (broadcast-get sym i-sym)]]
                              form))
-                  (recur (~op ret# ~expr) (unchecked-inc-int ~i-sym)))
+                  (recur (~op ret# ~expr) (unchecked-inc ~i-sym)))
                 ret#))))
         ~@(map (fn [[_ x]] x) (partition 2 binding))))))
 
@@ -207,8 +207,8 @@
       (if (< i size)
         (let [o (.getObject col i)]
           (if (nil? o)
-            (recur ret (unchecked-inc-int i))
-            (recur (unchecked-inc ret) (unchecked-inc-int i))))
+            (recur ret (unchecked-inc i))
+            (recur (unchecked-inc ret) (unchecked-inc i))))
         ret))))
 
 (defmacro count-some

@@ -3,11 +3,12 @@
             [com.wotbrew.cinq.expr :as expr]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.column :as col]
+            [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
   (:import (com.wotbrew.cinq CinqMultimap)
            (java.util ArrayList Comparator HashMap Iterator)
-           (java.util.function BiConsumer BiFunction Consumer)))
+           (java.util.function BiFunction Consumer)))
 
 (set! *warn-on-reflection* true)
 
@@ -33,7 +34,6 @@
 
 (defn emit-array [ra] `(.toArray ~(emit-list ra)))
 
-;; todo use row-major.clj for the below, both namespaces should be symbiotic
 (defn emit-iterable ([ra] (emit-list ra)) ([ra col-idx] (emit-list ra col-idx)))
 (defn emit-iterator [ra] `(.iterator ~(emit-list ra)))
 
@@ -52,18 +52,20 @@
         self-tag (:tag (meta self-binding))
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
-        lambda `(fn scan-fn# [_# ~o]
+        id (gensym "id")
+        lambda `(fn scan-fn# [_# ~id ~o]
                   (let [~@(for [[sym k] bindings
                                 form [(with-meta sym {})
                                       (cond
                                         (= :cinq/self k) o
+                                        (= :cinq/id k) id
                                         (and self-class (class? self-class) (plan/kw-field self-class k))
                                         (list (symbol (str ".-" (munge (name k)))) o)
                                         (keyword? k) (list k o)
                                         :else (list `get o k))]]
                             form)]
                     ~body))]
-    `(reduce ~lambda nil ~(rewrite-expr [] src))))
+    `(p/scan ~(rewrite-expr [] src) ~lambda nil 0)))
 
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))
@@ -274,7 +276,7 @@
                            ~@(t/emit-tuple-column-binding left-t left-cols theta (set right-cols))]
                        (if (and ~@theta-expressions)
                          (~cont-lambda ~left-t ~(t/emit-tuple right))
-                         (recur (unchecked-inc-int ~i)))))))
+                         (recur (unchecked-inc ~i)))))))
              (~cont-lambda ~left-t nil)))
        (.forEach ~ht (reify Consumer
                        (accept [_# t#]
@@ -478,7 +480,7 @@
                                                                       (->> (mapcat second agg-bindings)
                                                                            (map (fn [[_acc _init expr]] expr))
                                                                            vec)))]
-                     (recur (unchecked-inc-int i#)
+                     (recur (unchecked-inc i#)
                             ~@(for [[_ agg] agg-bindings
                                     [_ _ expr] agg]
                                 (rewrite-expr [ra] expr))))

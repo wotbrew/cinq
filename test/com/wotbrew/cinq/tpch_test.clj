@@ -16,13 +16,14 @@
     (loop [n 0]
       (if (.hasNext iter)
         (do (.next iter)
-            (recur (unchecked-inc-int n)))
+            (recur (unchecked-inc n)))
         n))))
 
 (defn view-plan [q]
   (-> q parse/parse plan/rewrite plan/stack-view))
 
 (comment
+
   (for [t (TpchTable/getTables)]
     (list 'defrecord (symbol (str/capitalize (.getTableName t)))
           (vec
@@ -30,6 +31,7 @@
               (symbol (str/join "_" (rest (str/split (.getColumnName c) #"_" 2))))))))
 
   )
+
 (defrecord Customer [^long custkey name address ^long nationkey phone ^double acctbal mktsegment comment])
 
 (defrecord Order [^long orderkey
@@ -231,6 +233,8 @@
   )
 
 (deftest q2-test (check-answer #'q2 @sf-001))
+
+;; nested relational calculus
 
 (defn q3 [{:keys [customer orders lineitem]}]
   (q [^Customer c customer
@@ -873,13 +877,14 @@
 
   ;; 0.05 graal array-seq 639ms
   ;; 1.0 graal array-seq 15835ms
-  ;; 0.05 graal eager-loop 168ms
-  ;; 1.0 graal eager-loop 4398ms
+  ;; 0.05 graal eager-loop 196ms / 188ms group fusion
+  ;; 1.0 graal eager-loop 3841ms
   (clj-async-profiler.core/profile
-    (dotimes [x 1] (run-tpch))
-
+    (criterium.core/quick-bench
+      (run-tpch)
+      )
     )
-
+  (clj-async-profiler.core/profile (run-tpch))
   (time (dotimes [x 1] (count (q1 dataset))))
   (time (dotimes [x 1] (count (q1-el dataset))))
   (time (dotimes [x 1] (count (q2 dataset))))

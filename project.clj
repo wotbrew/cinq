@@ -5,7 +5,8 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [meander/epsilon "0.0.650"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
-                                  [criterium "0.4.6"]]
+                                  [criterium "0.4.6"]
+                                  [org.lmdbjava/lmdbjava "0.9.0"]]
                    :source-paths ["dev"]}}
   :jvm-opts ^:replace []
   :repl-options {:init-ns cinq.core})

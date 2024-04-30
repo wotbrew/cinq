@@ -28,8 +28,8 @@
           (if (< i (alength a))
             (let [o (aget a i)]
               (if (<= o sd2)
-                (recur (unchecked-inc-int n) (unchecked-inc-int i))
-                (recur n (unchecked-inc-int i))))
+                (recur (unchecked-inc n) (unchecked-inc i))
+                (recur n (unchecked-inc i))))
             n)))))
 
   ;; adding a box (and compare), no clojure compare
@@ -43,8 +43,8 @@
             (let [^Lineitem o (aget a i)
                   ^Date shipdate (.-shipdate o)]
               (if (<= (compare shipdate #inst "1998-09-02") 0)
-                (recur (unchecked-inc-int n) (unchecked-inc-int i))
-                (recur n (unchecked-inc-int i))))
+                (recur (unchecked-inc n) (unchecked-inc i))
+                (recur n (unchecked-inc i))))
             n)))))
 
   ;; adding a box, iterator (and compare), no clojure compare
@@ -58,8 +58,8 @@
             (let [^Lineitem o (.next a)
                   ^Date shipdate (.-shipdate o)]
               (if (<= (compare shipdate #inst "1998-09-02") 0)
-                (recur (unchecked-inc-int n) (unchecked-inc-int i))
-                (recur n (unchecked-inc-int i))))
+                (recur (unchecked-inc n) (unchecked-inc i))
+                (recur n (unchecked-inc i))))
             n)))))
 
   (defn rmq1 [^objects o]
@@ -199,11 +199,11 @@
               (let [q (aget quantity i)
                     ep (aget extendedprice i)
                     d (aget discount i)]
-                (recur (unchecked-inc-int i)
+                (recur (unchecked-inc i)
                        (+ sum-qty q)
                        (+ sum-base-price ep)
                        (+ sum-disc-price (* ep (- 1.0 d)))))
-              (recur (unchecked-inc-int i) sum-qty sum-base-price sum-disc-price)))
+              (recur (unchecked-inc i) sum-qty sum-base-price sum-disc-price)))
           [sum-qty sum-base-price sum-disc-price]))))
 
   (criterium.core/quick-bench (columnar-loop shipdate quantity extendedprice discount))
@@ -228,7 +228,7 @@
               (aset quantity i q)
               (aset extendedprice i ep)
               (aset discount i d)
-              (recur (unchecked-inc-int i)))))
+              (recur (unchecked-inc i)))))
         (columnar-loop shipdate quantity extendedprice discount))))
 
   ;; 50ms (43ms in striding)
@@ -266,11 +266,11 @@
               (let [q (.getDouble quantity offset)
                     ep (.getDouble extendedprice offset)
                     d (.getDouble discount offset)]
-                (recur (unchecked-inc-int i)
+                (recur (unchecked-inc i)
                        (+ sum-qty q)
                        (+ sum-base-price ep)
                        (+ sum-disc-price (* ep (- 1.0 d)))))
-              (recur (unchecked-inc-int i) sum-qty sum-base-price sum-disc-price)))
+              (recur (unchecked-inc i) sum-qty sum-base-price sum-disc-price)))
           [sum-qty sum-base-price sum-disc-price]))))
 
   ;; 10.591815 ms, 11ms on heap
@@ -306,11 +306,11 @@
               (let [q (aget quantity i)
                     ep (aget extendedprice i)
                     d (aget discount i)]
-                (recur (unchecked-inc-int i)
+                (recur (unchecked-inc i)
                        (+ sum-qty q)
                        (+ sum-base-price ep)
                        (+ sum-disc-price (* ep (- 1.0 d)))))
-              (recur (unchecked-inc-int i) sum-qty sum-base-price sum-disc-price)))
+              (recur (unchecked-inc i) sum-qty sum-base-price sum-disc-price)))
           [sum-qty sum-base-price sum-disc-price]))))
 
   ;; 60.060846 ms
@@ -340,11 +340,11 @@
               (let [q (aget quantity i)
                     ep (aget extendedprice i)
                     d (aget discount i)]
-                (recur (unchecked-inc-int i)
+                (recur (unchecked-inc i)
                        (+ sum-qty q)
                        (+ sum-base-price ep)
                        (+ sum-disc-price (* ep (- 1.0 d)))))
-              (recur (unchecked-inc-int i) sum-qty sum-base-price sum-disc-price)))
+              (recur (unchecked-inc i) sum-qty sum-base-price sum-disc-price)))
           [sum-qty sum-base-price sum-disc-price]))))
 
   ;; 208.009596 ms (all boxed)
@@ -429,7 +429,7 @@
              sum 0.0]
         (if (< i (alength pairs))
           (let [^DoublePair h (aget pairs i)]
-            (recur (unchecked-inc-int i) (+ sum (+ (.-a h) (.-b h)))))
+            (recur (unchecked-inc i) (+ sum (+ (.-a h) (.-b h)))))
           sum))))
 
   ;; fast packed 12.361953 ms (not as good as you might think!)
@@ -441,7 +441,7 @@
         (if (< i 10000000)
           (let [a (.getDouble pairs)
                 b (.getDouble pairs)]
-            (recur (unchecked-inc-int i) (+ sum (+ a b))))
+            (recur (unchecked-inc i) (+ sum (+ a b))))
           sum))))
 
   ;; Unsafe ptr magic does not seem any better: graal 9.425494 ms
@@ -463,8 +463,8 @@
            sum 0.0]
       (if (< i 10000000)
         (let [a (aget pairs (unchecked-multiply-int i 2))
-              b (aget pairs (unchecked-inc-int (unchecked-multiply-int i 2)))]
-          (recur (unchecked-inc-int i) (+ sum (+ (Double/longBitsToDouble a) (Double/longBitsToDouble b)))))
+              b (aget pairs (unchecked-inc (unchecked-multiply-int i 2)))]
+          (recur (unchecked-inc i) (+ sum (+ (Double/longBitsToDouble a) (Double/longBitsToDouble b)))))
         sum)))
 
   ;; graal 10.135512 ms

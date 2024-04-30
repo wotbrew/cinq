@@ -43,12 +43,10 @@ public class CinqMultimap {
     private void insertNode(int i, int h, Object key, Object value) {
         List<Object> al = new ArrayList<>();
         al.add(value);
-        //Node newNode = new Node(h, key, al);
         table[i * 2] = 1;
         table[(i * 2) + 1] = h;
         keys[i] = key;
         values[i] = al;
-        //table[i] = newNode;
         entries++;
     }
 

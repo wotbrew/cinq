@@ -686,7 +686,7 @@
       [::count] [`(unchecked-inc ~acc-sym)]
       [::count ?expr] [`(if ~?expr (unchecked-inc ~acc-sym) ~acc-sym)]
       [::sum ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr)]
-      [::avg ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr) `(unchecked-inc-int ~(second acc-syms))]
+      [::avg ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr) `(unchecked-inc ~(second acc-syms))]
       [::min ?expr] [`(CinqUtil/minStep ~acc-sym ~?expr)]
       [::max ?expr] [`(CinqUtil/maxStep ~acc-sym ~?expr)]
       ;; todo min/max
