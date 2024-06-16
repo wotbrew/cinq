@@ -104,3 +104,25 @@
   (coll-reduce
     ([scan f start] (p/scan scan (fn [acc _rsn record] (f acc record)) start 0))
     ([scan f] (p/scan scan (fn [acc _rsn record] (f acc record)) (f) 0))))
+
+(defmethod print-method Scannable
+  [o w]
+  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
+    (do
+      (.write w "#cinq/relvar [")
+      (let [ictr (volatile! -1)]
+        (p/scan o (fn [print-length _ x]
+                    (let [i (vswap! ictr inc)]
+                      (if (and (not *print-dup*) *print-length*)
+                        (if (<= print-length 0)
+                          (do (.write w " ...") (reduced print-length))
+                          (do
+                            (when-not (= 0 i) (.write w " "))
+                            (print-method x w)
+                            (dec print-length)))
+                        (do
+                          (when-not (= 0 i) (.write w " "))
+                          (print-method x w)
+                          (dec print-length)))))
+                *print-length* 0))
+      (.write w "] "))))
