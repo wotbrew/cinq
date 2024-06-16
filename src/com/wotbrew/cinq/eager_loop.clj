@@ -52,13 +52,13 @@
         self-tag (:tag (meta self-binding))
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
-        id (gensym "id")
-        lambda `(fn scan-fn# [_# ~id ~o]
+        rsn (gensym "rsn")
+        lambda `(fn scan-fn# [_# ~rsn ~o]
                   (let [~@(for [[sym k] bindings
                                 form [(with-meta sym {})
                                       (cond
                                         (= :cinq/self k) o
-                                        (= :cinq/id k) id
+                                        (= :cinq/rsn k) rsn
                                         (and self-class (class? self-class) (plan/kw-field self-class k))
                                         (list (symbol (str ".-" (munge (name k)))) o)
                                         (keyword? k) (list k o)

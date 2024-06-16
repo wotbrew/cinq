@@ -1,9 +1,10 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use, for, max, min, count, set, update, replace, run!, read, write])
+  (:refer-clojure :exclude [use for max min count set update replace run! read])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
-            [com.wotbrew.cinq.protocols :as p]))
+            [com.wotbrew.cinq.protocols :as p])
+  (:import (com.wotbrew.cinq.protocols Scannable)))
 
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 
@@ -68,18 +69,20 @@
 (defn insert [relvar record] (p/insert relvar record))
 
 (defmacro delete [relvar alias query-or-pred]
-  {:pre [(symbol? relvar)
-         (symbol? alias)]}
-  (let [rsn (gensym "rsn")]
-    `(run! ~(into [{rsn :cinq/rsn, :as alias} relvar] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
-           (p/delete ~relvar ~rsn))))
+  {:pre [(symbol? alias)]}
+  (let [rsn (gensym "rsn")
+        rv (gensym "relvar")]
+    `(let [~rv ~relvar]
+       (run! ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+             (p/delete ~rv ~rsn)))))
 
 (defmacro update [relvar alias query-or-pred expr]
-  {:pre [(symbol? relvar)
-         (symbol? alias)]}
-  (let [rsn (gensym "rsn")]
-    `(run! ~(into [{rsn :cinq/rsn, :as alias} relvar] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
-           (p/replace ~relvar ~rsn ~expr))))
+  {:pre [(symbol? alias)]}
+  (let [rsn (gensym "rsn")
+        rv (gensym "relvar")]
+    `(let [~rv ~relvar]
+       (run! ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+             (p/replace ~rv ~rsn ~expr)))))
 
 (extend-protocol p/Scannable
   nil
@@ -97,7 +100,7 @@
         this))))
 
 (extend-protocol clojure.core.protocols/CollReduce
-  com.wotbrew.cinq.protocols.Scannable
+  Scannable
   (coll-reduce
     ([scan f start] (p/scan scan (fn [acc _rsn record] (f acc record)) start 0))
     ([scan f] (p/scan scan (fn [acc _rsn record] (f acc record)) (f) 0))))

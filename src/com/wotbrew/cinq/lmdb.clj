@@ -80,12 +80,16 @@
   (.clear key-buffer)
   (.clear val-buffer)
   (.putLong key-buffer rsn)
-  (if-not (codec/encode-object record val-buffer nil)
-    (throw (ex-info "Not enough space in write-buffer during replace" {:cinq/error ::not-enough-space-in-write-buffer}))
-    (.put dbi txn
-          (.flip key-buffer)
-          (.flip val-buffer)
-          replace-flags)))
+  ;; maybe reuse a cursor here?
+  (with-open [cursor (.openCursor dbi txn)]
+    (if-not (codec/encode-object record val-buffer nil)
+      (throw (ex-info "Not enough space in write-buffer during replace" {:cinq/error ::not-enough-space-in-write-buffer}))
+      (if (.get cursor (.flip key-buffer) GetOp/MDB_SET)
+        (.put cursor
+              key-buffer
+              (.flip val-buffer)
+              replace-flags)
+        false))))
 
 (defn create-dbi ^Dbi [^Env env ^String dbi-name]
   (let [flags (into-array DbiFlags [DbiFlags/MDB_CREATE])]
@@ -317,13 +321,15 @@
   (write-transaction [db f]
     (if-not auto-resize
       (with-open [^Closeable tx (->LMDBWriteTransaction env (HashMap.) dbis (.txnWrite env) (.get key-buffer) val-buffer)]
-        (f tx)
-        (p/commit tx))
+        (let [ret (f tx)]
+          (p/commit tx)
+          ret))
       (let [ret (locking db
                   (try
                     (with-open [^Closeable tx (->LMDBWriteTransaction env (HashMap.) dbis (.txnWrite env) (.get key-buffer) val-buffer)]
-                      (f tx)
-                      (p/commit tx))
+                      (let [ret (f tx)]
+                        (p/commit tx)
+                        ret))
                     (catch Env$MapFullException _e
                       (let [new-map-size (* (.-map-size db) 2)]
                         (.setMapSize env new-map-size)
@@ -445,8 +451,14 @@
   (set! *print-length* 100)
 
   (c/rel-set (:foo db) (range 1e6))
+  (c/insert (:foo db) (str (random-uuid)))
+  (c/write [db db] (c/update (:foo db) f (= 5 f) (inc f)))
 
   (vec (:lmdb/stat db))
   (vec (:lmdb/variables db))
+
+  (c/q [i (:foo db) :limit 10] i)
+  (take 10 (vec (:foo db)))
+
 
   )
