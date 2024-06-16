@@ -46,6 +46,10 @@
 (defmacro run! [query & body]
   `(doseq [f# (q ~query (fn [] ~@body))] (f#)))
 
+(defmacro agg [init init-sym query & body]
+  {:pre [(symbol? init-sym)]}
+  `(clojure.core/reduce (fn [~init-sym f#] (f# ~init-sym)) ~init (q ~query (fn [~init-sym] ~@body))))
+
 (defmacro sum [expr] (#'throw-only-in-queries #'sum))
 
 (defmacro max [expr] (#'throw-only-in-queries #'max))
@@ -73,16 +77,26 @@
   (let [rsn (gensym "rsn")
         rv (gensym "relvar")]
     `(let [~rv ~relvar]
-       (run! ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
-             (p/delete ~rv ~rsn)))))
+       (agg
+         0
+         affected-records#
+         ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+         (if (p/delete ~rv ~rsn)
+           (unchecked-inc affected-records#)
+           affected-records#)))))
 
 (defmacro update [relvar alias query-or-pred expr]
   {:pre [(symbol? alias)]}
   (let [rsn (gensym "rsn")
         rv (gensym "relvar")]
     `(let [~rv ~relvar]
-       (run! ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
-             (p/replace ~rv ~rsn ~expr)))))
+       (agg
+         0
+         affected-records#
+         ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+         (if (p/replace ~rv ~rsn ~expr)
+           (unchecked-inc affected-records#)
+           affected-records#)))))
 
 (extend-protocol p/Scannable
   nil
@@ -113,7 +127,7 @@
       (let [ictr (volatile! -1)]
         (p/scan o (fn [print-length _ x]
                     (let [i (vswap! ictr inc)]
-                      (if (and (not *print-dup*) *print-length*)
+                      (if (and (not *print-dup*) print-length)
                         (if (<= print-length 0)
                           (do (.write w " ...") (reduced print-length))
                           (do
@@ -123,6 +137,6 @@
                         (do
                           (when-not (= 0 i) (.write w " "))
                           (print-method x w)
-                          (dec print-length)))))
+                          nil))))
                 *print-length* 0))
       (.write w "] "))))
