@@ -1,13 +1,12 @@
 (ns com.wotbrew.cinq.lmdb
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [com.wotbrew.cinq :as c]
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
   (:import (clojure.lang ILookup IReduceInit)
            (java.io Closeable)
            (java.nio ByteBuffer)
-           (java.nio.file Files)
-           (java.nio.file.attribute FileAttribute)
            (java.util ArrayList HashMap Map)
            (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function Supplier)
@@ -306,15 +305,14 @@
       (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init 0))))
 
 (deftype LMDBDatabase
-  [directory
+  [file
    ^Env env
    ^ConcurrentHashMap dbis
    ^ConcurrentHashMap varmap
    ^ThreadLocal key-buffer
    ^ByteBuffer val-buffer
    auto-resize
-   ^:unsynchronized-mutable ^long map-size
-   lmdb-meta]
+   ^:unsynchronized-mutable ^long map-size]
   p/Database
   (write-transaction [db f]
     (if-not auto-resize
@@ -347,29 +345,32 @@
         (fn []
           (let [env-stat (.stat env)
                 ^EnvInfo env-info (.info env)]
-            [(assoc @lmdb-meta
-               :last-page-number (.-lastPageNumber env-info)
-               :last-transaction-id (.-lastTransactionId env-info)
-               :map-address (.-mapAddress env-info)
-               :map-size (.-mapSize env-info)
-               :map-readers (.-maxReaders env-info)
-               :num-readers (.-numReaders env-info)
-               :branch-pages (.-branchPages env-stat)
-               :depth (.-depth env-stat)
-               :entries (.-depth env-stat)
-               :leaf-pages (.-leafPages env-stat)
-               :overflow-pages (.-overflowPages env-stat)
-               :page-size (.-pageSize env-stat))])))
-
+            [{:last-page-number (.-lastPageNumber env-info)
+              :last-transaction-id (.-lastTransactionId env-info)
+              :map-address (.-mapAddress env-info)
+              :map-size (.-mapSize env-info)
+              :map-readers (.-maxReaders env-info)
+              :num-readers (.-numReaders env-info)
+              :branch-pages (.-branchPages env-stat)
+              :depth (.-depth env-stat)
+              :entries (.-depth env-stat)
+              :leaf-pages (.-leafPages env-stat)
+              :overflow-pages (.-overflowPages env-stat)
+              :page-size (.-pageSize env-stat)}])))
       :lmdb/variables
-      (intrinsic-rel (fn [] (concat [:lmdb/stat :lmdb/variables] (for [[k] dbis] k))))
+      (intrinsic-rel
+        (fn []
+          (into [:lmdb/stat :lmdb/variables] (keys dbis))))
 
       (when (.containsKey dbis k)
         (->> (reify Function (apply [_ _] (->LMDBVariable db k key-buffer val-buffer)))
              (.computeIfAbsent varmap k)))))
   (valAt [db k not-found] (or (get db k) not-found))
   Closeable
-  (close [_] (.close env)))
+  (close [_]
+    (.close env)
+    (alter-var-root #'open-files disj file)
+    nil))
 
 (defn- variable-read [db k f]
   (p/read-transaction db (fn [tx] (f (.valAt ^ILookup tx k)))))
@@ -393,43 +394,45 @@
   (delete [_ rsn] (variable-write db k (fn [v] (p/delete v rsn))))
   (replace [_ rsn record] (variable-write db k (fn [v] (p/replace v rsn record)))))
 
-(defn create-db [& {:keys [directory
-                           max-variables
-                           map-size
-                           auto-resize],
-                    :or {max-variables 4096}}]
-  (let [directory (if directory
-                    (io/file directory)
-                    (io/file (str (Files/createTempDirectory "cinq-lmdb" (make-array FileAttribute 0)))))
+(defn database [file & {:keys [max-variables
+                                map-size
+                                auto-resize],
+                         :or {max-variables 4096}}]
+  (let [file (io/file file)
         auto-resize (if (nil? map-size) true (boolean auto-resize))
         map-size (or map-size (* 64 1024 1024))]
-    (when-not (.exists directory) (.mkdirs directory))
-    (when-not (.isDirectory directory) (throw (IllegalArgumentException. "Not a directory")))
+    (when-not (.exists file) (.mkdirs (.getParentFile file)))
     (alter-var-root #'open-files
-                    (fn [dirs]
-                      (if (contains? dirs directory)
-                        (throw (IllegalArgumentException. "Directory already open"))
-                        (conj dirs directory))))
+                    (fn [files]
+                      (if (contains? files file)
+                        (throw (IllegalArgumentException. "File already open"))
+                        (conj files file))))
     (try
       (let [env (-> (Env/create)
                     (.setMapSize map-size)
                     (.setMaxDbs max-variables)
-                    (.open directory (make-array EnvFlags 0)))]
-        (->LMDBDatabase directory env
-                        (ConcurrentHashMap.)
+                    (.open file (doto ^"[Lorg.lmdbjava.EnvFlags;" (make-array EnvFlags 1)
+                                  (aset 0 EnvFlags/MDB_NOSUBDIR))))]
+        (->LMDBDatabase file
+                        env
+                        (let [dbis (ConcurrentHashMap.)]
+                          (doseq [^bytes dbi-bytes (.getDbiNames env)
+                                  :let [dbi-name (String. dbi-bytes "UTF-8")]]
+                            (.put dbis (edn/read-string dbi-name) (create-dbi env dbi-name)))
+                          dbis)
                         (ConcurrentHashMap.)
                         (ThreadLocal/withInitial (reify Supplier (get [_] (ByteBuffer/allocateDirect 8))))
                         (ByteBuffer/allocateDirect (* 32 1024 1024))
                         auto-resize
-                        map-size
-                        (atom {:auto-resize auto-resize,
-                               :max-variables max-variables})))
+                        map-size))
       (catch Throwable t
-        (alter-var-root #'open-files disj directory)
+        (alter-var-root #'open-files disj file)
         (throw t)))))
 
 (comment
-  (def db (create-db))
+  (io/delete-file "tmp/foo" true)
+
+  (def db (database "tmp/foo"))
   (.close db)
   (p/create-relvar db :foo)
   (.-dbis db)
