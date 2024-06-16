@@ -3,8 +3,8 @@
 
 (defprotocol Database
   (create-relvar [db name])
-  (open-write-tx [db])
-  (open-read-tx [db]))
+  (write-transaction [db f])
+  (read-transaction [db f]))
 
 (defprotocol Transaction
   (commit [tx]))

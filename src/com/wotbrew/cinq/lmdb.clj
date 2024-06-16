@@ -11,12 +11,12 @@
            (java.util ArrayList HashMap Map)
            (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function Supplier)
-           (org.lmdbjava Cursor Dbi DbiFlags Env EnvFlags GetOp PutFlags Txn))
+           (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn))
   (:refer-clojure :exclude [replace]))
 
 (set! *warn-on-reflection* true)
 
-(def ^:redef open-directories #{})
+(def ^:redef open-files #{})
 
 (defn- scan [^Cursor cursor ^ByteBuffer key-buffer f init start-rsn]
   (.clear key-buffer)
@@ -263,8 +263,7 @@
            (.computeIfAbsent varmap dbi))))
   (valAt [tx k not-found] (or (get tx k) not-found))
   p/Transaction
-  (commit [_]
-    (.commit txn))
+  (commit [_] (.commit txn))
   Closeable
   (close [_] (.close txn)))
 
@@ -292,43 +291,19 @@
                  (ArrayList.))))
            (.computeIfAbsent varmap dbi))))
   (valAt [tx k not-found] (or (get tx k) not-found))
-  p/Transaction
-  (commit [_]
-    (.commit txn))
   Closeable
   (close [_] (.close txn)))
 
-(deftype LMDBVariable
-  [^Env env
-   ^Dbi dbi
-   ^ThreadLocal key-buffer
-   ^ByteBuffer val-buffer]
-  p/Scannable
-  (scan [_ f init start-rsn]
-    (with-open [txn (.txnRead env)
-                cursor (.openCursor dbi txn)]
-      (scan cursor (.get key-buffer) f init start-rsn)))
-  IReduceInit
-  (reduce [relvar f start]
-    (p/scan relvar (fn [acc _ record] (f acc record)) start 0))
-  p/Relvar
-  (rel-set [_ rel]
-    (with-open [txn (.txnWrite env)]
-      (rel-set dbi txn (.get key-buffer) val-buffer rel)
-      (.commit txn)))
-  p/IncrementalRelvar
-  (insert [_ record]
-    (with-open [txn (.txnWrite env)]
-      (insert dbi txn (.get key-buffer) val-buffer nil record)
-      (.commit txn)))
-  (delete [_ rsn]
-    (with-open [txn (.txnWrite env)]
-      (delete dbi txn (.get key-buffer) val-buffer rsn)
-      (.commit txn)))
-  (replace [_ rsn record]
-    (with-open [txn (.txnWrite env)]
-      (replace dbi txn (.get key-buffer) val-buffer rsn record)
-      (.commit txn))))
+(declare ->LMDBVariable)
+
+(defn- intrinsic-rel [rel-fn]
+  (reify
+    p/Scannable
+    (scan [_ f init rsn]
+      (p/scan (rel-fn) f init rsn))
+    IReduceInit
+    (reduce [_ f init]
+      (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init 0))))
 
 (deftype LMDBDatabase
   [directory
@@ -336,22 +311,122 @@
    ^ConcurrentHashMap dbis
    ^ConcurrentHashMap varmap
    ^ThreadLocal key-buffer
-   ^ByteBuffer val-buffer]
+   ^ByteBuffer val-buffer
+   auto-resize
+   ^:unsynchronized-mutable ^long map-size
+   lmdb-meta]
   p/Database
-  (open-write-tx [_]
-    (->LMDBWriteTransaction env (HashMap.) dbis (.txnWrite env) (.get key-buffer) val-buffer))
-  (open-read-tx [_]
-    (->LMDBReadTransaction env (HashMap.) dbis (.txnRead env) (.get key-buffer) val-buffer))
+  (write-transaction [db f]
+    (if-not auto-resize
+      (with-open [^Closeable tx (->LMDBWriteTransaction env (HashMap.) dbis (.txnWrite env) (.get key-buffer) val-buffer)]
+        (f tx)
+        (p/commit tx))
+      (let [ret (locking db
+                  (try
+                    (with-open [^Closeable tx (->LMDBWriteTransaction env (HashMap.) dbis (.txnWrite env) (.get key-buffer) val-buffer)]
+                      (f tx)
+                      (p/commit tx))
+                    (catch Env$MapFullException _e
+                      (let [new-map-size (* (.-map-size db) 2)]
+                        (.setMapSize env new-map-size)
+                        (set! (.-map-size db) new-map-size)
+                        ::map-resized))))]
+        (if (identical? ::map-resized ret)
+          (recur f)
+          ret))))
+  (read-transaction [_ f]
+    (with-open [^Closeable tx (->LMDBReadTransaction env (HashMap.) dbis (.txnRead env) (.get key-buffer) val-buffer)]
+      (f tx)))
   (create-relvar [_ k]
     (.computeIfAbsent dbis k (reify Function (apply [_ k] (create-dbi env (pr-str k))))))
   ILookup
-  (valAt [_ k]
-    (when-some [dbi (.get dbis k)]
-      (->> (reify Function (apply [_ dbi] (->LMDBVariable env dbi key-buffer val-buffer)))
-           (.computeIfAbsent varmap dbi))))
+  (valAt [db k]
+    (case k
+      :lmdb/stat
+      (intrinsic-rel
+        (fn []
+          (let [env-stat (.stat env)
+                ^EnvInfo env-info (.info env)]
+            [(assoc @lmdb-meta
+               :last-page-number (.-lastPageNumber env-info)
+               :last-transaction-id (.-lastTransactionId env-info)
+               :map-address (.-mapAddress env-info)
+               :map-size (.-mapSize env-info)
+               :map-readers (.-maxReaders env-info)
+               :num-readers (.-numReaders env-info)
+               :branch-pages (.-branchPages env-stat)
+               :depth (.-depth env-stat)
+               :entries (.-depth env-stat)
+               :leaf-pages (.-leafPages env-stat)
+               :overflow-pages (.-overflowPages env-stat)
+               :page-size (.-pageSize env-stat))])))
+
+      :lmdb/variables
+      (intrinsic-rel (fn [] (concat [:lmdb/stat :lmdb/variables] (for [[k] dbis] k))))
+
+      (when (.containsKey dbis k)
+        (->> (reify Function (apply [_ _] (->LMDBVariable db k key-buffer val-buffer)))
+             (.computeIfAbsent varmap k)))))
   (valAt [db k not-found] (or (get db k) not-found))
   Closeable
   (close [_] (.close env)))
+
+(defn- variable-read [db k f]
+  (p/read-transaction db (fn [tx] (f (.valAt ^ILookup tx k)))))
+
+(defn- variable-write [db k f]
+  (p/write-transaction db (fn [tx] (f (.valAt ^ILookup tx k)))))
+
+(deftype LMDBVariable
+  [^LMDBDatabase db
+   k
+   ^ThreadLocal key-buffer
+   ^ByteBuffer val-buffer]
+  p/Scannable
+  (scan [_ f init start-rsn] (variable-read db k (fn [v] (p/scan v f init start-rsn))))
+  IReduceInit
+  (reduce [relvar f start] (p/scan relvar (fn [acc _ record] (f acc record)) start 0))
+  p/Relvar
+  (rel-set [_ rel] (variable-write db k (fn [v] (p/rel-set v rel))))
+  p/IncrementalRelvar
+  (insert [_ record] (variable-write db k (fn [v] (p/insert v record))))
+  (delete [_ rsn] (variable-write db k (fn [v] (p/delete v rsn))))
+  (replace [_ rsn record] (variable-write db k (fn [v] (p/replace v rsn record)))))
+
+(defn create-db [& {:keys [directory
+                           max-variables
+                           map-size
+                           auto-resize],
+                    :or {max-variables 4096}}]
+  (let [directory (if directory
+                    (io/file directory)
+                    (io/file (str (Files/createTempDirectory "cinq-lmdb" (make-array FileAttribute 0)))))
+        auto-resize (if (nil? map-size) true (boolean auto-resize))
+        map-size (or map-size (* 64 1024 1024))]
+    (when-not (.exists directory) (.mkdirs directory))
+    (when-not (.isDirectory directory) (throw (IllegalArgumentException. "Not a directory")))
+    (alter-var-root #'open-files
+                    (fn [dirs]
+                      (if (contains? dirs directory)
+                        (throw (IllegalArgumentException. "Directory already open"))
+                        (conj dirs directory))))
+    (try
+      (let [env (-> (Env/create)
+                    (.setMapSize map-size)
+                    (.setMaxDbs max-variables)
+                    (.open directory (make-array EnvFlags 0)))]
+        (->LMDBDatabase directory env
+                        (ConcurrentHashMap.)
+                        (ConcurrentHashMap.)
+                        (ThreadLocal/withInitial (reify Supplier (get [_] (ByteBuffer/allocateDirect 8))))
+                        (ByteBuffer/allocateDirect (* 32 1024 1024))
+                        auto-resize
+                        map-size
+                        (atom {:auto-resize auto-resize,
+                               :max-variables max-variables})))
+      (catch Throwable t
+        (alter-var-root #'open-files disj directory)
+        (throw t)))))
 
 (comment
   (def db (create-db))
@@ -368,6 +443,7 @@
 
   (c/rel-set (:foo db) (range 1e6))
 
-
+  (vec (:lmdb/stat db))
+  (vec (:lmdb/variables db))
 
   )

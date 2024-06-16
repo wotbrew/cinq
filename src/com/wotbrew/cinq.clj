@@ -59,17 +59,9 @@
 
 (defmacro tuple [& kvs] (#'throw-only-in-queries #'tuple))
 
-(defn write* [db f]
-  (with-open [tx (p/open-write-tx db)]
-    (let [r (f tx)]
-      (p/commit tx)
-      r)))
+(defmacro write [binding & body] `(p/write-transaction ~(second binding) (fn [~(first binding)] ~@body)))
 
-(defmacro write [binding & body] `(write* ~(second binding) (fn [~(first binding)] ~@body)))
-
-(defn read* [db f] (with-open [tx (p/open-read-tx db)] (f tx)))
-
-(defmacro read [binding & body] `(read* ~(second binding) (fn [~(first binding)] ~@body)))
+(defmacro read [binding & body] `(p/read-transaction ~(second binding) (fn [~(first binding)] ~@body)))
 
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
