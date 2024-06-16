@@ -1,8 +1,11 @@
 package com.wotbrew.cinq;
 
+import clojure.lang.Util;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 
 public class CinqMultimap {
@@ -99,7 +102,7 @@ public class CinqMultimap {
     private void reinsertNode(int i, int h, Object key, List value) {
         int m = (capacity - 1);
         i = i & m;
-        for(;;) {
+        for (; ; ) {
             if (table[i * 2] == 0) {
                 table[i * 2] = 1;
                 table[(i * 2) + 1] = h;
@@ -154,7 +157,7 @@ public class CinqMultimap {
         int m = (capacity - 1);
         int i = h & m;
 
-        for (;;) {
+        for (; ; ) {
 
             if (table[i * 2] == 0) {
                 return null;
@@ -178,12 +181,18 @@ public class CinqMultimap {
         doPutTuple(hash(key), key, tuple);
     }
 
-    public void forEach(Consumer<Object> f) {
+    public Object forEach(Function<Object, Object> f) {
         for (int i = 0; i < values.length; i++) {
             List value = values[i];
             if (value != null) {
-                value.forEach(f);
+                for (int j = 0; j < value.size(); j++) {
+                    Object r = f.apply(value.get(j));
+                    if (r != null) {
+                        return f;
+                    }
+                }
             }
         }
+        return null;
     }
 }

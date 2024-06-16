@@ -1,0 +1,91 @@
+rel-count
+
+explicit Counted using env stat
+
+(c/rel-count foo)
+
+---
+
+Implicit group
+
+(q [f foo] (c/count))
+
+if let/proj/where/join/scan-src/group-expr/order-expr expr expects grouping, add it if is not already present
+
+---
+
+Indexes
+
+index scans:
+(q [f (get (:n foo) 42)])
+(q [f (c/range (:n foo) >= 42)])
+(q [f (c/range (:n foo) < 42 :desc)])
+
+index sorts:
+(q [f (c/asc (:n foo))])
+(q [f (c/desc (:n foo))])
+
+index nlj
+(q [id (get (:id customers) 42)
+    :left-join [o (get (:customer-id orders) c:id)]]
+    [id o])
+
+---
+
+Spooling
+
+spooled merge join
+(q [c customers
+    :join! [o orders (= o:customer-id c:customer-id]]
+    [c o])
+
+spooled group by
+(q [c customers
+    :group! [firstname c:firstname]]
+    [firstname (c/count)])
+
+spooled sorts
+(q [c customers
+    :order! [c:firstname :desc]]
+    c:id)
+
+---
+
+CinqDynamicBigRecord
+- used if map is big
+- actual hash table with lazy value loads
+
+---
+
+CinqDynamicList
+- perhaps for large lists, lazy decoding would be helpful
+
+---
+
+CinqDynamicSet
+(same as maps)
+
+---
+
+Record specialisation (structs)
+
+(c/defrecord Customer [a b c d e f])
+
+adds an actual defrecord, with a type hint.
+record name is mapped to a layout (array of name, type)
+
+layouts are stored in the symbol table
+records are stored as layout value* buffers
+
+(q [^Customer c customers])
+ provides a layout hint to (scan customers) so that decoder can be specialised
+
+if layout hint not matched adapt to the record using map->X ?
+Or perhaps emitted/hinted type should be an interface, which can have an adapter for a lazy record
+
+
+
+
+
+
+

@@ -3,7 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.instant :as inst]
-            [com.wotbrew.cinq :as c :refer [q p ptree]]
+            [com.wotbrew.cinq :as c :refer [q p]]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
@@ -83,7 +83,7 @@
            TpchColumnType$Base/IDENTIFIER
            (.getIdentifier c b)
            TpchColumnType$Base/INTEGER
-           (.getInteger c b)
+           (long (.getInteger c b))
            TpchColumnType$Base/VARCHAR
            (.getString c b)
            TpchColumnType$Base/DOUBLE (.getDouble c b)
@@ -884,6 +884,8 @@
       (run-tpch)
       )
     )
+
+
   (clj-async-profiler.core/profile (run-tpch))
   (time (dotimes [x 1] (count (q1 dataset))))
   (time (dotimes [x 1] (count (q1-el dataset))))

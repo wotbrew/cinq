@@ -1,12 +1,16 @@
 package com.wotbrew.cinq;
 
+import clojure.lang.Keyword;
 import clojure.lang.Murmur3;
 import clojure.lang.Util;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-
 public class CinqUtil {
+
+  public static boolean equalKey(Object k1, Object k2){
+    if(k1 instanceof Keyword)
+      return k1 == k2;
+    return Util.equiv(k1, k2);
+  }
 
   public static int hasheqArray(Object[] arr) {
     int h = 1;

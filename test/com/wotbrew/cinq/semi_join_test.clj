@@ -32,5 +32,6 @@
                     true)]
            true)))
 
+  (is (= [2] (c/q [a [1, 2] :when (not (c/scalar [b [1] :when (= a b)] true))] a)))
 
   )

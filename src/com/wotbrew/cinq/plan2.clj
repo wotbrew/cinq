@@ -57,9 +57,9 @@
     (let [[ra smap] (unique-ify* ?ra)]
       [[::order-by ra (walk/postwalk-replace smap ?clauses)] smap])
 
-    [::limit ?ra ?n]
+    [::limit ?ra ?n ?box]
     (let [[ra smap] (unique-ify* ?ra)]
-      [[::limit ra ?n] smap])
+      [[::limit ra ?n ?box] smap])
 
     [::let ?ra ?bindings]
     (let [[ra inner-smap] (unique-ify* ?ra)
@@ -198,7 +198,7 @@
     [::order-by ?ra _]
     (columns ?ra)
 
-    [::limit ?ra _]
+    [::limit ?ra _ ?box]
     (columns ?ra)
 
     [::let ?ra ?bindings]
@@ -338,16 +338,16 @@
   (filter #(and (vector? %) (= ::lookup (nth % 0 nil))) (tree-seq seqable? seq expr)))
 
 (defn lookup-sym [lookup]
-  (let [[_ kw a] lookup]
+  (let [[_ kw a t] lookup]
     (if (namespace kw)
-      (symbol (str (name a) ":" (namespace kw) ":" (name kw)))
-      (symbol (str (name a) ":" (name kw))))))
+      (with-meta (symbol (str (name a) ":" (namespace kw) ":" (name kw))) {:tag t})
+      (with-meta (symbol (str (name a) ":" (name kw))) {:tag t}))))
 
 (defn push-lookups* [ra lookups]
   (m/match ra
     [::scan ?src ?bindings]
     (let [self-sym (some (fn [[sym k]] (when (= :cinq/self k) sym)) ?bindings)
-          matching-lookups (filter (fn [[_ kw s]] (= self-sym s)) lookups)]
+          matching-lookups (filter (fn [[_ _ s]] (= self-sym s)) lookups)]
       [[::scan ?src (into ?bindings (map (fn [[_ kw :as lookup]] [(lookup-sym lookup) kw])) matching-lookups)]
        (into {} (map (fn [lookup] [lookup (lookup-sym lookup)]) matching-lookups))])
 
@@ -423,9 +423,9 @@
           [ra smap] (push-lookups* ?ra lookups)]
       [[::order-by ra (mapv (fn [[e dir]] [(walk/postwalk-replace smap e) dir]) ?clauses)] smap])
 
-    [::limit ?ra ?n]
+    [::limit ?ra ?n ?box]
     (let [[ra smap] (push-lookups* ?ra lookups)]
-      [[::limit ra ?n] smap])
+      [[::limit ra ?n ?box] smap])
 
     [::let ?ra ?bindings]
     (let [expr-lookups (find-lookups (map second ?bindings))
@@ -804,39 +804,39 @@
               {reordable-preds true, outer-preds false} (group-by expr/pred-can-be-reordered? ?preds)
               original-order (zipmap ?rels (range))]
 
-            ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
-            ;; this is not good. Look at minimum spanning tree algs
-            ;; todo if the user hints cards to us we will want to use that for ordering
-            ;; See https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf
-            (loop [unsatisfied-predicates reordable-preds
-                   pending-relations (set ?rels)
-                   ra nil
-                   outer-where outer-preds]
-              (if (seq unsatisfied-predicates)
-                (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
-                      cost (fn [pred]
-                             (let [dep-rels (dependent-relations pred)]
-                               [(count dep-rels)
-                                (reduce min Long/MAX_VALUE (map original-order dep-rels))]))
-                      [pred & unsatisfied-predicates] (sort-by cost unsatisfied-predicates)
-                      add-relations (sort-by original-order (dependent-relations pred))]
-                  (recur unsatisfied-predicates
-                         (reduce disj pending-relations add-relations)
-                         (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra add-relations)]
-                           (m/match ra
-                             [::join ?left ?right ?pred]
-                             [::join ?left ?right (conjoin-predicates ?pred pred)]
+          ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join
+          ;; this is not good. Look at minimum spanning tree algs
+          ;; todo if the user hints cards to us we will want to use that for ordering
+          ;; See https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf
+          (loop [unsatisfied-predicates reordable-preds
+                 pending-relations (set ?rels)
+                 ra nil
+                 outer-where outer-preds]
+            (if (seq unsatisfied-predicates)
+              (let [dependent-relations (fn [pred] (filter #(dependent? % pred) pending-relations))
+                    cost (fn [pred]
+                           (let [dep-rels (dependent-relations pred)]
+                             [(count dep-rels)
+                              (reduce min Long/MAX_VALUE (map original-order dep-rels))]))
+                    [pred & unsatisfied-predicates] (sort-by cost unsatisfied-predicates)
+                    add-relations (sort-by original-order (dependent-relations pred))]
+                (recur unsatisfied-predicates
+                       (reduce disj pending-relations add-relations)
+                       (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra add-relations)]
+                         (m/match ra
+                           [::join ?left ?right ?pred]
+                           [::join ?left ?right (conjoin-predicates ?pred pred)]
 
-                             [::where ?left ?pred]
-                             [::where ?left (conjoin-predicates ?pred pred)]
+                           [::where ?left ?pred]
+                           [::where ?left (conjoin-predicates ?pred pred)]
 
-                             ?ra
-                             [::where ?ra pred]))
-                         outer-where))
-                (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra pending-relations)]
-                  (if (seq outer-where)
-                    [::where ra (reduce conjoin-predicates (first outer-where) (rest outer-where))]
-                    ra))))))
+                           ?ra
+                           [::where ?ra pred]))
+                       outer-where))
+              (let [ra (reduce (fn [ra rel] (if (nil? ra) rel [::join ra rel true])) ra pending-relations)]
+                (if (seq outer-where)
+                  [::where ra (reduce conjoin-predicates (first outer-where) (rest outer-where))]
+                  ra))))))
       r/attempt
       r/bottom-up))
 
@@ -864,12 +864,12 @@
                 r/top-down)
         new-expr (all expr)
         new-ra (reduce
-             (fn [ra [sq sym]]
-               (m/match sq
-                 [::scalar-sq [::project ?sq [[?col ?expr]]]]
-                 [::apply :single-join ra [::project ?sq [[sym ?expr]]]]))
-             ra
-             @replacement-syms)]
+                 (fn [ra [sq sym]]
+                   (m/match sq
+                     [::scalar-sq [::project ?sq [[?col ?expr]]]]
+                     [::apply :single-join ra [::project ?sq [[sym ?expr]]]]))
+                 ra
+                 @replacement-syms)]
     [new-ra new-expr]))
 
 (def substitute-sub-queries
@@ -993,10 +993,8 @@
        ra)
 
       ((-> (r/match
-             [::lookup ?kw ?s nil]
+             [::lookup ?kw ?s ?t]
              (list ?kw ?s)
-             [::lookup ?kw ?s ?default]
-             (list ?kw ?s ?default)
              [::= ?a ?b]
              (list '= ?a ?b)
              [::and & ?clauses]
@@ -1046,13 +1044,11 @@
     ;; todo only add this one conveying self tag is done differently (right now removing self when redudant stops type hints)
     ;; check perf - seems slower branch prune-scans, even when re-conveying the self tag (using meta)
     ;; jvm weirdness, maybe cache coincidence
-    #_#_
-    [::scan ?src ?bindings]
-    [::scan ?src (filterv (fn [[col]] (contains? req-cols col)) ?bindings)]
+    #_#_[::scan ?src ?bindings]
+            [::scan ?src (filterv (fn [[col]] (contains? req-cols col)) ?bindings)]
 
     ;; todo group-project
-    #_#_
-    [::group-project ?ra ?bindings ?aggregates ?projection]
+    #_#_[::group-project ?ra ?bindings ?aggregates ?projection]
             nil
 
     [::apply ?mode ?left ?right]
@@ -1064,8 +1060,8 @@
     [::order-by ?ra ?order-clauses]
     [::order-by (prune-cols* ?ra (map first ?order-clauses) req-cols) ?order-clauses]
 
-    [::limit ?ra ?n]
-    [::limit (prune-cols* ?ra nil req-cols) ?n]
+    [::limit ?ra ?n ?box]
+    [::limit (prune-cols* ?ra nil req-cols) ?n ?box]
 
     [::let ?ra ?bindings]
     [::let (prune-cols* ?ra (map second ?bindings) req-cols) ?bindings]

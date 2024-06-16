@@ -3,7 +3,8 @@
             [com.wotbrew.cinq.expr :as expr]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
-            [com.wotbrew.cinq.plan2 :as plan]))
+            [com.wotbrew.cinq.plan2 :as plan])
+  (:import (com.wotbrew.cinq CinqLongBox)))
 
 (def ^:dynamic *env* {})
 
@@ -53,11 +54,13 @@
              (str/includes? (namespace s) ":"))
         (let [[a b] (str/split (namespace s) #"\:")]
           {:kw (keyword b (name s))
-           :a (symbol a)})
+           :a (symbol a)
+           :t (:tag (meta s))})
         (str/includes? (name s) ":")
         (let [[a b] (str/split (name s) #"\:")]
           {:kw (keyword (namespace s) b)
-           :a (symbol a)})))
+           :a (symbol a)
+           :t (:tag (meta s))})))
 
 (def ^:redef n2n-rewrites #{})
 
@@ -90,14 +93,14 @@
 
     ;; lookup symbols, e.g foo:bar == (:bar foo)
     (m/and ?s (m/guard (lookup-sym? ?s)))
-    (let [{:keys [kw, a]} (parse-lookup-sym ?s)]
-      [::plan/lookup kw a])
+    (let [{:keys [kw, a, t]} (parse-lookup-sym ?s)]
+      [::plan/lookup kw a t])
 
     ;; kw lookup without default (therefore nil)
     (m/and (?kw ?s)
            (m/guard (keyword? ?kw))
            (m/guard (simple-symbol? ?s)))
-    [::plan/lookup ?kw ?s]
+    [::plan/lookup ?kw ?s nil]
 
     ;; todo remove these, use cinq/*
     ;; aggregates
@@ -258,7 +261,7 @@
          [::plan/order-by (! (:prev tree)) (:clauses tree)]
 
          :limit
-         [::plan/limit (! (:prev tree)) (:n tree)]))
+         [::plan/limit (! (:prev tree)) (:n tree) `(CinqLongBox. 0)]))
      tree)))
 
 (defn parse-projection [selection expr]

@@ -51,8 +51,10 @@
         rw (fn [form]
              (m/match form
 
-               [::plan/lookup ?kw ?s]
-               (list ?kw ?s)
+               [::plan/lookup ?kw ?s ?t]
+               (if ?t
+                 (with-meta (list ?kw ?s) {:tag ?t})
+                 (list ?kw ?s))
 
                [::plan/count] '%count
 
@@ -147,7 +149,7 @@
     [::plan/<= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
     [::plan/> ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
     [::plan/>= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/lookup ?kw ?expr] (pred-can-be-reordered? ?expr)
+    [::plan/lookup ?kw ?expr ?t] (pred-can-be-reordered? ?expr)
     [::plan/not ?expr] (pred-can-be-reordered? ?expr)
     [::plan/in ?expr ?set] (pred-can-be-reordered? ?expr)
     [::plan/contains ?coll ?expr] (and (pred-can-be-reordered? ?coll) (pred-can-be-reordered? ?expr))

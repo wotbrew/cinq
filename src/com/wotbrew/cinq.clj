@@ -34,7 +34,7 @@
                    (plan/prune-cols #{})
                    compile-plan))]
     ;; todo better representation
-    `(vec ~code)))
+    code))
 
 (defn- throw-only-in-queries [v]
   (throw (ex-info (format "%s only supported in queries" v) {})))
@@ -68,32 +68,47 @@
 
 (defmacro read [binding & body] `(p/read-transaction ~(second binding) (fn [~(first binding)] ~@body)))
 
+(defn create
+  ([db k] (create db k nil))
+  ([db k init]
+   (doto (p/create-relvar db k)
+     (p/rel-set init))))
+
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
 (defn insert [relvar record] (p/insert relvar record))
 
-(defmacro delete [relvar alias query-or-pred]
-  {:pre [(symbol? alias)]}
+(defn- add-rsn-to-binding [binding rsn]
+  (cond
+    (symbol? binding) {rsn :cinq/rsn :as binding}
+    (map? binding) (assoc binding rsn :cinq/rsn)
+    (sequential? binding) {binding :cinq/self, rsn :cinq/rsn}
+    :else (throw (ex-info "Unsupported binding form" {:binding binding}))))
+
+(defmacro delete [query]
+  {:pre [(<= 2 (clojure.core/count query))]}
   (let [rsn (gensym "rsn")
-        rv (gensym "relvar")]
+        rv (gensym "relvar")
+        [binding relvar & query] query]
     `(let [~rv ~relvar]
        (agg
          0
          affected-records#
-         ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+         ~(into [(add-rsn-to-binding binding rsn) rv] query)
          (if (p/delete ~rv ~rsn)
            (unchecked-inc affected-records#)
            affected-records#)))))
 
-(defmacro update [relvar alias query-or-pred expr]
-  {:pre [(symbol? alias)]}
+(defmacro update [query expr]
+  {:pre [(<= 2 (clojure.core/count query))]}
   (let [rsn (gensym "rsn")
-        rv (gensym "relvar")]
+        rv (gensym "relvar")
+        [binding relvar & query] query]
     `(let [~rv ~relvar]
        (agg
          0
          affected-records#
-         ~(into [{rsn :cinq/rsn, :as alias} rv] (if (vector? query-or-pred) query-or-pred [:when query-or-pred]))
+         ~(into [(add-rsn-to-binding binding rsn) rv] query)
          (if (p/replace ~rv ~rsn ~expr)
            (unchecked-inc affected-records#)
            affected-records#)))))
@@ -140,3 +155,10 @@
                           nil))))
                 *print-length* 0))
       (.write w "] "))))
+
+(defn rel-count [rel]
+  ;; TODO (big-count) proto for stats[count].
+  (agg 0 n [_ rel] (inc n)))
+
+(defn rel-first [rel]
+  (scalar [x rel :limit 1] x))

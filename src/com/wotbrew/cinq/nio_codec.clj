@@ -1,10 +1,10 @@
 (ns com.wotbrew.cinq.nio-codec
   "Encoding/decoding supported data to nio ByteBuffer's."
   (:import (clojure.lang Keyword Symbol)
+           (com.wotbrew.cinq CinqDynamicArrayRecord CinqLongBox)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
-           (java.util ArrayList Date HashMap HashSet List Map Set)
-           (java.util.function Function)))
+           (java.util Date List Map Set)))
 
 (defprotocol Encode
   (encode-object [o buffer symbol-table]
@@ -18,8 +18,19 @@
 
 (def ^:const t-max 2147483647)
 
+(defrecord SymbolTableValue [map vec added])
+
 (defn intern-symbol [symbol-table symbol]
-  (.computeIfAbsent ^Map symbol-table symbol (reify Function (apply [_ _] (unchecked-add t-max (long (.size ^Map symbol-table)))))))
+  (-> ^SymbolTableValue (swap! symbol-table (fn [^SymbolTableValue r]
+                            (let [m (.-map r)]
+                              (if (contains? m symbol)
+                                r
+                                (->SymbolTableValue
+                                  (assoc m symbol (unchecked-add t-max (long (count m))))
+                                  (conj (.-vec r) symbol)
+                                  (conj (.-added r) symbol))))))
+      .-map
+      (get symbol)))
 
 (def ^:const t-nil 0)
 (def ^:const t-true 1)
@@ -56,7 +67,31 @@
       (.putLong buffer t-long)
       (.putLong buffer n)
       true))
+  Integer
+  (encode-object [n buffer symbol-table]
+    (let [^ByteBuffer buffer buffer]
+      (.putLong buffer t-long)
+      (.putLong buffer n)
+      true))
+  Short
+  (encode-object [n buffer symbol-table]
+    (let [^ByteBuffer buffer buffer]
+      (.putLong buffer t-long)
+      (.putLong buffer n)
+      true))
+  Byte
+  (encode-object [n buffer symbol-table]
+    (let [^ByteBuffer buffer buffer]
+      (.putLong buffer t-long)
+      (.putLong buffer n)
+      true))
   Double
+  (encode-object [n buffer symbol-table]
+    (let [^ByteBuffer buffer buffer]
+      (.putLong buffer t-double)
+      (.putDouble buffer n))
+    true)
+  Float
   (encode-object [n buffer symbol-table]
     (let [^ByteBuffer buffer buffer]
       (.putLong buffer t-double)
@@ -102,19 +137,41 @@
   Map
   (encode-object [m buffer symbol-table]
     (let [^Map m m
-          ^ByteBuffer buffer buffer]
+          ^ByteBuffer buffer buffer
+          len (.size m)]
       (.putLong buffer t-map)
-      (.putInt buffer (.size m))
-      (reduce-kv
-        (fn [_ k v]
-          (if (and (buffer-min-remaining? buffer)
-                   (encode-object k buffer symbol-table)
-                   (buffer-min-remaining? buffer)
-                   (encode-object v buffer symbol-table))
-            true
-            (reduced false)))
-        true
-        m)))
+      (.putInt buffer len)
+      (let [offset-table-size (* len 8)
+            offset-table-pos (.position buffer)
+            ctr (CinqLongBox. 0)]
+        (and (< offset-table-size (.remaining buffer))
+             (do (dotimes [_ len]
+                   (.putInt buffer 0)
+                   (.putInt buffer 0))
+                 true)
+             (reduce-kv
+               (fn [_ k v]
+                 (let [i (.-val ctr)]
+                   (if-not (< i len)
+                     (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                     (let [key-pos (.position buffer)]
+                       (set! (.-val ctr) (unchecked-inc i))
+                       (.putInt buffer
+                                (unchecked-add offset-table-pos (unchecked-multiply i 8))
+                                (unchecked-subtract key-pos offset-table-pos))
+                       (if (and (buffer-min-remaining? buffer)
+                                (encode-object k buffer symbol-table))
+                         (let [val-pos (.position buffer)]
+                           (.putInt buffer
+                                    (unchecked-add offset-table-pos (unchecked-add 4 (unchecked-multiply i 8)))
+                                    (unchecked-subtract val-pos offset-table-pos))
+                           (if (and (buffer-min-remaining? buffer)
+                                    (encode-object v buffer symbol-table))
+                             true
+                             (reduced false)))
+                         (reduced false))))))
+               true
+               m)))))
   List
   (encode-object [l buffer symbol-table]
     (let [^List l l
@@ -150,68 +207,113 @@
       (.putLong buffer (inst-ms d))
       true)))
 
+(defmacro case2 [expr & cases]
+  (if (even? (count cases))
+    `(case ~expr
+       ~@(for [[test expr] (partition 2 cases)
+               form [(if (symbol? test) (eval test) test) expr]]
+           form))
+    `(case ~expr
+       ~@(for [[test expr] (partition 2 cases)
+               form [(if (symbol? test) (eval test) test) expr]]
+           form)
+       ~(last cases))))
+
+(declare decode-object)
+
+(defn decode-string [^ByteBuffer buffer]
+  (let [len (.getInt buffer)
+        arr (byte-array len)]
+    (.get buffer arr)
+    (String. arr StandardCharsets/UTF_8)))
+
+(defn decode-object-array [^ByteBuffer buffer symbol-list]
+  (let [len (.getInt buffer)
+        items (object-array len)]
+    (dotimes [i len]
+      (aset items i (decode-object buffer symbol-list)))
+    items))
+
+(defn decode-list [^ByteBuffer buffer symbol-list]
+  (vec (decode-object-array buffer symbol-list)))
+
+(defn buffer-copy [^ByteBuffer buffer]
+  (let [buf (ByteBuffer/allocate (.remaining buffer))]
+    (.put buf buffer)
+    (.flip buf)))
+
+(defn decode-map [^ByteBuffer buffer symbol-list]
+  #_(let [len (.getInt buffer)
+        ;; skip offset map
+        _ (.position buffer (+ (.position buffer) (* len 8)))
+        m (volatile! (transient {}))]
+    (dotimes [_ len]
+      (vswap! m assoc! (decode-object buffer symbol-list) (decode-object buffer symbol-list)))
+    (persistent! @m))
+
+  (let [len (.getInt buffer)
+        start-pos (.position buffer)
+        offsets (int-array len)
+        keys (object-array len)
+        vals (object-array len)
+        table-size (unchecked-multiply-int len 8)]
+    (dotimes [i len]
+      (let [k-offset (.getInt buffer)
+            v-offset (.getInt buffer)]
+        (.mark buffer)
+        (.position buffer (unchecked-add-int start-pos k-offset))
+        (aset keys (int i) (decode-object buffer symbol-list))
+        (aset offsets (int i) (unchecked-subtract-int v-offset table-size))
+        (.reset buffer)))
+    (CinqDynamicArrayRecord. keys vals offsets (buffer-copy buffer) symbol-list)))
+
+(defn decode-set [^ByteBuffer buffer symbol-list]
+  (let [len (.getInt buffer)
+        m (volatile! (transient #{}))]
+    (dotimes [_ len]
+      (vswap! m conj! (decode-object buffer symbol-list)))
+    (persistent! @m)))
+
+(defn decode-date [^ByteBuffer buffer]
+  (let [epoch (.getLong buffer)]
+    (Date. epoch)))
+
+(defn decode-symbol [^ByteBuffer buffer]
+  (symbol (decode-object buffer nil) (decode-object buffer nil)))
+
+(defn decode-keyword [^ByteBuffer buffer]
+  (keyword (decode-object buffer nil) (decode-object buffer nil)))
+
 (defn decode-object [^ByteBuffer buffer symbol-list]
   (let [tid (.getLong buffer)]
-    (condp = tid
+    (case2 tid
       t-nil nil
       t-true true
       t-false false
       t-long (.getLong buffer)
       t-double (.getDouble buffer)
-      t-string
-      (let [len (.getInt buffer)
-            arr (byte-array len)]
-        (.get buffer arr)
-        (String. arr StandardCharsets/UTF_8))
-
-      t-list
-      (let [len (.getInt buffer)
-            items (object-array len)]
-        (dotimes [i len]
-          (aset items i (decode-object buffer symbol-list)))
-        (vec items))
-
-      t-map
-      (let [len (.getInt buffer)
-            m (volatile! (transient {}))]
-        (dotimes [_ len]
-          (let [k (decode-object buffer symbol-list)
-                v (decode-object buffer symbol-list)]
-            (vswap! m assoc! k v)))
-        (persistent! @m))
-
-      t-set
-      (let [len (.getInt buffer)
-            m (volatile! (transient #{}))]
-        (dotimes [_ len]
-          (vswap! m conj! (decode-object buffer symbol-list)))
-        (persistent! @m))
-
-      t-date
-      (let [epoch (.getLong buffer)]
-        (Date. epoch))
-
-      t-symbol
-      (symbol (decode-object buffer symbol-list) (decode-object buffer symbol-list))
-
-      t-keyword
-      (keyword (decode-object buffer symbol-list) (decode-object buffer symbol-list))
-
+      t-string (decode-string buffer)
+      t-list (decode-list buffer symbol-list)
+      t-map (decode-map buffer symbol-list)
+      t-set (decode-set buffer symbol-list)
+      t-date (decode-date buffer)
+      t-symbol (decode-symbol buffer)
+      t-keyword (decode-keyword buffer)
       (nth symbol-list (unchecked-subtract tid t-max)))))
 
-(defn symbol-list [^Map symbol-table]
-  (let [l (object-array (.size symbol-table))]
-    (doseq [[k v] symbol-table]
-      (aset l (unchecked-subtract (long v) t-max) k))
-    (vec l)))
+(defn symbol-list [symbol-table]
+  (.-vec ^SymbolTableValue (deref symbol-table)))
+
+(defn empty-symbol-table []
+  (atom (->SymbolTableValue {} [] [])))
 
 (defn encode
   ^ByteBuffer [o & {:keys [direct]}]
-  (let [symbol-table (HashMap.)]
+  (let [symbol-table (empty-symbol-table)]
     (loop [content-buf (ByteBuffer/allocate 16)]
       (if (encode-object o content-buf symbol-table)
         (loop [symbol-buf (ByteBuffer/allocate 16)]
-          (if (encode-object symbol-table symbol-buf nil)
+          (if (encode-object (symbol-list symbol-table) symbol-buf nil)
             (let [_ (do (.flip content-buf)
                         (.flip symbol-buf))
                   cap (+ (.remaining content-buf) (.remaining symbol-buf))
@@ -223,10 +325,15 @@
         (recur (ByteBuffer/allocate (* 2 (.capacity content-buf))))))))
 
 (defn decode [^ByteBuffer buf]
-  (let [symbol-table (decode-object buf [])]
-    (decode-object buf (symbol-list symbol-table))))
+  (decode-object buf (decode-object buf [])))
+
+(defn clear-symbol-adds [symbol-table]
+  (swap! symbol-table assoc :added []))
 
 (comment
+
+  (-> (encode {:foo 42})
+      (decode))
 
   (-> (encode {:foo [true nil false 42 42.3 "hello, world"]})
       (decode))
