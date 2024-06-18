@@ -867,7 +867,7 @@
                         #'q19, #'q20, #'q21
                         #'q22]]
                  (let [start-ns (System/nanoTime)
-                       _ (count (q dataset))
+                       _ (c/rel-count (q dataset))
                        end-ns (System/nanoTime)]
                    [(name (.toSymbol q)) (* 1e-6 (- end-ns start-ns))])))]
       {:timings timings

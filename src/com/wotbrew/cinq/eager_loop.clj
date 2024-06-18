@@ -119,10 +119,12 @@
         (reduce [_ ~f init#]
           (let [~box (object-array 1)]
             (aset ~box 0 init#)
-            ~(emit-loop ra `(let [r# (~f (aget ~box 0) ~(if tuple (t/emit-tuple ra) `(clojure.lang.RT/box ~col)))]
-                              (if (reduced? r#)
-                                (aset ~box 0 @r#)
-                                (do (aset ~box 0 r#) nil))))
+            ((fn [~(with-meta box {:tag 'objects})]
+               ~(emit-loop ra `(let [r# (~f (aget ~box 0) ~(if tuple (t/emit-tuple ra) `(clojure.lang.RT/box ~col)))]
+                                 (if (reduced? r#)
+                                   (aset ~box 0 @r#)
+                                   (do (aset ~box 0 r#) nil)))))
+             ~box)
             (aget ~box 0)))))))
 
 (defn emit-cross-join [left right body]
