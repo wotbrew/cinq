@@ -42,7 +42,9 @@
 (defn- throw-only-in-queries [v]
   (throw (ex-info (format "%s only supported in queries" v) {})))
 
-(defmacro scalar [query selection] `(first (q ~query ~selection)))
+(defn rel-first [rel] (reduce (fn [_ x] (reduced x)) nil rel))
+
+(defmacro scalar [query selection] `(rel-first (q ~query ~selection)))
 
 (defmacro exists? [query] `(scalar ~query true))
 
@@ -163,6 +165,3 @@
 
 (comment
   (rel-count [1, 2, 3]))
-
-(defn rel-first [rel]
-  (scalar [x rel :limit 1] x))
