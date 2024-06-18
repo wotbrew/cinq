@@ -82,7 +82,7 @@ Give the relvar a new value.
 
 #### `insert`
 
-Add a row into a new value. It returns a new `row sequence number` or `rsn`. 
+Add a row into a new value. It returns a new `row sequence number` or `rsn` (that is probably not going to be relevant for some time!). 
 
 ```clojure 
 (c/insert (:customers db) [{:name "Jikl"}]) ;; => 2
@@ -142,6 +142,10 @@ Working right now:
 Collections must not be mutated as you are writing them otherwise you can corrupt your database. I plan to put in guards against this (throw an exception).
 
 Anything else is TBD
+
+## How does it deal with `x`? 
+
+See [todo.txt](todo.txt) for some thoughts
 
 ## Usage
 

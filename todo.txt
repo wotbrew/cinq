@@ -18,8 +18,10 @@ Indexes
 
 index scans:
 (q [f (get (:n foo) 42)])
-(q [f (c/range (:n foo) >= 42)])
-(q [f (c/range (:n foo) < 42 :desc)])
+(q [f (c/asc (:n foo) >= 42)])
+(q [f (c/desc (:n foo) < 42 )])
+
+(c/asc (:n foo) >= 42)
 
 index sorts:
 (q [f (c/asc (:n foo))])
