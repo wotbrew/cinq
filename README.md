@@ -122,13 +122,13 @@ They map names to transactional relvars.
 Reads of these relvars will remain consistent with each other within the transaction. 
 Any changes will be committed together across all relvars at the end of the transaction.
 
-#### read
+#### `read`
 
 ```clojure 
 (c/read [tx db] (:customers tx))
 ```
 
-#### write
+#### `write`
 ```clojure 
 (c/write [tx db] (c/insert (:customers tx) {:name "Jeremy"}))
 ```
