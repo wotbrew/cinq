@@ -4,7 +4,7 @@ Language integrated query (and relational database) for Clojure.
 
 ## Query
 
-With `cinq` programmer writes queries in the style of a clojure `for` loop.
+With `cinq` the programmer writes queries in the style of a clojure `for` loop.
 
 ```clojure 
 (q [l lineitem
@@ -28,12 +28,12 @@ These queries go through extensive optimisation at compile time to emit very eff
 - Extremely efficient collection processing, fused loops, one-pass summarization and unboxed math.
 - Joins, aggregation, nested sub queries, database-level query as a macro.
 - Relational planner and optimiser, push-down, de-correlation, join algorithm selection.
-- Query arbitrary collections, optimisations for collections of records.
+- Query arbitrary collections as well as database relations, optimisations for collections of records.
 - Use arbitrary clojure code in queries, planner is sensitive to things like nil-safety.
 
 ## Database
 
-In `cinq` a database is a bit like a map of names to relational variables. You can use `com.wotbrew.cinq.lmdb` for a database that lives in a file. SQLite style.
+In `cinq` a database a mapping of names to relational variables. You can use `com.wotbrew.cinq.lmdb` for a database that lives in a file. SQLite style.
 
 This allows `cinq` to work with very large relations.
 
@@ -55,9 +55,10 @@ This allows `cinq` to work with very large relations.
 ;; => 
 [{:name "Alice"}]
 
-;; lmdb database come with a few initial relations
+;; lmdb database come with a few initial relations for statistics and what not
 (:lmdb/variables db)
-;; => #cinq/rel [:lmdb/stat, :lmdb/variables, :lmdb/symbols, :customers]
+;; => 
+#cinq/rel [:lmdb/stat, :lmdb/variables, :lmdb/symbols, :customers]
 
 ;; databases are Closeable, though the process exiting is also fine, LMDB is pretty good.
 (.close db)
