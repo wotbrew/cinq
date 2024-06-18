@@ -1,11 +1,3 @@
-rel-count
-
-explicit Counted using env stat
-
-(c/rel-count foo)
-
----
-
 Indirect dbis
 
 Give dbis int names. Have the associated keys be in a table. When we look up a variable, indirect through this table.
