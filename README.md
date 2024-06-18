@@ -82,7 +82,7 @@ Give the relvar a new value.
 
 #### `insert`
 
-Add a row into a new value. It returns a new `row sequence number` or `rsn` (that is probably not going to be relevant for some time!). 
+Add a row into a relation variable, the row can be anything [encodable](#encoding). It returns a new `row sequence number` or `rsn` (that is probably not going to be relevant for some time!). 
 
 ```clojure 
 (c/insert (:customers db) [{:name "Jikl"}]) ;; => 2
