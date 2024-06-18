@@ -6,6 +6,16 @@ explicit Counted using env stat
 
 ---
 
+Indirect dbis
+
+Give dbis int names. Have the associated keys be in a table. When we look up a variable, indirect through this table.
+
+Benefits:
+- can swap one variable out for another. I've prepped customers2, make it customers now as an atomic swap.
+  Because such a table would be in the database we can even commit multiple such swaps at once. This might be useful in doing schema migs etc
+
+---
+
 Implicit group
 
 (q [f foo] (c/count))
