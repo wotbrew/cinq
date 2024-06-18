@@ -1,10 +1,17 @@
-# cinq(db)
+# cinq
 
-Language integrated query (and relational database) for Clojure.
+Language integrated query and ACID relational database for Clojure.
+
+- Very fast (for the JVM) query compiler. Emits unboxed math, fused loops - applies relational planner optimisations such as sub query de-nesting.
+- Optional single-file databases with full ACID transactions.
+- Integrated with Clojure and the REPL, reified relations, query clojure things, use clojure expressions directly, write transactions in clojure.
+- Relation-first programming style, where relations are first-class objects that you operate on - as opposed to a 'send your query to the database' style).
 
 ## Query
 
 With `cinq` the programmer writes queries in the style of a clojure `for` loop.
+
+In the below example `lineitem` might be a collection (say in a vector) or a relation variable, containing a larger-than-memory relation, sourced from a database. 
 
 ```clojure 
 (q [l lineitem
@@ -25,15 +32,13 @@ With `cinq` the programmer writes queries in the style of a clojure `for` loop.
 
 These queries go through extensive optimisation at compile time to emit very efficient code. 
 
-- Extremely efficient collection processing, fused loops, one-pass summarization and unboxed math.
-- Joins, aggregation, nested sub queries, database-level query as a macro.
-- Relational planner and optimiser, push-down, de-correlation, join algorithm selection.
-- Query arbitrary collections as well as database relations, optimisations for collections of records.
-- Use arbitrary clojure code in queries, planner is sensitive to things like nil-safety.
+The optional `a:foo`, `a:ns/foo` are quick lookups that desugar to `(:foo a)`, `(:ns/foo a)` this avoid noise when you have a lot of joins. I like it, but its optional, feel free to destructure/use kw lookups instead. Both still get optimised away (to e.g register/offset/field lookups) if they can be.
 
 ## Database
 
-In `cinq` a database a mapping of names to relational variables. You can use `com.wotbrew.cinq.lmdb` for a database that lives in a file. SQLite style.
+In `cinq` a database is a mapping of names to relational variables. 
+
+You can use `com.wotbrew.cinq.lmdb` for a database that lives in a single file. SQLite style.
 
 This allows `cinq` to work with very large relations.
 
