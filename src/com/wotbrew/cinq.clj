@@ -1,5 +1,5 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use for max min count set update replace run! read])
+  (:refer-clojure :exclude [use for max min count set update replace run! read vec])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
@@ -10,7 +10,7 @@
 
 (defn optimize-plan [ra] (plan/rewrite ra))
 
-(defn compile-plan [ra] (el/emit-list ra 0))
+(defn compile-plan [ra] (el/emit-rel ra))
 
 (defmacro p [query selection]
   (let [ctr (atom -1)]
@@ -35,6 +35,9 @@
                    compile-plan))]
     ;; todo better representation
     code))
+
+(defmacro vec [query selection] `(clojure.core/vec (q ~query ~selection)))
+(defmacro set [query selection] `(clojure.core/set (q ~query ~selection)))
 
 (defn- throw-only-in-queries [v]
   (throw (ex-info (format "%s only supported in queries" v) {})))
@@ -157,6 +160,9 @@
 (defn rel-count [rel]
   ;; TODO (big-count) proto for stats[count].
   (agg 0 n [_ rel] (inc n)))
+
+(comment
+  (rel-count [1, 2, 3]))
 
 (defn rel-first [rel]
   (scalar [x rel :limit 1] x))

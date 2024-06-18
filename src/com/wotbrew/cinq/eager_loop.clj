@@ -6,7 +6,9 @@
             [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
-  (:import (com.wotbrew.cinq CinqLongBox CinqMultimap)
+  (:import (clojure.lang IReduceInit)
+           (com.wotbrew.cinq CinqLongBox CinqMultimap)
+           (com.wotbrew.cinq.protocols Scannable)
            (java.util ArrayList Comparator HashMap)
            (java.util.function BiFunction Function)))
 
@@ -49,8 +51,6 @@
 
 (defn need-rsn? [bindings] (some (comp #{:cinq/rsn} second) bindings))
 
-(def acc-sym (gensym "acc"))
-
 (defn emit-scan [src bindings body]
   (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
         self-tag (:tag (meta self-binding))
@@ -83,29 +83,52 @@
                               form)]
                       (some-> ~body reduced))))]
     #_`(let [step# (fn [~cursor]
-                  (let [~o (.val ~cursor)
-                        ~rsn (.rsn ~cursor)
-                        ~@(for [[sym k] bindings
-                                form [(with-meta sym {})
-                                      (cond
-                                        (= :cinq/self k) o
-                                        (= :cinq/rsn k) rsn
-                                        (and self-class (class? self-class) (plan/kw-field self-class k))
-                                        (list (symbol (str ".-" (munge (name k)))) o)
-                                        (keyword? k) (list k o)
-                                        :else (list `get o k))]]
-                            form)]
-                    ~body))]
-       (with-open [cursor# (open-cursor ~(rewrite-expr [] src))]
-         (when (.first cursor#)
-           (loop []
-             (or (step# cursor#) (when (.next cursor#) (recur)))))))
+                     (let [~o (.val ~cursor)
+                           ~rsn (.rsn ~cursor)
+                           ~@(for [[sym k] bindings
+                                   form [(with-meta sym {})
+                                         (cond
+                                           (= :cinq/self k) o
+                                           (= :cinq/rsn k) rsn
+                                           (and self-class (class? self-class) (plan/kw-field self-class k))
+                                           (list (symbol (str ".-" (munge (name k)))) o)
+                                           (keyword? k) (list k o)
+                                           :else (list `get o k))]]
+                               form)]
+                       ~body))]
+         (with-open [cursor# (open-cursor ~(rewrite-expr [] src))]
+           (when (.first cursor#)
+             (loop []
+               (or (step# cursor#) (when (.next cursor#) (recur)))))))
     (if need-rsn
       `(p/scan ~(rewrite-expr [] src) ~lambda nil)
       `(reduce ~lambda nil ~(rewrite-expr [] src)))))
 
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))
+
+(defn emit-rel [ra]
+  (let [box (gensym "box")
+        rsn (gensym "rsn")
+        f (gensym "f")
+        cols (plan/columns ra)
+        col (nth cols 0 nil)]
+    `(reify p/Scannable
+       (scan [this# f# init#]
+         (let [~rsn (long-array 1)]
+           (aset ~rsn 0 -1)
+           (.reduce this#
+                    (fn [acc# x#]
+                      (f# acc# (aset ~rsn 0 (unchecked-inc (aget ~rsn 0))) x#)) init#)))
+       IReduceInit
+       (reduce [_ ~f init#]
+         (let [~box (object-array 1)]
+           (aset ~box 0 init#)
+           ~(emit-loop ra `(let [r# (~f (aget ~box 0) (clojure.lang.RT/box ~col))]
+                             (if (reduced? r#)
+                               (aset ~box 0 @r#)
+                               (do (aset ~box 0 r#) nil))))
+           (aget ~box 0))))))
 
 (defn emit-cross-join [left right body]
   (emit-loop left (emit-loop right body)))

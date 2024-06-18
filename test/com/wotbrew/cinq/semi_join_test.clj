@@ -4,34 +4,34 @@
 
 (deftest semi-join-test
   (is (= []
-         (c/q
+         (c/vec
            [a []
             :when (c/scalar [b []]
                     true)]
            true)))
 
   (is (= []
-         (c/q
+         (c/vec
            [a [1]
             :when (c/scalar [b []]
                     true)]
            true)))
 
   (is (= [true]
-         (c/q
+         (c/vec
            [a [1]
             :when (c/scalar [b [1]]
                     true)]
            true)))
 
   (is (= [true]
-         (c/q
+         (c/vec
            [a [1]
             :when (c/scalar [b [1]
                              :when (= a b)]
                     true)]
            true)))
 
-  (is (= [2] (c/q [a [1, 2] :when (not (c/scalar [b [1] :when (= a b)] true))] a)))
+  (is (= [2] (c/vec [a [1, 2] :when (not (c/scalar [b [1] :when (= a b)] true))] a)))
 
   )

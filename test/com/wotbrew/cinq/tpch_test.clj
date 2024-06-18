@@ -5,7 +5,8 @@
             [clojure.instant :as inst]
             [com.wotbrew.cinq :as c :refer [q p]]
             [com.wotbrew.cinq.parse :as parse]
-            [com.wotbrew.cinq.plan2 :as plan])
+            [com.wotbrew.cinq.plan2 :as plan]
+            [com.wotbrew.cinq.protocols :as p])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
 
@@ -113,27 +114,29 @@
         rs (qvar all-tables)]
     (testing (str qvar)
       (->> "row counts should match"
-           (is (= (count result) (count rs))))
-      (doseq [[i row] (map-indexed vector rs)]
-        (doseq [[relv tpch col] (map vector row (nth result i nil) (range))
-                :let [parsed (try
-                               (cond
-                                 (= "null" tpch) nil
-                                 (int? relv) (Long/parseLong tpch)
-                                 (double? relv) (Double/parseDouble tpch)
-                                 (inst? relv) (inst/read-instant-date tpch)
-                                 :else tpch)
-                               (catch Throwable e
-                                 tpch))]]
-          (cond
-            (and (some? relv) (nil? parsed))
-            (is (= parsed relv) (str col ", row " i))
-            (double? relv)
-            (let [err 0.01
-                  diff (Math/abs (double (- relv parsed)))]
-              (when-not (<= diff err)
-                (is (= parsed relv) (str col ", row " i))))
-            :else (is (= parsed relv) (str col ", row " i))))))))
+           (is (= (count result) (c/rel-count rs))))
+      (p/scan rs
+              (fn [_ i row]
+                (doseq [[relv tpch col] (map vector row (nth result i nil) (range))
+                        :let [parsed (try
+                                       (cond
+                                         (= "null" tpch) nil
+                                         (int? relv) (Long/parseLong tpch)
+                                         (double? relv) (Double/parseDouble tpch)
+                                         (inst? relv) (inst/read-instant-date tpch)
+                                         :else tpch)
+                                       (catch Throwable e
+                                         tpch))]]
+                  (cond
+                    (and (some? relv) (nil? parsed))
+                    (is (= parsed relv) (str col ", row " i))
+                    (double? relv)
+                    (let [err 0.01
+                          diff (Math/abs (double (- relv parsed)))]
+                      (when-not (<= diff err)
+                        (is (= parsed relv) (str col ", row " i))))
+                    :else (is (= parsed relv) (str col ", row " i)))))
+              nil))))
 
 (def sf-001 (delay (all-tables 0.01)))
 (def sf-005 (delay (all-tables 0.05)))

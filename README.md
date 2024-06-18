@@ -58,7 +58,7 @@ This allows `cinq` to work with very large relations.
 ;; can be queried as if it is a normal collection
 (c/q [c (:customers db) :when (str/starts-with? c:name "A")] c)
 ;; => 
-[{:name "Alice"}]
+#cinq/rel [{:name "Alice"}]
 
 ;; lmdb database come with a few initial relations for statistics and what not
 (:lmdb/variables db)
