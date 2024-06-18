@@ -66,7 +66,7 @@ This allows `cinq` to work with very large relations.
 
 - relvars are reducable, so you can use `reduce`, `transduce` `into` and `vec`, `set` on them.
 - Intentionally no `.iterator`, `seq` (otherwise memory management would be more fun).
-- relvars can contains anything that can be encoded, not just maps (see `Encoding`) e.g `(c/create db [1, 2, 3])` would be fine.
+- relvars can contains anything that can be encoded, not just maps (see [encoding](encoding)) e.g `(c/create db [1, 2, 3])` would be fine.
 - relvars can be very big, remember to set `*print-length*`.
 
 ### CRUD
@@ -127,6 +127,21 @@ Reads of these relvars will remain consistent with each other within the transac
 ```clojure 
 (c/write [tx db] (c/insert (:customers tx) {:name "Jeremy"}))
 ```
+
+## Encoding
+
+Supports most clojure data. No meta. Not everything.
+
+Working right now:
+
+- nil, bool, ints, longs, doubles, floats.
+- keyword, symbol, string
+- maps, sets, vectors (or seq/lists, they both get encoded as lists)
+- java.util.Date
+
+Collections must not be mutated as you are writing them otherwise you can corrupt your database. I plan to put in guards against this (throw an exception).
+
+Anything else is TBD
 
 ## Usage
 
