@@ -85,7 +85,12 @@ records are stored as layout value* buffers
 if layout hint not matched adapt to the record using map->X ?
 Or perhaps emitted/hinted type should be an interface, which can have an adapter for a lazy record
 
+---
 
+Hardening
+
+- variable limit (LMDB)
+- symbol limit (warn and degrade?)
 
 
 
