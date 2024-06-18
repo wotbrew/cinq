@@ -141,7 +141,7 @@
   [o w]
   (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
     (do
-      (.write w "#cinq/relvar [")
+      (.write w "#cinq/rel [")
       (let [ictr (volatile! -1)]
         (p/scan o (fn [print-length _ x]
                     (let [i (vswap! ictr inc)]
