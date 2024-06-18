@@ -115,24 +115,22 @@
 
 (extend-protocol p/Scannable
   nil
-  (scan [_ _f init _rsn] init)
+  (scan [_ _f init] init)
   Object
-  (scan [this f init rsn]
+  (scan [this f init]
     (let [ctr (volatile! -1)]
       (reduce
         (fn [acc record]
           (let [i (vswap! ctr inc)]
-            (if (< i rsn)
-              acc
-              (f acc i record))))
+            (f acc i record)))
         init
         this))))
 
 (extend-protocol clojure.core.protocols/CollReduce
   Scannable
   (coll-reduce
-    ([scan f start] (p/scan scan (fn [acc _rsn record] (f acc record)) start 0))
-    ([scan f] (p/scan scan (fn [acc _rsn record] (f acc record)) (f) 0))))
+    ([scan f start] (p/scan scan (fn [acc _rsn record] (f acc record)) start))
+    ([scan f] (p/scan scan (fn [acc _rsn record] (f acc record)) (f)))))
 
 (defmethod print-method Scannable
   [o w]
@@ -153,7 +151,7 @@
                           (when-not (= 0 i) (.write w " "))
                           (print-method x w)
                           nil))))
-                *print-length* 0))
+                *print-length*))
       (.write w "] "))))
 
 (defn rel-count [rel]

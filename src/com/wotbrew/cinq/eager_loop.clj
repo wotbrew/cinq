@@ -49,6 +49,8 @@
 
 (defn need-rsn? [bindings] (some (comp #{:cinq/rsn} second) bindings))
 
+(def acc-sym (gensym "acc"))
+
 (defn emit-scan [src bindings body]
   (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
         self-tag (:tag (meta self-binding))
@@ -59,7 +61,7 @@
         lambda (if need-rsn
                  `(fn scan-fn# [_# ~rsn ~o]
                     (let [~@(for [[sym k] bindings
-                                  form [sym #_(with-meta sym {})
+                                  form [sym
                                         (cond
                                           (= :cinq/self k) o
                                           (= :cinq/rsn k) rsn
@@ -71,7 +73,7 @@
                       (some-> ~body reduced)))
                  `(fn scan-fn# [_# ~o]
                     (let [~@(for [[sym k] bindings
-                                  form [sym #_(with-meta sym {})
+                                  form [sym
                                         (cond
                                           (= :cinq/self k) o
                                           (and self-class (class? self-class) (plan/kw-field self-class k))
@@ -99,7 +101,7 @@
            (loop []
              (or (step# cursor#) (when (.next cursor#) (recur)))))))
     (if need-rsn
-      `(p/scan ~(rewrite-expr [] src) ~lambda nil 0)
+      `(p/scan ~(rewrite-expr [] src) ~lambda nil)
       `(reduce ~lambda nil ~(rewrite-expr [] src)))))
 
 (defn emit-where [ra pred body]

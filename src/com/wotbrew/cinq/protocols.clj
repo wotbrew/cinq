@@ -18,4 +18,4 @@
   (replace [relvar rsn record]))
 
 (defprotocol Scannable
-  (scan [rel f init start-rsn]))
+  (scan [rel f init]))

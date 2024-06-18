@@ -17,10 +17,8 @@
 
 (def ^:redef open-files #{})
 
-(defn- scan [^Cursor cursor ^ByteBuffer key-buffer f init start-rsn symbol-list]
-  (.clear key-buffer)
-  (.putLong key-buffer (long start-rsn))
-  (if-not (.get cursor (.flip key-buffer) GetOp/MDB_SET_RANGE)
+(defn- scan [^Cursor cursor f init symbol-list]
+  (if-not (.first cursor)
     init
     (loop [acc init]
       (let [rsn (.getLong ^ByteBuffer (.key cursor))
@@ -68,7 +66,7 @@
                  (do (.put dbi txn (.flip key-buffer) (.flip val-buffer) insert-flags)
                      nil)))]
     (.drop dbi txn)
-    (when-some [err (p/scan rel step nil 0)]
+    (when-some [err (p/scan rel step nil)]
       (throw (ex-info "Transaction error during rel-set" {:error err})))))
 
 (defn- insert [^Dbi dbi ^Txn txn ^ByteBuffer key-buffer ^ByteBuffer val-buffer rsn record symbol-table]
@@ -115,12 +113,12 @@
    ^:unsynchronized-mutable next-rsn
    symbol-table]
   p/Scannable
-  (scan [_ f init start-rsn]
+  (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
-      (scan cursor key-buffer f init start-rsn (codec/symbol-list symbol-table))))
+      (scan cursor f init (codec/symbol-list symbol-table))))
   IReduceInit
   (reduce [relvar f start]
-    (p/scan relvar (fn [acc _ record] (f acc record)) start 0))
+    (p/scan relvar (fn [acc _ record] (f acc record)) start))
   p/Relvar
   (rel-set [relvar rel]
     (set! (.-next-rsn relvar) -1)
@@ -147,12 +145,12 @@
    ^ByteBuffer key-buffer
    symbol-table]
   p/Scannable
-  (scan [_ f init start-rsn]
+  (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
-      (scan cursor key-buffer f init start-rsn (codec/symbol-list symbol-table))))
+      (scan cursor f init (codec/symbol-list symbol-table))))
   IReduceInit
   (reduce [relvar f start]
-    (p/scan relvar (fn [acc _ record] (f acc record)) start 0)))
+    (p/scan relvar (fn [acc _ record] (f acc record)) start)))
 
 (deftype LMDBWriteTransaction
   [^Env env
@@ -207,11 +205,11 @@
 (defn- intrinsic-rel [rel-fn]
   (reify
     p/Scannable
-    (scan [_ f init rsn]
-      (p/scan (rel-fn) f init rsn))
+    (scan [_ f init]
+      (p/scan (rel-fn) f init))
     IReduceInit
     (reduce [_ f init]
-      (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init 0))))
+      (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init))))
 
 (deftype LMDBDatabase
   [file
@@ -312,9 +310,9 @@
    ^ThreadLocal key-buffer
    ^ByteBuffer val-buffer]
   p/Scannable
-  (scan [_ f init start-rsn] (variable-read db k (fn [v] (p/scan v f init start-rsn))))
+  (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
   IReduceInit
-  (reduce [relvar f start] (p/scan relvar (fn [acc _ record] (f acc record)) start 0))
+  (reduce [relvar f start] (p/scan relvar (fn [acc _ record] (f acc record)) start))
   p/Relvar
   (rel-set [_ rel] (variable-write db k (fn [v] (p/rel-set v rel))))
   p/IncrementalRelvar
