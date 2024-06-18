@@ -28,13 +28,11 @@
       (->> (list `quote))))
 
 (defmacro q [query selection]
-  (let [code (binding [parse/*env* &env]
-               (-> (parse query selection)
-                   optimize-plan
-                   (plan/prune-cols #{})
-                   compile-plan))]
-    ;; todo better representation
-    code))
+  (binding [parse/*env* &env]
+    (-> (parse query selection)
+        optimize-plan
+        (plan/prune-cols #{})
+        compile-plan)))
 
 (defmacro vec [query selection] `(clojure.core/vec (q ~query ~selection)))
 (defmacro set [query selection] `(clojure.core/set (q ~query ~selection)))
