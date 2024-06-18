@@ -90,7 +90,7 @@ Add a row into a relation variable, the row can be anything [encodable](#encodin
 
 #### `update`
 
-Update takes a query that identifies the rows you want to change (always the first binding), an an expr for each new value.
+Update takes a query that identifies the rows you want to replace (always the first binding), and an expr that returns the new value.
 
 Returns the number of affected rows.
 
@@ -100,7 +100,7 @@ Returns the number of affected rows.
 
 #### `delete`
 
-Delete takes a query, as update that identifies the rows to delete.
+Delete takes a query that identifies the rows to delete. The first binding is assumed to be the relvar you are deleting from.
 
 Returns the number of affected rows.
 
@@ -114,8 +114,8 @@ Transactions are a bit like databases.
 
 They map names to transactional relvars.
 
-Reads of these relvars will remain consistent with each other within the transaction. And any changes will be committed together across all relvars 
- at the end of the transaction.
+Reads of these relvars will remain consistent with each other within the transaction. 
+Any changes will be committed together across all relvars at the end of the transaction.
 
 #### read
 
@@ -136,7 +136,7 @@ Working right now:
 
 - nil, bool, ints, longs, doubles, floats.
 - keyword, symbol, string
-- maps, sets, vectors (or seq/lists, they both get encoded as lists)
+- maps, sets, vectors (or seq/lists, they both get encoded as vectors)
 - java.util.Date
 
 Collections must not be mutated as you are writing them otherwise you can corrupt your database. I plan to put in guards against this (throw an exception).
