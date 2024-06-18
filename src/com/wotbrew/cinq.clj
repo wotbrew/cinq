@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq.protocols FastCount Scannable)))
+  (:import (com.wotbrew.cinq.protocols Scannable)))
 
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 
