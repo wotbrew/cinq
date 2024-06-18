@@ -116,6 +116,8 @@
   (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
       (scan cursor f init (codec/symbol-list symbol-table))))
+  p/BigCount
+  (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
   (reduce [relvar f start]
     (p/scan relvar (fn [acc _ record] (f acc record)) start))
@@ -148,6 +150,8 @@
   (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
       (scan cursor f init (codec/symbol-list symbol-table))))
+  p/BigCount
+  (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
   (reduce [relvar f start]
     (p/scan relvar (fn [acc _ record] (f acc record)) start)))
@@ -211,6 +215,24 @@
     (reduce [_ f init]
       (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init))))
 
+(defn- stat-rel [^Env env]
+  (intrinsic-rel
+    (fn []
+      (let [env-stat (.stat env)
+            ^EnvInfo env-info (.info env)]
+        [{:last-page-number (.-lastPageNumber env-info)
+          :last-transaction-id (.-lastTransactionId env-info)
+          :map-address (.-mapAddress env-info)
+          :map-size (.-mapSize env-info)
+          :map-readers (.-maxReaders env-info)
+          :num-readers (.-numReaders env-info)
+          :branch-pages (.-branchPages env-stat)
+          :depth (.-depth env-stat)
+          :entries (.-depth env-stat)
+          :leaf-pages (.-leafPages env-stat)
+          :overflow-pages (.-overflowPages env-stat)
+          :page-size (.-pageSize env-stat)}]))))
+
 (deftype LMDBDatabase
   [file
    ^Env env
@@ -267,23 +289,7 @@
   ILookup
   (valAt [db k]
     (case k
-      :lmdb/stat
-      (intrinsic-rel
-        (fn []
-          (let [env-stat (.stat env)
-                ^EnvInfo env-info (.info env)]
-            [{:last-page-number (.-lastPageNumber env-info)
-              :last-transaction-id (.-lastTransactionId env-info)
-              :map-address (.-mapAddress env-info)
-              :map-size (.-mapSize env-info)
-              :map-readers (.-maxReaders env-info)
-              :num-readers (.-numReaders env-info)
-              :branch-pages (.-branchPages env-stat)
-              :depth (.-depth env-stat)
-              :entries (.-depth env-stat)
-              :leaf-pages (.-leafPages env-stat)
-              :overflow-pages (.-overflowPages env-stat)
-              :page-size (.-pageSize env-stat)}])))
+      :lmdb/stat (stat-rel env)
       :lmdb/variables
       (intrinsic-rel
         (fn []
@@ -313,6 +319,8 @@
   (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
   IReduceInit
   (reduce [relvar f start] (p/scan relvar (fn [acc _ record] (f acc record)) start))
+  p/BigCount
+  (big-count [_] (variable-read db k p/big-count))
   p/Relvar
   (rel-set [_ rel] (variable-write db k (fn [v] (p/rel-set v rel))))
   p/IncrementalRelvar
@@ -376,8 +384,9 @@
   (.close db)
 
   (:foo db)
+  (time (c/rel-count (:foo db)))
+
   (c/create db :foo)
-  (c/create db :foo (range 1e6))
   ;;todo
   (c/drop db :foo)
 

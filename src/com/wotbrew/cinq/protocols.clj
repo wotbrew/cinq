@@ -12,6 +12,9 @@
 (defprotocol Relvar
   (rel-set [relvar rel]))
 
+(defprotocol BigCount
+  (big-count [relvar]))
+
 (defprotocol IncrementalRelvar
   (insert [relvar record])
   (delete [relvar rsn])

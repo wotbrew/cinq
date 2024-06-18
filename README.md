@@ -47,15 +47,21 @@ This allows `cinq` to work with very large relations.
 
 (def db (lmdb/database "test.cinq"))
 
-;; create a new relation variable (relvar). You can supply an initial relation value here.
-(c/create db :customers [{:name "Bob"} {:name "Alice"}])
+;; create a new relation variable (relvar). 
+(c/create db :customers)
 
-;; to get the :customers relvar, look it up in the map. It is a first class object.
+;; to get the :customers relvar, look it up in the map. The relvar starts empty
+
 (:customers db)
 ;; =>
-#cinq/rel [{:name "Bob"}, {:name "Alice"}]
+#cinq/rel []
 
-;; can be queried as if it is a normal collection
+;; One way to change the value associated with the relvar is to replace it with rel-set
+(c/rel-set (:customers db) [{:name "Bob"} {:name "Alice"}])
+;; =>
+#cinq/rel [{:name "Bob"} {:name "Alice"}]
+
+;; Query as if it is a normal collection
 (c/q [c (:customers db) :when (str/starts-with? c:name "A")] c)
 ;; => 
 #cinq/rel [{:name "Alice"}]

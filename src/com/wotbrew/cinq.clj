@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq.protocols Scannable)))
+  (:import (com.wotbrew.cinq.protocols FastCount Scannable)))
 
 (defn parse [query selection] (parse/parse (list 'q query selection)))
 
@@ -71,11 +71,7 @@
 
 (defmacro read [binding & body] `(p/read-transaction ~(second binding) (fn [~(first binding)] ~@body)))
 
-(defn create
-  ([db k] (create db k nil))
-  ([db k init]
-   (doto (p/create-relvar db k)
-     (p/rel-set init))))
+(defn create [db k] (p/create-relvar db k))
 
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
@@ -157,9 +153,13 @@
                 *print-length*))
       (.write w "] "))))
 
-(defn rel-count [rel]
-  ;; TODO (big-count) proto for stats[count].
-  (agg 0 n [_ rel] (inc n)))
+(extend-protocol p/BigCount
+  nil
+  (big-count [_] 0)
+  Object
+  (big-count [rel] (agg 0 n [_ rel] (unchecked-inc n))))
+
+(defn rel-count [rel] (p/big-count rel))
 
 (comment
   (rel-count [1, 2, 3]))
