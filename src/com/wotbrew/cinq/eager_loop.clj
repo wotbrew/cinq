@@ -39,15 +39,8 @@
 (defn emit-iterable ([ra] (emit-list ra)) ([ra col-idx] (emit-list ra col-idx)))
 (defn emit-iterator [ra] `(.iterator ~(emit-list ra)))
 
-(defn emit-first [ra]
-  `(let [iter# ~(emit-iterator ra)]
-     (when (.hasNext iter#)
-       (.next iter#))))
-
-(defn emit-first-or-null [ra]
-  `(let [iter# ~(emit-iterator ra)]
-     (when (.hasNext iter#)
-       (.next iter#))))
+(defn first-or-null [rel]
+  (reduce (fn [_ x] (reduced x)) nil rel))
 
 (defn need-rsn? [bindings] (some (comp #{:cinq/rsn} second) bindings))
 
@@ -107,28 +100,30 @@
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))
 
-(defn emit-rel [ra]
-  (let [box (gensym "box")
-        rsn (gensym "rsn")
-        f (gensym "f")
-        cols (plan/columns ra)
-        col (nth cols 0 nil)]
-    `(reify p/Scannable
-       (scan [this# f# init#]
-         (let [~rsn (long-array 1)]
-           (aset ~rsn 0 -1)
-           (.reduce this#
-                    (fn [acc# x#]
-                      (f# acc# (aset ~rsn 0 (unchecked-inc (aget ~rsn 0))) x#)) init#)))
-       IReduceInit
-       (reduce [_ ~f init#]
-         (let [~box (object-array 1)]
-           (aset ~box 0 init#)
-           ~(emit-loop ra `(let [r# (~f (aget ~box 0) (clojure.lang.RT/box ~col))]
-                             (if (reduced? r#)
-                               (aset ~box 0 @r#)
-                               (do (aset ~box 0 r#) nil))))
-           (aget ~box 0))))))
+(defn emit-rel
+  ([ra] (emit-rel ra false))
+  ([ra tuple]
+   (let [box (gensym "box")
+         rsn (gensym "rsn")
+         f (gensym "f")
+         cols (plan/columns ra)
+         col (nth cols 0 nil)]
+     `(reify p/Scannable
+        (scan [this# f# init#]
+          (let [~rsn (long-array 1)]
+            (aset ~rsn 0 -1)
+            (.reduce this#
+                     (fn [acc# x#]
+                       (f# acc# (aset ~rsn 0 (unchecked-inc (aget ~rsn 0))) x#)) init#)))
+        IReduceInit
+        (reduce [_ ~f init#]
+          (let [~box (object-array 1)]
+            (aset ~box 0 init#)
+            ~(emit-loop ra `(let [r# (~f (aget ~box 0) ~(if tuple (t/emit-tuple ra) `(clojure.lang.RT/box ~col)))]
+                              (if (reduced? r#)
+                                (aset ~box 0 @r#)
+                                (do (aset ~box 0 r#) nil))))
+            (aget ~box 0)))))))
 
 (defn emit-cross-join [left right body]
   (emit-loop left (emit-loop right body)))
@@ -179,7 +174,7 @@
 (defn emit-const-single-join [left right body]
   (let [right-t (t/tuple-local right)
         right-cols (plan/columns right)]
-    `(let [~right-t ~(emit-first-or-null right)]
+    `(let [~right-t (first-or-null ~(emit-rel right true))]
        ~(emit-loop
           left
           `(let [~@(t/emit-optional-column-binding right-t right-cols)]
