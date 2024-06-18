@@ -66,7 +66,7 @@ This allows `cinq` to work with very large relations.
 
 - relvars are reducable, so you can use `reduce`, `transduce` `into` and `vec`, `set` on them.
 - Intentionally no `.iterator`, `seq` (otherwise memory management would be more fun).
-- relvars can contains anything that can be encoded, not just maps (see [encoding](encoding)) e.g `(c/create db [1, 2, 3])` would be fine.
+- relvars can contains anything that can be encoded, not just maps (see [encoding](#encoding)) e.g `(c/create db [1, 2, 3])` would be fine.
 - relvars can be very big, remember to set `*print-length*`.
 
 ### CRUD
