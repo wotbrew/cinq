@@ -94,7 +94,84 @@ Hardening
 - variable limit (LMDB)
 - symbol limit (warn and degrade?)
 
+---
 
+Datalog
 
+For recursive queries, I think datalog would be a better fit than the sql-style cinq q.
 
+Datalog definition will rely on semantics suggestive of 'applying a relation as a function'. This invokes a generative binding mode
 
+(require '[com.wotbrew.cinq.datalog :as dlog])
+
+form (dlog/q ?selection ?projection)
+
+standard relation application is generative, either a from (first application) or a join.
+
+(dlog/q [(customers {?id :id})] ?id))
+=>
+(q [{?id :id} (generate customers {})] ?id)
+
+a generate call on a returns a relation, It is implemented by relations and by functions.
+
+(dlog/q
+ [(customers {?id :id, ?firstname :firstname})
+  (= ?id 42)]
+ ?firstname)
+=>
+(q [{?id :id, ?firstname :firstname} (generate customers {})
+    :join [_ (generate = ?id 42)]
+  ?firstname)
+
+Top level relation application will be turned into (generate) calls, but for common predicates - or predicates that are flagged as such
+can get optimised away into :when clauses.
+
+Normal relations will accept unary argument with a map of bindings for generate. Datalog rules will accept positional arguments.
+
+(q [{?id :id} (generate customers {})
+    :when (= ?id 42)])
+
+;; dependent joins can be optimised into joins by rewriting generate calls
+(dlog/q
+ [(customers {?id :id})
+  (orders {?id :customer-id, :order-id ?o})]
+ [?id ?o]
+ )
+;; =>
+(q [{?id :id} (generate customers {})
+    :join [{?o :order-id} (generate orders {?id :customer-id})]
+  [?id ?o])
+
+rule:
+(generate ?relvar {}) == ?relvar
+(q [{?id :id} customers
+    :join [_ (generate orders {?id :customer-id})]
+  [?id o:order-id])
+
+rule:
+(generate ?relvar {?var ?att ...})
+:join [x ?relvar (= ?var x:?att)]
+
+RULEDEF
+
+Rules look like lambdas, arity-overload used for multiple bodies. Can be defined inline or def'd like views.
+
+(dlog/q
+   [(dlog/r ancestor
+     ([?a ?b]
+      (parent {:child ?a, :parent ?b}))
+     ([?a ?c]
+      (parent {:child ?a, :parent ?b})
+      (ancestor ?b ?c)))
+    (ancestor ?a "bob")]
+    ?a
+   )
+
+is transformed to a cte expression.
+
+(c/cte [ancestor (c/q [p parent] [p:child p:parent])
+        ancestor (c/q [[?a ?b] ancestor
+                       :join [[?b ?c] ancestor (= ?b ?c)])])]
+  (c/q [[?a ?c0] ancestor
+        :when (= ?c0 "bob")]
+    ?a))
