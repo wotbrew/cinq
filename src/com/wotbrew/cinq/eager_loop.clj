@@ -9,7 +9,7 @@
   (:import (clojure.lang IReduceInit)
            (com.wotbrew.cinq CinqLongBox CinqMultimap)
            (com.wotbrew.cinq.protocols Scannable)
-           (java.util ArrayList Comparator HashMap)
+           (java.util ArrayList Comparator Deque HashMap HashSet)
            (java.util.function BiFunction Function)))
 
 (set! *warn-on-reflection* true)
@@ -44,6 +44,11 @@
 
 (defn need-rsn? [bindings] (some (comp #{:cinq/rsn} second) bindings))
 
+(defn get-numeric [k o]
+  (if (associative? o)
+    (get o k)
+    (nth o k nil)))
+
 (defn emit-scan [src bindings body]
   (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
         self-tag (:tag (meta self-binding))
@@ -52,8 +57,9 @@
         rsn (gensym "rsn")
         need-rsn (need-rsn? bindings)
         lambda (if need-rsn
-                 `(fn scan-fn# [_# ~rsn ~o]
-                    (let [~@(for [[sym k] bindings
+                 `(fn scan-fn# [_# ^Long ~rsn ~o]
+                    (let [~rsn (long ~rsn)
+                          ~@(for [[sym k] bindings
                                   form [sym
                                         (cond
                                           (= :cinq/self k) o
@@ -61,10 +67,13 @@
                                           (and self-class (class? self-class) (plan/kw-field self-class k))
                                           (list (symbol (str ".-" (munge (name k)))) o)
                                           (keyword? k) (list k o)
+                                          ;; todo should we get a special numeric key here from vec destructures to avoid
+                                          ;; ambiguity between get/nth
+                                          (number? k) `(get-numeric ~k ~o)
                                           :else (list `get o k))]]
                               form)]
                       (some-> ~body reduced)))
-                 `(fn scan-fn# [_# ~o]
+                 `(fn reduce-fn# [_# ~o]
                     (let [~@(for [[sym k] bindings
                                   form [sym
                                         (cond
@@ -72,27 +81,12 @@
                                           (and self-class (class? self-class) (plan/kw-field self-class k))
                                           (list (symbol (str ".-" (munge (name k)))) o)
                                           (keyword? k) (list k o)
+                                          ;; todo should we get a special numeric key here from vec destructures to avoid
+                                          ;; ambiguity between get/nth
+                                          (number? k) `(get-numeric ~k ~o)
                                           :else (list `get o k))]]
                               form)]
                       (some-> ~body reduced))))]
-    #_`(let [step# (fn [~cursor]
-                     (let [~o (.val ~cursor)
-                           ~rsn (.rsn ~cursor)
-                           ~@(for [[sym k] bindings
-                                   form [(with-meta sym {})
-                                         (cond
-                                           (= :cinq/self k) o
-                                           (= :cinq/rsn k) rsn
-                                           (and self-class (class? self-class) (plan/kw-field self-class k))
-                                           (list (symbol (str ".-" (munge (name k)))) o)
-                                           (keyword? k) (list k o)
-                                           :else (list `get o k))]]
-                               form)]
-                       ~body))]
-         (with-open [cursor# (open-cursor ~(rewrite-expr [] src))]
-           (when (.first cursor#)
-             (loop []
-               (or (step# cursor#) (when (.next cursor#) (recur)))))))
     (if need-rsn
       `(p/scan ~(rewrite-expr [] src) ~lambda nil)
       `(reduce ~lambda nil ~(rewrite-expr [] src)))))
@@ -558,6 +552,37 @@
                          (do (set! (.-val ~ctr) (unchecked-inc (.-val ~ctr))) ~body)
                          ~ctr)))))
 
+(defn emit-cte [bindings expr body]
+  (let [variables (distinct (map (fn [[sym]] sym) bindings))
+        union-sym (memoize (fn [s] (with-meta (gensym (str "union-" s)) {:tag `ArrayList})))
+        new-sym (memoize (fn [s] (with-meta (gensym (str "new-" s)) {:tag `ArrayList})))]
+    `(let [~@(for [sym variables
+                   form [(union-sym sym) `(ArrayList.)]]
+               form)]
+       ~((fn ! [[[sym ra] & bindings :as xs]]
+           (if (empty? xs)
+             nil
+             (if-not (seq (expr/possible-dependencies [sym] ra))
+               `(do ~(emit-loop ra `(do (.add ~(union-sym sym) ~(first (plan/columns ra))) nil))
+                    (let [~sym ~(union-sym sym)]
+                      ~(! bindings)))
+               `(loop [~sym ~sym
+                       ~(new-sym sym) (ArrayList.)]
+                  ~(emit-loop ra `(do (.add ~(new-sym sym) ~(first (plan/columns ra))) nil))
+                  (if (= 0 (.size ~(new-sym sym)))
+                    (let [~sym ~(union-sym sym)]
+                      ~(! bindings))
+                    (do (.addAll ~(union-sym sym) ~(new-sym sym))
+                        (recur ~(new-sym sym) (ArrayList.))))))))
+         bindings)
+       (let [~@(for [sym variables form [sym (union-sym sym)]] form)]
+         ~(emit-loop expr body)))))
+
+(defn emit-union [ras body]
+  (let [cont-lambda (gensym "cont")]
+    `(let [~cont-lambda (fn [~plan/union-out-col] ~body)]
+       (or ~@(for [ra ras] (emit-loop ra `(~cont-lambda ~(first (plan/columns ra)))))))))
+
 (defn emit-loop
   [ra body]
   (m/match ra
@@ -637,6 +662,12 @@
 
     [::plan/without ?ra _]
     (emit-loop ?ra body)
+
+    [::plan/cte ?bindings ?ra]
+    (emit-cte ?bindings ?ra body)
+
+    [::plan/union ?ras]
+    (emit-union ?ras body)
 
     _
     (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra}))))

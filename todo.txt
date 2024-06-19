@@ -175,3 +175,69 @@ is transformed to a cte expression.
   (c/q [[?a ?c0] ancestor
         :when (= ?c0 "bob")]
     ?a))
+
+PROBLEM: macros, or, not etc?
+
+---
+
+Destructure numeric key
+
+(q [[a b] foo] [a b])
+
+vector destructures should leave a special (nth-lookup) form in the scan so that we choose nth over get or dispatch at runtime based
+on whether associative?
+
+---
+
+Views / Rules
+
+(c/defview ancestor [parent]
+  parent
+  (c/q [[a b] ancestor
+        [c d] ancestor
+        :when (= b c)]
+        [a b]))
+
+defines macro-like the ra
+[:union parent $join]
+
+Problems:
+ - hygiene, do we need to gensym and unquote?
+ - Perhaps all unresolvable globally unqualified symbols get renamed to gensym?
+
+usage
+
+(cte [parent2 [["bob" "phil"]]
+      ancestor (ancestor parent2)]
+   ancestor)
+
+[:cte [[parent ...], [ancestor [:cte [[ancestor [:union parent $join]]]]]]]
+
+rules:
+
+flatten unions into same bind
+flatten cte into cte
+
+---
+
+Non materialized CTE views
+
+---
+
+Mutual recursion
+
+Not supported at the moment. How to make that fast?
+
+Non recursivity carries to dependents, if a query/view is only dependent on non recursive queries it itself is non recursive
+this would be a planner / ana change
+
+---
+
+Interrupted checks
+
+Currently, if the loop gets out of control (CTE?) you are screwed as there are no interrupt checks.
+This will likely be even more important later when you are scanning 2TB LMDB relations.
+
+Putting interrupt checks naively on the main loop does come with a fairly significant perf cost or around 5%.
+
+Think about what to do.

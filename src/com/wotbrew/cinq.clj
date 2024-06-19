@@ -1,41 +1,55 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use for max min count set update replace run! read vec])
+  (:refer-clojure :exclude [use max min count set update replace run! read vec])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq.protocols Scannable)))
-
-(defn parse [query selection] (parse/parse (list 'q query selection)))
+  (:import (clojure.lang IFn IReduceInit)
+           (com.wotbrew.cinq.protocols Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
 
 (defn compile-plan [ra] (el/emit-rel ra))
 
-(defmacro p [query selection]
+(defn- fix-env [env f & args]
   (let [ctr (atom -1)]
-    (binding [plan/*gensym* (fn [pref] (symbol (str pref "__" (swap! ctr inc))))]
-      (-> (parse query selection)
-          optimize-plan
-          (plan/prune-cols #{})
-          plan/stack-view
-          (->> (list `quote))))))
+    (binding [parse/*env* env
+              plan/*gensym* (fn [pref] (symbol (str pref "__" (swap! ctr inc))))]
+      (apply f args))))
 
-(defmacro ptree [query selection]
-  (-> (parse query selection)
+(defn parse* [rel-expr] (parse/parse rel-expr))
+
+(defmacro parse [rel-expr] (list `quote (fix-env &env parse* rel-expr)))
+
+(defn tree* [rel-expr]
+  (-> (parse* rel-expr)
       optimize-plan
-      (plan/prune-cols #{})
-      (->> (list `quote))))
+      (plan/prune-cols {})))
 
-(defmacro q [query selection]
+(defmacro tree [rel-expr] (list `quote (fix-env &env tree* rel-expr)))
+
+(defmacro plan [rel-expr] (list `quote (plan/stack-view (fix-env &env tree* rel-expr))))
+
+(defmacro q [query body]
   (binding [parse/*env* &env]
-    (-> (parse query selection)
+    (-> (parse/parse-query query body)
         optimize-plan
         (plan/prune-cols #{})
         compile-plan)))
 
-(defmacro vec [query selection] `(clojure.core/vec (q ~query ~selection)))
-(defmacro set [query selection] `(clojure.core/set (q ~query ~selection)))
+(defmacro with [bindings rel-expr]
+  (binding [parse/*env* &env]
+    (-> (parse/parse-cte bindings rel-expr)
+        optimize-plan
+        (plan/prune-cols #{})
+        compile-plan)))
+
+(defmacro union [& rels]
+  (binding [parse/*env* &env]
+    (-> (parse/parse-union rels)
+        optimize-plan
+        (plan/prune-cols #{})
+        compile-plan)))
 
 (defn- throw-only-in-queries [v]
   (throw (ex-info (format "%s only supported in queries" v) {})))
@@ -117,10 +131,11 @@
   (scan [_ _f init] init)
   Object
   (scan [this f init]
-    (let [ctr (volatile! -1)]
+    (let [ctr (long-array 1)]
       (reduce
         (fn [acc record]
-          (let [i (vswap! ctr inc)]
+          (let [i (aget ctr 0)]
+            (aset ctr 0 (unchecked-inc i))
             (f acc i record)))
         init
         this))))
@@ -160,5 +175,3 @@
   (big-count [rel] (agg 0 n [_ rel] (unchecked-inc n))))
 
 (defn rel-count [rel] (p/big-count rel))
-
-(defn batch-get [index keys] (some-> index (p/batch-get keys)))

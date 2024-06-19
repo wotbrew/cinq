@@ -22,3 +22,6 @@
 
 (defprotocol Scannable
   (scan [rel f init]))
+
+(defprotocol Generative
+  (generate [rel args]))

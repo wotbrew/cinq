@@ -47,6 +47,17 @@
           pred (walk/postwalk-replace smap ?pred)]
       [[::join left right pred] smap])
 
+    [::union ?ras]
+    (let [all (mapv (fn [ra] (unique-ify* ra)) ?ras)
+          smap (apply merge (map second all))]
+      [[::union (mapv first all)] smap])
+
+    [::cte ?bindings ?ra]
+    (let [all (mapv (fn [[sym ra]] (let [[ra smap] (unique-ify* ra)] [[sym ra] smap])) ?bindings)
+          [ra ra-smap] (unique-ify* ?ra)
+          smap (apply merge (concat (map second all) [ra-smap]))]
+      [[::cte (mapv first all) ra] smap])
+
     [::group-by ?ra ?bindings]
     (let [[ra inner-smap] (unique-ify* ?ra)
           new-smap (into {} (map (fn [[sym]] [sym (*gensym* (name sym))]) ?bindings))
@@ -123,6 +134,8 @@
           (vary-meta column-sym assoc :tag (symbol (.getName ^Class rt)))
           column-sym)))
     column-sym))
+
+(defonce union-out-col (gensym "cinq-union-out"))
 
 (defn columns [ra]
   (m/match ra
@@ -207,7 +220,13 @@
 
     [::without ?ra ?not-needed]
     (let [cols (columns ?ra)]
-      (filterv (complement (set ?not-needed)) cols))))
+      (filterv (complement (set ?not-needed)) cols))
+
+    [::cte ?bindings ?ra] (columns ?ra)
+
+    [::union ?ras] [union-out-col]
+
+    _ (throw (ex-info "Not sure how to get columns from ra" {:ra ra}))))
 
 (defn dependent-cols* [cmap expr]
   (let [dmap (atom {})]
@@ -971,7 +990,7 @@
   (-> ((fn ! [ra]
          (m/match ra
            [::scan ?src ?bindings]
-           [[:scan ?src ?bindings]]
+           [[:scan ?src (into {} ?bindings)]]
 
            [::join* ?rels ?preds]
            [:join* ?rels ?preds]
@@ -987,6 +1006,18 @@
 
            [::apply ?mode ?a ?b]
            (conj (! ?a) [:apply ?mode (! ?b)])
+
+           [::cte ?bindings ?ra]
+           [:cte (vec (for [[sym ra] ?bindings
+                            form [sym (stack-view ra)]]
+                        form))
+            (stack-view ?ra)]
+
+           [::project ?ra ?bindings]
+           (conj (! ?ra) [:project (into {} ?bindings)])
+
+           [::semi-join ?a ?b ?pred]
+           (conj (! ?a) [:semi-join (! ?b) ?pred])
 
            [?op ?ra & ?args]
            (conj (! ?ra) (into [(keyword (name ?op))] ?args))))
@@ -1069,3 +1100,6 @@
     _ ra
 
     ))
+
+(defn possibly-dependent? [ra syms]
+  (boolean (seq (expr/possible-dependencies syms ra))))

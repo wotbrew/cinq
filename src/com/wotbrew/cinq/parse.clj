@@ -40,7 +40,7 @@
 
     :else (throw (Exception. "Unsupported binding form"))))
 
-(declare parse)
+(declare parse-query)
 
 (defn lookup-sym? [expr]
   (and (symbol? expr)
@@ -83,14 +83,10 @@
 
   )
 
+(declare parse)
+
 (def expr-rewrites
   (r/match
-    ;; sub query flavors
-
-    ;; scalar valued
-    (S ?qry ?expr)
-    [::plan/scalar-sq (parse (list 'q ?qry ?expr))]
-
     ;; lookup symbols, e.g foo:bar == (:bar foo)
     (m/and ?s (m/guard (lookup-sym? ?s)))
     (let [{:keys [kw, a, t]} (parse-lookup-sym ?s)]
@@ -162,10 +158,10 @@
       (into [::plan/avg] ?args)
       'com.wotbrew.cinq/count
       (into [::plan/count] ?args)
-      'com.wotbrew.cinq/scalar
-      [::plan/scalar-sq (parse (list* 'q ?args))]
-      'com.wotbrew.cinq/exists?
-      [::plan/scalar-sq (parse (list* 'q (concat ?args [true])))]
+      `com.wotbrew.cinq/scalar
+      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/q ?args))]
+      `com.wotbrew.cinq/exists?
+      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/q (concat ?args [true])))]
 
       (if (and (n2n-rewrites (some-> (resolve *env* ?sym) .toSymbol))
                (seq ?args))
@@ -274,21 +270,66 @@
 
     (m/and (?sym & ?projection)
            (m/guard (symbol? ?sym))
-           (m/guard (= 'com.wotbrew.cinq/tuple (.toSymbol ^clojure.lang.Var (resolve ?sym)))))
+           (m/guard (= 'com.wotbrew.cinq/tuple
+                       (some-> ^clojure.lang.Var (resolve ?sym) .toSymbol))))
     [::plan/project selection [[(plan/*gensym* "col") (mapv (fn [[_ e]] (rewrite-exprs e)) (partition 2 ?projection))]]]
 
     ?expr
     [::plan/project selection [[(plan/*gensym* "col") (rewrite-exprs ?expr)]]]))
 
-(defn parse [[_ binding :as query]]
+(declare parse)
+
+(defn parse-query [binding body]
   (-> (parse-selection binding)
-      (parse-projection (nth query 2 :cinq/*))))
+      (parse-projection body)))
+
+(defn ensure-union-cols-valid [ras sym]
+  (when (seq ras)
+    (let [unary-or-empty? #(<= (count (plan/columns %)) 1)]
+      (when (not-every? unary-or-empty? ras)
+        ;; this should not really happen as the user only gets to play with unary relations in cinq
+        (throw (ex-info "Union can only be applied to 0 or 1-ary relations" {:sym sym}))))))
+
+(defn parse-cte [bindings rel-expr]
+  (let [queries (into [] (for [[sym q-expr] (partition 2 bindings)] [sym (parse q-expr)]))
+        grouped-queries (group-by first queries)
+        bindings (for [sym (distinct (map first queries))
+                       :let [group (grouped-queries sym)
+                             _ (ensure-union-cols-valid (mapv second group) sym)]
+                       [_ ra] group]
+                   [sym ra])]
+    [::plan/cte (vec bindings) (parse rel-expr)]))
+
+(defn parse-union [rels]
+  (let [ras (mapv parse rels)]
+    (ensure-union-cols-valid ras nil)
+    [::plan/union ras]))
+
+(defn maybe-parse [rel-expr]
+  (when (and (seq? rel-expr)
+             (symbol? (first rel-expr)))
+    (condp = (some-> ^clojure.lang.Var (ns-resolve *ns* *env* (first rel-expr)) .toSymbol)
+      'com.wotbrew.cinq/q (parse-query (nth rel-expr 1) (nth rel-expr 2 :cinq/*))
+      'com.wotbrew.cinq/with (parse-cte (nth rel-expr 1) (nth rel-expr 2 :cinq/*))
+      'com.wotbrew.cinq/union (parse-union (rest rel-expr))
+      nil)))
+
+(defn parse [rel-expr]
+  (or (maybe-parse rel-expr)
+      (let [s (plan/*gensym* "s")]
+        [::plan/project
+         [::plan/scan rel-expr [[s :cinq/self]]]
+         [[s s]]])))
 
 (comment
 
-  (parse '(q [a [1, 2, 3]]))
-  (parse '(q [a [1, 2, 3]] a))
-  (parse '(q [a [1, 2, 3]] {:foo a, :bar (inc a)}))
-  (parse '(q [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
+  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]]))
+  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] a))
+  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] {:foo a, :bar (inc a)}))
+  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
+
+  (parse '(com.wotbrew.cinq/q [a [1, 2]
+                               :when (not (com.wotbrew.cinq/scalar [b [1] :when (= a b)] true))]
+            a))
 
   )

@@ -178,6 +178,9 @@ public class CinqMultimap {
     }
 
     public void put(Object key, Object tuple) {
+        if (key == null) {
+            return;
+        }
         doPutTuple(hash(key), key, tuple);
     }
 

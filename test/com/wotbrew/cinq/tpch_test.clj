@@ -3,9 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.instant :as inst]
-            [com.wotbrew.cinq :as c :refer [q p]]
-            [com.wotbrew.cinq.parse :as parse]
-            [com.wotbrew.cinq.plan2 :as plan]
+            [com.wotbrew.cinq :as c :refer [q]]
             [com.wotbrew.cinq.protocols :as p])
   (:import (io.airlift.tpch GenerateUtils TpchColumn TpchColumnType$Base TpchEntity TpchTable)
            (java.util Date)))
@@ -19,9 +17,6 @@
         (do (.next iter)
             (recur (unchecked-inc n)))
         n))))
-
-(defn view-plan [q]
-  (-> q parse/parse plan/rewrite plan/stack-view))
 
 (comment
 
@@ -839,8 +834,11 @@
 
   (run-tests 'com.wotbrew.cinq.tpch-test)
 
-  ((requiring-resolve 'clj-async-profiler.core/serve-ui) "localhost" 5000)
-  ((requiring-resolve 'clojure.java.browse/browse-url) "http://127.0.0.1:5000")
+  ((requiring-resolve 'clj-async-profiler.core/serve-ui)
+   "localhost" 5000)
+
+  ((requiring-resolve 'clojure.java.browse/browse-url)
+   "http://127.0.0.1:5000")
 
   (require 'criterium.core)
 
@@ -874,7 +872,7 @@
        :total (reduce + 0.0 (map second timings))}))
 
   (require 'criterium.core)
-  (criterium.core/quick-bench
+  (criterium.core/bench
    (run-tpch)
    )
 
