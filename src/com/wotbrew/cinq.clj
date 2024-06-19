@@ -44,7 +44,7 @@
 
 (defmacro scalar [query selection] `(rel-first (q ~query ~selection)))
 
-(defmacro exists? [query] `(scalar ~query true))
+(defmacro exists? [query] `(boolean (scalar ~query true)))
 
 (defmacro run! [query & body]
   `(doseq [f# (q ~query (fn [] ~@body))] (f#)))
@@ -161,5 +161,4 @@
 
 (defn rel-count [rel] (p/big-count rel))
 
-(comment
-  (rel-count [1, 2, 3]))
+(defn batch-get [index keys] (some-> index (p/batch-get keys)))
