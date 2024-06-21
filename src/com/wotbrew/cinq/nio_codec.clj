@@ -1,7 +1,7 @@
 (ns com.wotbrew.cinq.nio-codec
   "Encoding/decoding supported data to nio ByteBuffer's."
   (:import (clojure.lang Keyword Symbol)
-           (com.wotbrew.cinq CinqDynamicArrayRecord CinqLongBox)
+           (com.wotbrew.cinq CinqDynamicArrayRecord)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
            (java.util Date List Map Set)))
@@ -143,7 +143,7 @@
       (.putInt buffer len)
       (let [offset-table-size (* len 8)
             offset-table-pos (.position buffer)
-            ctr (CinqLongBox. 0)]
+            ctr (int-array 1)]
         (and (< offset-table-size (.remaining buffer))
              (do (dotimes [_ len]
                    (.putInt buffer 0)
@@ -151,11 +151,11 @@
                  true)
              (reduce-kv
                (fn [_ k v]
-                 (let [i (.-val ctr)]
+                 (let [i (aget ctr 0)]
                    (if-not (< i len)
                      (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
                      (let [key-pos (.position buffer)]
-                       (set! (.-val ctr) (unchecked-inc i))
+                       (aset ctr 0 (unchecked-inc i))
                        (.putInt buffer
                                 (unchecked-add offset-table-pos (unchecked-multiply i 8))
                                 (unchecked-subtract key-pos offset-table-pos))

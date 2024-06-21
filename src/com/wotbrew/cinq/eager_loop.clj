@@ -7,9 +7,8 @@
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
   (:import (clojure.lang IReduceInit)
-           (com.wotbrew.cinq CinqLongBox CinqMultimap)
-           (com.wotbrew.cinq.protocols Scannable)
-           (java.util ArrayList Comparator Deque HashMap HashSet)
+           (com.wotbrew.cinq CinqMultimap)
+           (java.util ArrayList Comparator HashMap)
            (java.util.function BiFunction Function)))
 
 (set! *warn-on-reflection* true)
@@ -192,7 +191,7 @@
        ~(emit-loop
           left
           `(let [~left-t ~(t/emit-tuple left)
-                 ~limit-sym (CinqLongBox. 0)
+                 ~limit-sym (int-array 1)
                  stop# ~(emit-loop
                           [::plan/limit (add-theta-where right theta-expressions) 1 limit-sym]
                           `(do (t/set-mark ~left-t)
@@ -207,7 +206,7 @@
         limit (gensym "limit")]
     (emit-loop
       left
-      `(let [~limit (CinqLongBox. 0)
+      `(let [~limit (int-array 1)
              stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] body)]
          (when-not (identical? stop# ~limit)
            stop#)))))
@@ -217,7 +216,7 @@
         limit (gensym "limit")]
     (emit-loop
       left
-      `(let [~limit (CinqLongBox. 0)
+      `(let [~limit (int-array 1)
              stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] ::matched)]
          (cond
            (identical? stop# ~limit) nil
@@ -548,8 +547,8 @@
 (defn emit-limit [ra n box-expr body]
   (let [ctr (gensym "ctr")]
     `(let [~ctr ~box-expr]
-       ~(emit-loop ra `(if (< (.-val ~ctr) ~n)
-                         (do (set! (.-val ~ctr) (unchecked-inc (.-val ~ctr))) ~body)
+       ~(emit-loop ra `(if (< (aget ~ctr 0) ~n)
+                         (do (aset ~ctr 0 (unchecked-inc (aget ~ctr 0))) ~body)
                          ~ctr)))))
 
 (defn emit-cte [bindings expr body]

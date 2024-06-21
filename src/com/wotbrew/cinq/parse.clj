@@ -3,8 +3,7 @@
             [com.wotbrew.cinq.expr :as expr]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
-            [com.wotbrew.cinq.plan2 :as plan])
-  (:import (com.wotbrew.cinq CinqLongBox)))
+            [com.wotbrew.cinq.plan2 :as plan]))
 
 (def ^:dynamic *env* {})
 
@@ -257,7 +256,7 @@
          [::plan/order-by (! (:prev tree)) (:clauses tree)]
 
          :limit
-         [::plan/limit (! (:prev tree)) (:n tree) `(CinqLongBox. 0)]))
+         [::plan/limit (! (:prev tree)) (:n tree) `(long-array 1)]))
      tree)))
 
 (defn parse-projection [selection expr]
