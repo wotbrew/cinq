@@ -90,6 +90,16 @@ public class CinqDynamicArrayRecord extends APersistentMap {
         if (val == notFound) {
             return null;
         }
+        return getMapEntry(val, key);
+    }
+
+    private IMapEntry entryAtIndex(int i) {
+        Object val = valAtIndex(i);
+        Object key = keys[i];
+        return getMapEntry(val, key);
+    }
+
+    private IMapEntry getMapEntry(Object val, Object key) {
         return new IMapEntry() {
             @Override
             public Object key() {
@@ -216,7 +226,7 @@ public class CinqDynamicArrayRecord extends APersistentMap {
 
         public Object next(){
             try {
-                Object o = m.valAtIndex(i);
+                Object o = m.entryAtIndex(i);
                 i++;
                 return o;
             } catch(IndexOutOfBoundsException e) {
