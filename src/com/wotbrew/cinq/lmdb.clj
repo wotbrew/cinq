@@ -4,7 +4,7 @@
             [com.wotbrew.cinq :as c]
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (clojure.lang ILookup IReduceInit)
+  (:import (clojure.lang ILookup IReduceInit Reduced)
            (java.io Closeable)
            (java.nio ByteBuffer)
            (java.util HashMap)
@@ -29,17 +29,6 @@
           (if (.next cursor)
             (recur ret)
             ret))))))
-
-#_(defn- scan2 [^Cursor cursor ^ByteBuffer key-buffer ^CinqScannable$Step step holder start-rsn]
-    (.clear key-buffer)
-    (.putLong key-buffer (long start-rsn))
-    (if-not (.get cursor (.flip key-buffer) GetOp/MDB_SET_RANGE)
-      false
-      (loop []
-        (let [rsn (.getLong ^ByteBuffer (.key cursor))
-              o (codec/decode-object (.val cursor) nil)
-              ret (.apply step rsn holder o)]
-          (or ret (when (.next cursor) (recur)))))))
 
 (defn- last-rsn ^long [^Cursor cursor]
   (if (.last cursor)
@@ -174,9 +163,13 @@
   (valAt [tx k not-found] (or (get tx k) not-found))
   p/Transaction
   (commit [t]
-    (doseq [symbol (:added @symbol-table)] (p/insert (:lmdb/symbols t) symbol))
-    (.commit txn)
-    (codec/clear-symbol-adds symbol-table))
+    (try
+      (doseq [symbol (codec/list-adds symbol-table)] (p/insert (:lmdb/symbols t) symbol))
+      (.commit txn)
+      (codec/clear-adds symbol-table)
+      (catch Throwable t
+        (codec/rollback-adds symbol-table)
+        (throw t))))
   Closeable
   (close [_]
     (.close txn)))
@@ -361,7 +354,7 @@
             (loop []
               (codec/intern-symbol symbol-table (codec/decode-object (.val cursor) nil))
               (when (.next cursor) (recur)))))
-        (codec/clear-symbol-adds symbol-table)
+        (codec/clear-adds symbol-table)
         (->LMDBDatabase file
                         env
                         dbis
@@ -384,7 +377,7 @@
   (.close db)
 
   (:foo db)
-  (time (c/rel-count (:foo db)))
+  (time (c/agg 0 n (:foo db) (unchecked-inc n)))
 
   (c/create db :foo)
   ;;todo
@@ -489,13 +482,13 @@
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench
-      (count (q1 db))
+      (c/rel-count (q1 db))
       )
     )
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench
-      (count (q1 sf005))
+      (c/rel-count (q2 db))
       )
     )
 

@@ -4,7 +4,7 @@
            (com.wotbrew.cinq CinqDynamicArrayRecord)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
-           (java.util Date List Map Set)))
+           (java.util ArrayList Date HashMap List Map Set)))
 
 (defprotocol Encode
   (encode-object [o buffer symbol-table]
@@ -18,19 +18,44 @@
 
 (def ^:const t-max 2147483647)
 
-(defrecord SymbolTableValue [map vec added])
+;; requires the following
+;; map is only read/written under lock (write transaction)
+;; added is only read/written under lock (write transaction)
 
-(defn intern-symbol [symbol-table symbol]
-  (-> ^SymbolTableValue (swap! symbol-table (fn [^SymbolTableValue r]
-                            (let [m (.-map r)]
-                              (if (contains? m symbol)
-                                r
-                                (->SymbolTableValue
-                                  (assoc m symbol (unchecked-add t-max (long (count m))))
-                                  (conj (.-vec r) symbol)
-                                  (conj (.-added r) symbol))))))
-      .-map
-      (get symbol)))
+;; list array can be read on any thread up to len (always swap the array ptr before the list-len as each operation)
+;; list array, len is only modified under lock
+;; at start of transaction, - len is captured, so prior state can be cleared in list-array, .adds is captured.
+;; on error all added symbols (in adds) are removed from the table.
+
+(defprotocol ISymbolTable
+  (symbol-list [st])
+  (intern-symbol [st symbol])
+  (rollback-adds [st])
+  (clear-adds [st]))
+
+(deftype SymbolTable [^HashMap map ^:volatile-mutable ^objects list-array ^ArrayList adds]
+  ISymbolTable
+  (intern-symbol [_ symbol]
+    (let [n (.size map)
+          tid (unchecked-add t-max (long n))]
+      (if-some [previous-n (.putIfAbsent map symbol tid)]
+        previous-n
+        (do (.add adds symbol)
+            (if (< n (alength list-array))
+              (aset list-array n symbol)
+              (let [new-list-array (object-array (* 2 (alength list-array)))]
+                (System/arraycopy list-array 0 new-list-array 0 n)
+                (aset new-list-array n symbol)
+                (set! list-array new-list-array)))
+            tid))))
+  (rollback-adds [_]
+    (dotimes [i (.size adds)]
+      (aset list-array i nil)
+      (.remove map (.get adds i)))
+    (.clear adds))
+  (clear-adds [_]
+    (.clear adds))
+  (symbol-list [_] list-array))
 
 (def ^:const t-nil 0)
 (def ^:const t-true 1)
@@ -237,20 +262,14 @@
 (defn decode-list [^ByteBuffer buffer symbol-list]
   (vec (decode-object-array buffer symbol-list)))
 
-(defn buffer-copy [^ByteBuffer buffer]
-  (let [buf (ByteBuffer/allocate (.remaining buffer))]
-    (.put buf buffer)
-    (.flip buf)))
+(defn ensure-heap ^ByteBuffer [^ByteBuffer buffer]
+  (if (.isDirect buffer)
+    (let [buf (ByteBuffer/allocate (.remaining buffer))]
+      (.put buf buffer)
+      (.flip buf))
+    (.slice buffer)))
 
 (defn decode-map [^ByteBuffer buffer symbol-list]
-  #_(let [len (.getInt buffer)
-        ;; skip offset map
-        _ (.position buffer (+ (.position buffer) (* len 8)))
-        m (volatile! (transient {}))]
-    (dotimes [_ len]
-      (vswap! m assoc! (decode-object buffer symbol-list) (decode-object buffer symbol-list)))
-    (persistent! @m))
-
   (let [len (.getInt buffer)
         start-pos (.position buffer)
         offsets (int-array len)
@@ -265,7 +284,7 @@
         (aset keys (int i) (decode-object buffer symbol-list))
         (aset offsets (int i) (unchecked-subtract-int v-offset table-size))
         (.reset buffer)))
-    (CinqDynamicArrayRecord. keys vals offsets (buffer-copy buffer) symbol-list)))
+    (CinqDynamicArrayRecord. keys vals offsets (ensure-heap buffer) symbol-list)))
 
 (defn decode-set [^ByteBuffer buffer symbol-list]
   (let [len (.getInt buffer)
@@ -284,7 +303,7 @@
 (defn decode-keyword [^ByteBuffer buffer]
   (keyword (decode-object buffer nil) (decode-object buffer nil)))
 
-(defn decode-object [^ByteBuffer buffer symbol-list]
+(defn decode-object [^ByteBuffer buffer ^objects symbol-list]
   (let [tid (.getLong buffer)]
     (case2 tid
       t-nil nil
@@ -299,13 +318,10 @@
       t-date (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
-      (nth symbol-list (unchecked-subtract tid t-max)))))
-
-(defn symbol-list [symbol-table]
-  (.-vec ^SymbolTableValue (deref symbol-table)))
+      (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn empty-symbol-table []
-  (atom (->SymbolTableValue {} [] [])))
+  (->SymbolTable (HashMap.) (object-array 32) (ArrayList.)))
 
 (defn encode
   ^ByteBuffer [o & {:keys [direct]}]
@@ -327,9 +343,6 @@
 (defn decode [^ByteBuffer buf]
   (decode-object buf (decode-object buf [])))
 
-(defn clear-symbol-adds [symbol-table]
-  (swap! symbol-table assoc :added []))
-
 (comment
 
   (-> (encode {:foo 42})
@@ -339,3 +352,6 @@
       (decode))
 
   )
+
+(defn list-adds [^SymbolTable symbol-table]
+  (.-adds symbol-table))
