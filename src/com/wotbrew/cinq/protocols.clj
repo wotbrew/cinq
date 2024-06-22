@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [replace]))
 
 (defprotocol Database
-  (create-relvar [db name])
+  (create-relvar [db relvar-key])
+  (create-index [db relvar-key index-key])
   (write-transaction [db f])
   (read-transaction [db f]))
 

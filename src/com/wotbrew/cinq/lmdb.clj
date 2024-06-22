@@ -1,15 +1,15 @@
 (ns com.wotbrew.cinq.lmdb
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [com.wotbrew.cinq :as c]
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
   (:import (clojure.lang ILookup IReduceInit Reduced)
            (java.io Closeable)
            (java.nio ByteBuffer)
-           (java.util ArrayList HashMap Map)
+           (java.util ArrayList Map)
            (java.util.concurrent ConcurrentHashMap)
-           (java.util.function Function Supplier)
+           (java.util.function Supplier)
            (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn))
   (:refer-clojure :exclude [replace]))
 
@@ -53,8 +53,7 @@
     (scan [_ f init]
       (with-open [cursor (.openCursor dbi txn)]
         (.clear key-buffer)
-        ;; todo encode-key
-        (codec/encode-object k key-buffer symbol-table)
+        (codec/encode-key k key-buffer)
         (.flip key-buffer)
         (if-not (.get cursor key-buffer GetOp/MDB_SET)
           init
@@ -152,7 +151,13 @@
         false))))
 
 (defn open-dbi ^Dbi [^Env env ^String dbi-name]
-  (let [flags (into-array DbiFlags [DbiFlags/MDB_CREATE])]
+  (let [flags (into-array DbiFlags [DbiFlags/MDB_CREATE DbiFlags/MDB_INTEGERKEY])]
+    (.openDbi env dbi-name ^"[Lorg.lmdbjava.DbiFlags;" flags)))
+
+(defn index-dbi? [dbi-name] (str/includes? dbi-name "."))
+
+(defn open-index-dbi ^Dbi [^Env env ^String dbi-name]
+  (let [flags (into-array DbiFlags [DbiFlags/MDB_CREATE DbiFlags/MDB_DUPSORT])]
     (.openDbi env dbi-name ^"[Lorg.lmdbjava.DbiFlags;" flags)))
 
 (def ^:const symbols-dbi-name "$symbols")
@@ -166,12 +171,14 @@
    ^ByteBuffer val-buffer
    ^:unsynchronized-mutable next-rsn
    symbol-table
-   indexes]
+   indexes
+   ^Map dbis
+   ^:unsynchronized-mutable index-array]
   ILookup
   (valAt [r k] (.valAt r k nil))
   (valAt [r k not-found]
-    (if-some [{index-dbi :dbi} (indexes k)]
-      (get-index txn dbi index-dbi dbi key-buffer symbol-table)
+    (if-some [{index-dbi-name :dbi-name} (indexes k)]
+      (get-index txn (.get dbis index-dbi-name) dbi key-buffer symbol-table)
       not-found))
   p/Scannable
   (scan [_ f init]
@@ -207,12 +214,13 @@
    ^Dbi dbi
    ^ByteBuffer key-buffer
    symbol-table
-   indexes]
+   indexes
+   ^Map dbis]
   ILookup
   (valAt [r k] (.valAt r k nil))
   (valAt [r k not-found]
-    (if-some [{index-dbi :dbi} (indexes k)]
-      (get-index txn dbi index-dbi dbi key-buffer symbol-table)
+    (if-some [{index-dbi-name :dbi-name} (indexes k)]
+      (get-index txn (.get dbis index-dbi-name) dbi key-buffer symbol-table)
       not-found))
   p/Scannable
   (scan [_ f init]
@@ -223,6 +231,21 @@
   IReduceInit
   (reduce [relvar f start]
     (p/scan relvar (fn [acc _ record] (f acc record)) start)))
+
+(defn- commit [^Txn txn ^ByteBuffer key-buffer ^ByteBuffer val-buffer ^Map dbis symbol-table]
+  (try
+    (let [^ArrayList adds (codec/list-adds symbol-table)]
+      (when (< 0 (.size adds))
+        (let [^Dbi symbols-dbi (.get dbis symbols-dbi-name)
+              rsn (inc (with-open [cursor (.openCursor symbols-dbi txn)] (last-rsn cursor)))]
+          (dotimes [i (.size adds)]
+            (let [symbol (.get adds i)]
+              (insert symbols-dbi txn key-buffer val-buffer (+ rsn i) symbol nil))))))
+    (.commit txn)
+    (codec/clear-adds symbol-table)
+    (catch Throwable t
+      (codec/rollback-adds symbol-table)
+      (throw t))))
 
 (deftype LMDBWriteTransaction
   [^Env env
@@ -236,26 +259,10 @@
   (valAt [tx k] (.valAt tx k nil))
   (valAt [_ k not-found]
     (if-some [{:keys [dbi-name indexes]} (.get varmap k)]
-      (->LMDBWriteTransactionVariable env txn (.get dbis dbi-name) key-buffer val-buffer -1 symbol-table indexes)
+      (->LMDBWriteTransactionVariable env txn (.get dbis dbi-name) key-buffer val-buffer -1 symbol-table indexes dbis)
       not-found))
   p/Transaction
-  (commit [t]
-    (try
-
-      (let [^ArrayList adds (codec/list-adds symbol-table)]
-        (when (< 0 (.size adds))
-          (let [^Dbi symbols-dbi (.get dbis symbols-dbi-name)
-                rsn (inc (with-open [cursor (.openCursor symbols-dbi txn)] (last-rsn cursor)))]
-            (dotimes [i (.size adds)]
-              (let [symbol (.get adds i)]
-                (insert symbols-dbi txn key-buffer val-buffer (+ rsn i) symbol nil))))))
-
-      (.commit txn)
-      (codec/clear-adds symbol-table)
-
-      (catch Throwable t
-        (codec/rollback-adds symbol-table)
-        (throw t))))
+  (commit [t] (commit txn key-buffer val-buffer dbis symbol-table))
   Closeable
   (close [_]
     (.close txn)))
@@ -276,7 +283,8 @@
         (.get dbis dbi-name)
         key-buffer
         symbol-table
-        indexes)))
+        indexes
+        dbis)))
   (valAt [tx k not-found] (or (get tx k) not-found))
   Closeable
   (close [_] (.close txn)))
@@ -323,18 +331,19 @@
   p/Database
   (write-transaction [db f]
     (if-not auto-resize
-      (with-open [^Closeable tx
-                  (->LMDBWriteTransaction
-                    env
-                    varmap
-                    dbis
-                    (.txnWrite env)
-                    (.get key-buffer)
-                    val-buffer
-                    symbol-table)]
-        (let [ret (f tx)]
-          (p/commit tx)
-          ret))
+      (locking db
+        (with-open [^Closeable tx
+                    (->LMDBWriteTransaction
+                      env
+                      varmap
+                      dbis
+                      (.txnWrite env)
+                      (.get key-buffer)
+                      val-buffer
+                      symbol-table)]
+          (let [ret (f tx)]
+            (p/commit tx)
+            ret)))
       (let [ret (locking db
                   (try
                     (with-open [^Closeable tx
@@ -369,18 +378,61 @@
                                 cursor (.openCursor variable-dbi txn)]
                       (inc (last-rsn cursor)))
                 dbi-name (str rsn)
-                dbi (open-dbi env dbi-name)]
+                dbi (open-dbi env dbi-name)
+                record {:k k, :rsn rsn, :dbi-name dbi-name, :index-ctr 0, :indexes {}}]
             (with-open [txn (.txnWrite env)]
-              (insert variable-dbi txn (.get key-buffer) val-buffer rsn {:k k, :rsn rsn, :dbi-name dbi-name, :indexes {}} nil)
-              (.commit txn))
+              (insert variable-dbi txn (.get key-buffer) val-buffer rsn record symbol-table)
+              (commit txn (.get key-buffer) val-buffer dbis symbol-table))
             (.put dbis dbi-name dbi)
-            (.put varmap k {:dbi-name dbi-name, :indexes {}})))))
+            (.put varmap k record)))))
     (.valAt ^ILookup db k))
+  (create-index [db relvar-key index-key]
+    (if-some [{:keys [indexes]} (.get varmap relvar-key)]
+      (when-not (contains? indexes index-key)
+        (locking db
+          (let [^Dbi variables-dbi (.get dbis variables-dbi-name)
+                {:keys [rsn, dbi-name, index-ctr, indexes] :as record} (.get varmap relvar-key)
+                ^Dbi rsn-dbi (.get dbis dbi-name)
+                _ (when (contains? indexes index-key)
+                    (throw (ex-info "Could not create index, relvar does not exist" {:relvar-key relvar-key, :index-key index-key})))
+                index-dbi-name (str dbi-name "." index-ctr)
+                index-dbi (open-index-dbi env index-dbi-name)
+                new-record (assoc record :indexes (assoc indexes index-key {:dbi-name index-dbi-name})
+                                         :index-ctr (inc index-ctr))
+                ^ByteBuffer key-buffer (.get key-buffer)]
+            (with-open [txn (.txnWrite env)]
+              (replace variables-dbi txn key-buffer val-buffer rsn new-record symbol-table)
+
+              ;; initialise index value
+              (with-open [rsn-cursor (.openCursor rsn-dbi txn)
+                          index-cursor (.openCursor index-dbi txn)]
+                (scan rsn-cursor
+                      (fn [_ rsn o]
+                        (.clear key-buffer)
+                        (.clear val-buffer)
+                        ;; todo composite keys
+                        (codec/encode-key (get o index-key) key-buffer)
+                        (.putLong val-buffer rsn)
+                        (.put index-cursor (.flip key-buffer) (.flip val-buffer) insert-flags)
+                        nil)
+                      nil
+                      (codec/symbol-list symbol-table)))
+
+              (commit txn key-buffer val-buffer dbis symbol-table))
+            (.put dbis index-dbi-name index-dbi)
+            (.put varmap relvar-key new-record))))
+      (throw (ex-info "Could not create index, relvar does not exist" {:relvar-key relvar-key, :index-key index-key})))
+    (let [variable (.valAt db relvar-key)]
+      (.valAt ^ILookup variable index-key)))
   ILookup
   (valAt [db k]
     (case k
       :lmdb/stat (stat-rel env)
-      :lmdb/variables (intrinsic-rel (fn [] (sort (into [:lmdb/stat :lmdb/variables] (keys varmap)))))
+      :lmdb/variables (intrinsic-rel (fn []
+                                       (let [all (into [{:k :lmdb/stat} {:k :lmdb/variables}] (.values varmap))
+                                             {comparable true
+                                              not-comparable false} (group-by #(instance? Comparable (:k %)) all)]
+                                         (concat (sort-by :k comparable) not-comparable))))
       :lmdb/symbols (intrinsic-rel (fn [] (sort (remove nil? (codec/symbol-list symbol-table)))))
       (when-some [{:keys [indexes]} (.get varmap k)]
         (->LMDBVariable db k key-buffer val-buffer indexes))))
@@ -465,8 +517,11 @@
 
             dbis (let [dbis (ConcurrentHashMap.)]
                    (doseq [^bytes dbi-bytes (.getDbiNames env)
-                           :let [dbi-name (String. dbi-bytes "UTF-8")]]
-                     (.put dbis dbi-name (open-dbi env dbi-name)))
+                           :let [dbi-name (String. dbi-bytes "UTF-8")
+                                 dbi (if (index-dbi? dbi-name)
+                                       (open-index-dbi env dbi-name)
+                                       (open-dbi env dbi-name))]]
+                     (.put dbis dbi-name dbi))
                    dbis)
 
             symbol-table (codec/empty-symbol-table)
@@ -480,16 +535,14 @@
 
           ;; read variables
           (with-open [cursor (.openCursor variables-dbi txn)]
-            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil nil))
-
-          )
+            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil (codec/symbol-list symbol-table))))
 
         (codec/clear-adds symbol-table)
         (->LMDBDatabase file
                         env
                         dbis
                         varmap
-                        (ThreadLocal/withInitial (reify Supplier (get [_] (ByteBuffer/allocateDirect 8))))
+                        (ThreadLocal/withInitial (reify Supplier (get [_] (ByteBuffer/allocateDirect 512))))
                         (ByteBuffer/allocateDirect (* 32 1024 1024))
                         auto-resize
                         map-size
@@ -528,6 +581,17 @@
   (:lmdb/variables db)
   (:lmdb/symbols db)
 
+  (do
+    (c/create db :foo)
+    (c/rel-set (:foo db) [{:id 42}])
+    (:foo db)
+    (p/create-index db :foo :id)
+    (:id (:foo db))
+    (get (:id (:foo db)) 42)
+    (get (:id (:foo db)) 43)
+
+    )
+
   (require 'criterium.core)
   (criterium.core/quick-bench (c/q [i (:foo db) :limit 10] i))
   (criterium.core/quick-bench (c/q [i (:foo db) :limit 10] i))
@@ -539,6 +603,8 @@
     (println table)
     (c/create db table)
     (time (c/rel-set (get db table) coll)))
+
+  (p/create-index db :lineitem :orderkey)
 
   (time (count (vec (:lineitem db))))
 
