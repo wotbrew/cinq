@@ -37,6 +37,68 @@
       rsn)
     -1))
 
+(defn- reduce-scan [r f init]
+  (p/scan r (fn [acc _ x] (f acc x)) init))
+
+(defn get-rel [^Txn txn ^Dbi dbi symbol-table]
+  (reify p/Scannable
+    (scan [_ f init]
+      (with-open [cursor (.openCursor dbi txn)]
+        (scan cursor f init (codec/symbol-list symbol-table))))
+    IReduceInit
+    (reduce [r f init] (reduce-scan r f init))))
+
+(defn get-index-entry [^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer symbol-table k]
+  (reify p/Scannable
+    (scan [_ f init]
+      (with-open [cursor (.openCursor dbi txn)]
+        (.clear key-buffer)
+        ;; todo encode-key
+        (codec/encode-object k key-buffer symbol-table)
+        (.flip key-buffer)
+        (if-not (.get cursor key-buffer GetOp/MDB_SET)
+          init
+          (with-open [rsn-cursor (.openCursor rsn-dbi txn)]
+            (loop [acc init]
+              (when-not (.get rsn-cursor (.val cursor) GetOp/MDB_SET)
+                (throw (IllegalStateException. "Should always find an rsn if referenced by an index")))
+              (let [r (f acc
+                         (.getLong ^ByteBuffer (.key rsn-cursor))
+                         (codec/decode-object (.val rsn-cursor) (codec/symbol-list symbol-table)))]
+                (if (reduced? r)
+                  @r
+                  (if (and (.next cursor)
+                           (= 0 (.compareTo key-buffer (.key cursor))))
+                    (recur r)
+                    acc))))))))
+    IReduceInit
+    (reduce [index-entry f init]
+      (reduce-scan index-entry f init))))
+
+(defn scan-index [^Dbi dbi ^Txn txn f init]
+  (with-open [cursor (.openCursor dbi txn)]
+    (if (.first cursor)
+      (loop [acc init]
+        (let [k (codec/decode-object (.key cursor) nil)
+              rsn (codec/decode-object (.val cursor) nil)
+              ret (f acc rsn k)]
+          (if (instance? Reduced ret)
+            @ret
+            (if (.next cursor)
+              (recur ret)
+              ret))))
+      init)))
+
+(defn get-index [^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer symbol-table]
+  (reify p/Scannable
+    (scan [_ f init] (scan-index dbi txn f init))
+    IReduceInit
+    (reduce [index f init]
+      (reduce-scan index f init))
+    ILookup
+    (valAt [_ k] (get-index-entry txn dbi rsn-dbi key-buffer symbol-table k))
+    (valAt [r k _not-found] (.valAt r k))))
+
 (def ^:private ^"[Lorg.lmdbjava.PutFlags;" insert-flags
   (make-array PutFlags 0))
 
@@ -100,7 +162,14 @@
    ^ByteBuffer key-buffer
    ^ByteBuffer val-buffer
    ^:unsynchronized-mutable next-rsn
-   symbol-table]
+   symbol-table
+   indexes]
+  ILookup
+  (valAt [r k] (.valAt r k nil))
+  (valAt [r k not-found]
+    (if-some [{index-dbi :dbi} (indexes k)]
+      (get-index txn dbi index-dbi dbi key-buffer symbol-table)
+      not-found))
   p/Scannable
   (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
@@ -134,7 +203,14 @@
    ^Txn txn
    ^Dbi dbi
    ^ByteBuffer key-buffer
-   symbol-table]
+   symbol-table
+   indexes]
+  ILookup
+  (valAt [r k] (.valAt r k nil))
+  (valAt [r k not-found]
+    (if-some [{index-dbi :dbi} (indexes k)]
+      (get-index txn dbi index-dbi dbi key-buffer symbol-table)
+      not-found))
   p/Scannable
   (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
@@ -158,7 +234,7 @@
     (when-some [dbi (.get dbis k)]
       (->> (reify Function
              (apply [_ dbi]
-               (->LMDBWriteTransactionVariable env txn dbi key-buffer val-buffer -1 (if (identical? :lmdb/symbols k) nil symbol-table))))
+               (->LMDBWriteTransactionVariable env txn dbi key-buffer val-buffer -1 (if (identical? :lmdb/symbols k) nil symbol-table) {})))
            (.computeIfAbsent varmap dbi))))
   (valAt [tx k not-found] (or (get tx k) not-found))
   p/Transaction
@@ -191,7 +267,8 @@
                  txn
                  dbi
                  key-buffer
-                 symbol-table)))
+                 symbol-table
+                 {})))
            (.computeIfAbsent varmap dbi))))
   (valAt [tx k not-found] (or (get tx k) not-found))
   Closeable
@@ -288,7 +365,7 @@
         (fn []
           (sort (into [:lmdb/stat :lmdb/variables] (keys dbis)))))
       (when (.containsKey dbis k)
-        (->> (reify Function (apply [_ _] (->LMDBVariable db k key-buffer val-buffer)))
+        (->> (reify Function (apply [_ _] (->LMDBVariable db k key-buffer val-buffer {})))
              (.computeIfAbsent varmap k)))))
   (valAt [db k not-found] (or (get db k) not-found))
   Closeable
@@ -307,7 +384,32 @@
   [^LMDBDatabase db
    k
    ^ThreadLocal key-buffer
-   ^ByteBuffer val-buffer]
+   ^ByteBuffer val-buffer
+   indexes]
+  ILookup
+  (valAt [r index-key] (.valAt r index-key nil))
+  (valAt [r index-key not-found]
+    (if (indexes index-key)
+      (reify p/Scannable
+        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) f init))))
+        IReduceInit
+        (reduce [index f init]
+          (reduce-scan index f init))
+        ILookup
+        (valAt [_ entry-key]
+          (reify p/Scannable
+            (scan [_ f init]
+              (variable-read
+                db k
+                (fn [v]
+                  (let [^ILookup idx (.valAt ^ILookup v index-key)
+                        entry (.valAt idx entry-key)]
+                    (p/scan entry f init)))))
+            IReduceInit
+            (reduce [index-entry f init]
+              (reduce-scan index-entry f init))))
+        (valAt [r k _not-found] (.valAt r k)))
+      not-found))
   p/Scannable
   (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
   IReduceInit
@@ -477,8 +579,8 @@
         :s_comment s:comment)))
 
   (c/q [l (:lineitem db)
-        :when (<= l:shipdate #inst "1998-09-02") :group []]
-    (c/count))
+        :group [pred-match (<= l:shipdate #inst "1998-09-02")]]
+    [pred-match (c/count)])
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench
