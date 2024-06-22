@@ -7,7 +7,7 @@
   (:import (clojure.lang ILookup IReduceInit Reduced)
            (java.io Closeable)
            (java.nio ByteBuffer)
-           (java.util HashMap)
+           (java.util ArrayList HashMap Map)
            (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function Supplier)
            (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn))
@@ -151,9 +151,12 @@
               replace-flags)
         false))))
 
-(defn create-dbi ^Dbi [^Env env ^String dbi-name]
+(defn open-dbi ^Dbi [^Env env ^String dbi-name]
   (let [flags (into-array DbiFlags [DbiFlags/MDB_CREATE])]
     (.openDbi env dbi-name ^"[Lorg.lmdbjava.DbiFlags;" flags)))
+
+(def ^:const symbols-dbi-name "$symbols")
+(def ^:const variables-dbi-name "$variables")
 
 (deftype LMDBWriteTransactionVariable
   [^Env env
@@ -223,26 +226,33 @@
 
 (deftype LMDBWriteTransaction
   [^Env env
-   ^HashMap varmap
-   ^ConcurrentHashMap dbis
+   ^Map varmap
+   ^Map dbis
    ^Txn txn
    ^ByteBuffer key-buffer
    ^ByteBuffer val-buffer
    symbol-table]
   ILookup
-  (valAt [_ k]
-    (when-some [dbi (.get dbis k)]
-      (->> (reify Function
-             (apply [_ dbi]
-               (->LMDBWriteTransactionVariable env txn dbi key-buffer val-buffer -1 (if (identical? :lmdb/symbols k) nil symbol-table) {})))
-           (.computeIfAbsent varmap dbi))))
-  (valAt [tx k not-found] (or (get tx k) not-found))
+  (valAt [tx k] (.valAt tx k nil))
+  (valAt [_ k not-found]
+    (if-some [{:keys [dbi-name indexes]} (.get varmap k)]
+      (->LMDBWriteTransactionVariable env txn (.get dbis dbi-name) key-buffer val-buffer -1 symbol-table indexes)
+      not-found))
   p/Transaction
   (commit [t]
     (try
-      (doseq [symbol (codec/list-adds symbol-table)] (p/insert (:lmdb/symbols t) symbol))
+
+      (let [^ArrayList adds (codec/list-adds symbol-table)]
+        (when (< 0 (.size adds))
+          (let [^Dbi symbols-dbi (.get dbis symbols-dbi-name)
+                rsn (inc (with-open [cursor (.openCursor symbols-dbi txn)] (last-rsn cursor)))]
+            (dotimes [i (.size adds)]
+              (let [symbol (.get adds i)]
+                (insert symbols-dbi txn key-buffer val-buffer (+ rsn i) symbol nil))))))
+
       (.commit txn)
       (codec/clear-adds symbol-table)
+
       (catch Throwable t
         (codec/rollback-adds symbol-table)
         (throw t))))
@@ -252,24 +262,21 @@
 
 (deftype LMDBReadTransaction
   [^Env env
-   ^HashMap varmap
-   ^ConcurrentHashMap dbis
+   ^Map varmap
+   ^Map dbis
    ^Txn txn
    ^ByteBuffer key-buffer
    symbol-table]
   ILookup
   (valAt [_ k]
-    (when-some [dbi (.get dbis k)]
-      (->> (reify Function
-             (apply [_ dbi]
-               (->LMDBReadTransactionVariable
-                 env
-                 txn
-                 dbi
-                 key-buffer
-                 symbol-table
-                 {})))
-           (.computeIfAbsent varmap dbi))))
+    (when-some [{:keys [dbi-name, indexes]} (.get varmap k)]
+      (->LMDBReadTransactionVariable
+        env
+        txn
+        (.get dbis dbi-name)
+        key-buffer
+        symbol-table
+        indexes)))
   (valAt [tx k not-found] (or (get tx k) not-found))
   Closeable
   (close [_] (.close txn)))
@@ -319,7 +326,7 @@
       (with-open [^Closeable tx
                   (->LMDBWriteTransaction
                     env
-                    (HashMap.)
+                    varmap
                     dbis
                     (.txnWrite env)
                     (.get key-buffer)
@@ -333,7 +340,7 @@
                     (with-open [^Closeable tx
                                 (->LMDBWriteTransaction
                                   env
-                                  (HashMap.)
+                                  varmap
                                   dbis
                                   (.txnWrite env)
                                   (.get key-buffer)
@@ -351,22 +358,32 @@
           (recur f)
           ret))))
   (read-transaction [_ f]
-    (with-open [^Closeable tx (->LMDBReadTransaction env (HashMap.) dbis (.txnRead env) (.get key-buffer) symbol-table)]
+    (with-open [^Closeable tx (->LMDBReadTransaction env varmap dbis (.txnRead env) (.get key-buffer) symbol-table)]
       (f tx)))
-  (create-relvar [rv k]
-    (.computeIfAbsent dbis k (reify Function (apply [_ k] (create-dbi env (pr-str k)))))
-    (.valAt ^ILookup rv k))
+  (create-relvar [db k]
+    (when-not (.get varmap k)
+      (locking db
+        (when-not (.get varmap k)
+          (let [^Dbi variable-dbi (.get dbis variables-dbi-name)
+                rsn (with-open [txn (.txnRead env)
+                                cursor (.openCursor variable-dbi txn)]
+                      (inc (last-rsn cursor)))
+                dbi-name (str rsn)
+                dbi (open-dbi env dbi-name)]
+            (with-open [txn (.txnWrite env)]
+              (insert variable-dbi txn (.get key-buffer) val-buffer rsn {:k k, :rsn rsn, :dbi-name dbi-name, :indexes {}} nil)
+              (.commit txn))
+            (.put dbis dbi-name dbi)
+            (.put varmap k {:dbi-name dbi-name, :indexes {}})))))
+    (.valAt ^ILookup db k))
   ILookup
   (valAt [db k]
     (case k
       :lmdb/stat (stat-rel env)
-      :lmdb/variables
-      (intrinsic-rel
-        (fn []
-          (sort (into [:lmdb/stat :lmdb/variables] (keys dbis)))))
-      (when (.containsKey dbis k)
-        (->> (reify Function (apply [_ _] (->LMDBVariable db k key-buffer val-buffer {})))
-             (.computeIfAbsent varmap k)))))
+      :lmdb/variables (intrinsic-rel (fn [] (sort (into [:lmdb/stat :lmdb/variables] (keys varmap)))))
+      :lmdb/symbols (intrinsic-rel (fn [] (sort (remove nil? (codec/symbol-list symbol-table)))))
+      (when-some [{:keys [indexes]} (.get varmap k)]
+        (->LMDBVariable db k key-buffer val-buffer indexes))))
   (valAt [db k not-found] (or (get db k) not-found))
   Closeable
   (close [_]
@@ -388,7 +405,7 @@
    indexes]
   ILookup
   (valAt [r index-key] (.valAt r index-key nil))
-  (valAt [r index-key not-found]
+  (valAt [_ index-key not-found]
     (if (indexes index-key)
       (reify p/Scannable
         (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) f init))))
@@ -442,25 +459,36 @@
                     (.setMaxDbs max-variables)
                     (.open file (doto ^"[Lorg.lmdbjava.EnvFlags;" (make-array EnvFlags 1)
                                   (aset 0 EnvFlags/MDB_NOSUBDIR))))
-            symbol-dbi (create-dbi env (pr-str :lmdb/symbols))
+
+            symbol-dbi (open-dbi env symbols-dbi-name)
+            variables-dbi (open-dbi env variables-dbi-name)
+
             dbis (let [dbis (ConcurrentHashMap.)]
                    (doseq [^bytes dbi-bytes (.getDbiNames env)
                            :let [dbi-name (String. dbi-bytes "UTF-8")]]
-                     (.put dbis (edn/read-string dbi-name) (create-dbi env dbi-name)))
+                     (.put dbis dbi-name (open-dbi env dbi-name)))
                    dbis)
-            symbol-table (codec/empty-symbol-table)]
-        ;; read symbols
-        (with-open [txn (.txnRead env)
-                    cursor (.openCursor symbol-dbi txn)]
-          (when (.first cursor)
-            (loop []
-              (codec/intern-symbol symbol-table (codec/decode-object (.val cursor) nil))
-              (when (.next cursor) (recur)))))
+
+            symbol-table (codec/empty-symbol-table)
+            varmap (ConcurrentHashMap.)]
+
+        (with-open [txn (.txnRead env)]
+
+          ;; read symbols
+          (with-open [cursor (.openCursor symbol-dbi txn)]
+            (scan cursor (fn [_ _ symbol] (codec/intern-symbol symbol-table symbol)) nil nil))
+
+          ;; read variables
+          (with-open [cursor (.openCursor variables-dbi txn)]
+            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil nil))
+
+          )
+
         (codec/clear-adds symbol-table)
         (->LMDBDatabase file
                         env
                         dbis
-                        (ConcurrentHashMap.)
+                        varmap
                         (ThreadLocal/withInitial (reify Supplier (get [_] (ByteBuffer/allocateDirect 8))))
                         (ByteBuffer/allocateDirect (* 32 1024 1024))
                         auto-resize
