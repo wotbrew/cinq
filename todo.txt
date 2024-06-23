@@ -1,12 +1,3 @@
-Indirect dbis
-
-Give dbis int names. Have the associated keys be in a table. When we look up a variable, indirect through this table.
-
-Benefits:
-- can swap one variable out for another. I've prepped customers2, make it customers now as an atomic swap.
-  Because such a table would be in the database we can even commit multiple such swaps at once. This might be useful in doing schema migs etc
-
----
 
 Implicit group
 
@@ -20,9 +11,12 @@ Indexes
 
 index scans:
 (q [f (get (:n foo) 42)])
+(q [f (c/get (:n foo) 42)])
+(q [f (c/get-many (:n foo) [42])])
+
 ;; only guarantees filtering, as under a prefix rsns are unordered
-(q [f (c/asc (:n foo) >= 42)])
-(q [f (c/desc (:n foo) < 42 )])
+(q [f (c/range (:n foo) >= 42)])
+(q [f (c/range (:n foo) < 42 )])
 
 index nlj
 (q [id (get (:id customers) 42)
@@ -250,6 +244,7 @@ LMDB map size
 map resize lock, guarantee exclusivity!
 ReadWrite lock, write lock used when map needs resizing (and possibly DDL?),
 read lock used for lmdb transactions (read/write) consider fairness barging.
+for now all transactions completely lock the database!
 
 ---
 
