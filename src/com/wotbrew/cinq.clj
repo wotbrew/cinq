@@ -4,8 +4,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (clojure.lang IReduceInit)
-           (com.wotbrew.cinq CinqUtil)
+  (:import (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
