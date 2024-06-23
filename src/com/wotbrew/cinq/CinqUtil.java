@@ -253,4 +253,33 @@ public class CinqUtil {
     return a == b;
   }
 
+  public static int compare(long a, long b) {
+     return Long.compare(a, b);
+  }
+
+  public static int compare(double a, double b) {
+      return Double.compare(a, b);
+  }
+
+  public static int compare(Object a, Object b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(Object a, long b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(long a, Object b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(double a, Object b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(Object a, double b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(long a, double b) {
+    return Util.compare(a, b);
+  }
+  public static int compare(double a, long b) {
+    return Util.compare(a, b);
+  }
 }

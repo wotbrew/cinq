@@ -41,14 +41,6 @@
 (defn- reduce-scan [r f init]
   (p/scan r (fn [acc _ x] (f acc x)) init))
 
-(defn get-rel [^Txn txn ^Dbi dbi symbol-table]
-  (reify p/Scannable
-    (scan [_ f init]
-      (with-open [cursor (.openCursor dbi txn)]
-        (scan cursor f init (codec/symbol-list symbol-table))))
-    IReduceInit
-    (reduce [r f init] (reduce-scan r f init))))
-
 (defn get-index-entry [^Txn txn
                        ^Dbi dbi
                        ^Dbi rsn-dbi
@@ -92,6 +84,63 @@
     (reduce [index-entry f init]
       (reduce-scan index-entry f init))))
 
+(defn get-index-range-entry [^Txn txn
+                             ^Dbi dbi
+                             ^Dbi rsn-dbi
+                             ^ByteBuffer key-buffer
+                             ^ByteBuffer rsn-buffer
+                             symbol-table
+                             index-key
+                             ;; either cinq/gt or cinq/gte
+                             start-test
+                             start
+                             ;; either cinq/lt or cinq/lte
+                             end-test
+                             end]
+  (let [pred-a (if start-test #(start-test %1 %2) (constantly true))
+        pred-b (if end-test #(end-test %1 %2) (constantly true))
+        pred #(and (pred-a %1 %2) (pred-b %1 %3))]
+    (reify p/Scannable
+      (scan [_ f init]
+        (with-open [cursor (.openCursor dbi txn)]
+          (.clear key-buffer)
+          (.clear rsn-buffer)
+          ;; nil is = -127
+          (codec/encode-key start key-buffer)
+          (.flip key-buffer)
+          (if-not (.get cursor key-buffer GetOp/MDB_SET_RANGE)
+            init
+            (do
+              (.clear key-buffer)
+              (when end-test (codec/encode-key end key-buffer))
+              (with-open [rsn-cursor (.openCursor rsn-dbi txn)]
+                (loop [acc init]
+                  (let [rsn (.getLong ^ByteBuffer (.val cursor))
+                        _ (.putLong rsn-buffer rsn)
+                        _ (.flip rsn-buffer)
+                        has-next (and (.next cursor)
+                                      (if end-test
+                                        (<= (.compareTo key-buffer (.key cursor)) 0)
+                                        true))]
+                    (do
+                      (when-not (.get rsn-cursor rsn-buffer GetOp/MDB_SET)
+                        (throw (IllegalStateException. "Could not find rsn during index seek, suspect index corruption")))
+                      (let [record (codec/decode-object (.val rsn-cursor) (codec/symbol-list symbol-table))
+                            ke (get record index-key)]
+                        (if-not (pred ke start end)
+                          (if has-next (recur acc) acc)
+                          (let [r (f acc
+                                     (.getLong ^ByteBuffer (.key rsn-cursor))
+                                     record)]
+                            (if (reduced? r)
+                              @r
+                              (if has-next
+                                (recur r)
+                                acc)))))))))))))
+      IReduceInit
+      (reduce [index-entry f init]
+        (reduce-scan index-entry f init)))))
+
 (defn scan-index [^Dbi dbi ^Dbi rsn-dbi ^Txn txn f init symbol-list]
   (with-open [cursor (.openCursor dbi txn)
               rsn-cursor (.openCursor rsn-dbi txn)]
@@ -109,13 +158,23 @@
 
 (defn get-index [^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer ^ByteBuffer rsn-buffer index-key symbol-table]
   (reify p/Scannable
-    (scan [_ f init] (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table)))
+    (scan [_ f init]
+      (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table)))
     IReduceInit
     (reduce [index f init]
       (reduce-scan index f init))
+
+    ;; lookup one key
     ILookup
     (valAt [_ k] (get-index-entry txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key k))
-    (valAt [r k _not-found] (.valAt r k))))
+    (valAt [r k _not-found] (.valAt r k))
+
+    p/Index
+    ;; range query
+    (range-scan [_ test-a a test-b b]
+      (get-index-range-entry txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key test-a a test-b b))
+
+    ))
 
 (def ^:private ^"[Lorg.lmdbjava.PutFlags;" insert-flags
   (make-array PutFlags 0))
@@ -599,7 +658,20 @@
             IReduceInit
             (reduce [index-entry f init]
               (reduce-scan index-entry f init))))
-        (valAt [r k _not-found] (.valAt r k)))
+        (valAt [r k _not-found] (.valAt r k))
+        p/Index
+        (range-scan [_ test-a a test-b b]
+          (reify p/Scannable
+            (scan [_ f init]
+              (variable-read
+                db k
+                (fn [v]
+                  (let [^ILookup idx (.valAt ^ILookup v index-key)
+                        entry (p/range-scan idx test-a a test-b b)]
+                    (p/scan entry f init)))))
+            IReduceInit
+            (reduce [index-entry f init]
+              (reduce-scan index-entry f init)))))
       not-found))
   p/Scannable
   (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
@@ -716,9 +788,13 @@
     (get (:id (:foo db)) 43)
     (get (:id (:foo db)) 44)
 
+    (c/range (:id (:foo db)) > 0)
+    (c/range (:id (:foo db)) < 44)
+    (c/range (:id (:foo db)) < 44 >= 42)
+    (c/range (:id (:foo db)) > 40 <= 42)
+
 
     (c/rel-set (:foo db) [{:id (range 1024)}])
-
 
     )
 

@@ -23,5 +23,5 @@
 (defprotocol Scannable
   (scan [rel f init]))
 
-(defprotocol Generative
-  (generate [rel args]))
+(defprotocol Index
+  (range-scan [rel test-a a test-b b]))

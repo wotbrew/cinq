@@ -1,10 +1,12 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use max min count set update replace run! read vec])
+  (:refer-clojure :exclude [use max min count set update replace run! read vec range])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan2 :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq.protocols Scannable)))
+  (:import (clojure.lang IReduceInit)
+           (com.wotbrew.cinq CinqUtil)
+           (com.wotbrew.cinq.protocols Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
 
@@ -175,3 +177,37 @@
   (big-count [rel] (agg 0 n [_ rel] (unchecked-inc n))))
 
 (defn rel-count [rel] (p/big-count rel))
+
+(defn- lt [a b] (< (CinqUtil/compare a b) 0))
+(defn- lte [a b] (<= (CinqUtil/compare a b) 0))
+(defn- gt [a b] (> (CinqUtil/compare a b) 0))
+(defn- gte [a b] (>= (CinqUtil/compare a b) 0))
+
+(defn- index-test [test-fn]
+  (condp identical? test-fn
+    < lt
+    <= lte
+    > gt
+    >= gte
+    (throw (ex-info "Not a valid range query test, accepted (<, <=, >, >=)" {}))))
+
+(defn range
+  "Index range scan.
+
+  e.g
+
+  (range index > 3) all values over 3.
+  (range index < 3) all values below 3.
+
+  (range index < 3 > 1) all values below 3, but above one.
+  (range index > 3 <= 100) all values between 3-100 incl."
+  ([index test a]
+   (condp identical? test
+     > (p/range-scan index gt a nil nil)
+     >= (p/range-scan index gte a nil nil)
+     (p/range-scan index nil nil (index-test test) a)))
+  ([index start-test start-key end-test end-key]
+   (condp identical? start-test
+     < (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
+     <= (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
+     (p/range-scan index (index-test start-test) start-key (index-test end-test) end-key))))

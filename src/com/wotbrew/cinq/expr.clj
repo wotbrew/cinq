@@ -82,13 +82,13 @@
                `(CinqUtil/eq ~?a ~?b)
 
                [::plan/<= ?a ?b]
-               `(<= (compare ~?a ~?b) 0)
+               `(<= (CinqUtil/compare ~?a ~?b) 0)
                [::plan/< ?a ?b]
-               `(< (compare ~?a ~?b) 0)
+               `(< (CinqUtil/compare ~?a ~?b) 0)
                [::plan/>= ?a ?b]
-               `(>= (compare ~?a ~?b) 0)
+               `(>= (CinqUtil/compare ~?a ~?b) 0)
                [::plan/> ?a ?b]
-               `(> (compare ~?a ~?b) 0)
+               `(> (CinqUtil/compare ~?a ~?b) 0)
 
                [::plan/scalar-sq ?plan]
                `(first ~(compile-plan ?plan))
