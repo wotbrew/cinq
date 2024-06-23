@@ -1,6 +1,6 @@
 (ns com.wotbrew.cinq.nio-codec
   "Encoding/decoding supported data to nio ByteBuffer's."
-  (:import (clojure.lang Keyword Symbol)
+  (:import (clojure.lang Keyword Named Symbol)
            (com.wotbrew.cinq CinqDynamicArrayRecord)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
@@ -356,6 +356,87 @@
 (defn list-adds [^SymbolTable symbol-table]
   (.-adds symbol-table))
 
-(defn encode-key [o ^ByteBuffer buf] (encode-object o buf nil))
+(defprotocol EncodeKey
+  (-encode-key [o buffer] "Return true if lossy, requiring object comparison.
+  Guaranteed at least 8 bytes .remaining on entry."))
 
-(defn decode-key [^ByteBuffer buf] (decode-object buf nil))
+(extend-protocol EncodeKey
+  nil
+  (-encode-key [_ buffer]
+    (.put ^ByteBuffer buffer (unchecked-byte 0))
+    false)
+  Boolean
+  (-encode-key [b buffer]
+    (if b
+      (.put ^ByteBuffer buffer (unchecked-byte 2))
+      (.put ^ByteBuffer buffer (unchecked-byte 3)))
+    false)
+  ;; not sure these need marking as lossy
+  Byte
+  (-encode-key [l buffer]
+    (.putDouble ^ByteBuffer buffer (unchecked-double l))
+    true)
+  Short
+  (-encode-key [l buffer]
+    (.putDouble ^ByteBuffer buffer (unchecked-double l))
+    true)
+  Integer
+  (-encode-key [l buffer]
+    (.putDouble ^ByteBuffer buffer (unchecked-double l))
+    true)
+
+  ;; store as lossy double for now
+  Long
+  (-encode-key [l buffer]
+    (.putDouble ^ByteBuffer buffer (unchecked-double l))
+    true)
+
+  Float
+  (-encode-key [d buffer]
+    (.putDouble ^ByteBuffer buffer (unchecked-double d))
+    false)
+  Double
+  (-encode-key [d buffer]
+    (.putDouble ^ByteBuffer buffer d)
+    false)
+
+  String
+  (-encode-key [s buffer]
+    (let [^ByteBuffer buffer buffer
+          barr (.getBytes ^String s StandardCharsets/UTF_8)]
+      (.put buffer barr 0 (min (alength barr) (.remaining buffer)))
+      (< (.remaining buffer) (alength barr))))
+
+  Named
+  (-encode-key [s buffer]
+    (or (-encode-key (namespace s) buffer)
+        (when (.hasRemaining ^ByteBuffer buffer)
+          (-encode-key (name s) buffer))))
+
+  List
+  (-encode-key [l buffer]
+    (reduce (fn [lossy x]
+              (prn x (.remaining ^ByteBuffer buffer))
+              (if (<= 16 (.remaining ^ByteBuffer buffer))
+                (if (-encode-key x buffer)
+                    lossy
+                    (do
+                      ;; some kind of delimiter encoding
+                      ;; e.g [a, b] is < [ab]
+                      (.put buffer (unchecked-byte -127))
+                      lossy))
+                (reduced true)))
+            false
+            l))
+  Date
+  (-encode-key [d buffer]
+    (-encode-key (inst-ms d) buffer)))
+
+(defn encode-key [o ^ByteBuffer buf]
+  (let [old-limit (.limit buf)
+        _ (.limit buf (unchecked-dec-int old-limit))
+        lossy (-encode-key o buf)]
+    (.limit buf old-limit)
+    (if lossy
+      (.put buf (unchecked-byte 1))
+      (.put buf (unchecked-byte 0)))))

@@ -20,14 +20,9 @@ Indexes
 
 index scans:
 (q [f (get (:n foo) 42)])
+;; only guarantees filtering, as under a prefix rsns are unordered
 (q [f (c/asc (:n foo) >= 42)])
 (q [f (c/desc (:n foo) < 42 )])
-
-(c/asc (:n foo) >= 42)
-
-index sorts:
-(q [f (c/asc (:n foo))])
-(q [f (c/desc (:n foo))])
 
 index nlj
 (q [id (get (:id customers) 42)
@@ -247,3 +242,18 @@ Think about what to do.
 Nil as a record
 
 Yay or nay, I expect a few things might be trickier if nils are allowed (we'd need to box to disambiguate for e.g lmdb delete return
+
+---
+
+LMDB map size
+
+map resize lock, guarantee exclusivity!
+ReadWrite lock, write lock used when map needs resizing (and possibly DDL?),
+read lock used for lmdb transactions (read/write) consider fairness barging.
+
+---
+
+Test db per index
+
+This could mean a some multiple of the number of tables as opened dbis and extra per transaction overhead. Test though, might be fine.
+If we have a problem consider prefixing keys with a single byte (0 == table), (1+) == index. Can have a max of 254 indexes per table.
