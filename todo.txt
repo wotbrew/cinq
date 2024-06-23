@@ -241,3 +241,9 @@ This will likely be even more important later when you are scanning 2TB LMDB rel
 Putting interrupt checks naively on the main loop does come with a fairly significant perf cost or around 5%.
 
 Think about what to do.
+
+---
+
+Nil as a record
+
+Yay or nay, I expect a few things might be trickier if nils are allowed (we'd need to box to disambiguate for e.g lmdb delete return

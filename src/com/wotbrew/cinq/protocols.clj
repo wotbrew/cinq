@@ -18,8 +18,7 @@
 
 (defprotocol IncrementalRelvar
   (insert [relvar record])
-  (delete [relvar rsn])
-  (replace [relvar rsn record]))
+  (delete [relvar rsn]))
 
 (defprotocol Scannable
   (scan [rel f init]))

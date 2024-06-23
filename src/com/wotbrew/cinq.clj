@@ -121,8 +121,9 @@
          0
          affected-records#
          ~(into [(add-rsn-to-binding binding rsn) rv] query)
-         (if (p/replace ~rv ~rsn ~expr)
-           (unchecked-inc affected-records#)
+         (if (p/delete ~rv ~rsn)
+           (do (p/insert ~rv ~expr)
+               (unchecked-inc affected-records#))
            affected-records#)))))
 
 (extend-protocol p/Scannable

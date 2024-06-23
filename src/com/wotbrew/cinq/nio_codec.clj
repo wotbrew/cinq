@@ -357,3 +357,5 @@
   (.-adds symbol-table))
 
 (defn encode-key [o ^ByteBuffer buf] (encode-object o buf nil))
+
+(defn decode-key [^ByteBuffer buf] (decode-object buf nil))
