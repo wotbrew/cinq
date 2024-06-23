@@ -5,8 +5,8 @@
             [meander.epsilon :as m])
   (:import (com.wotbrew.cinq CinqUtil)))
 
-(create-ns 'com.wotbrew.cinq.plan2)
-(alias 'plan 'com.wotbrew.cinq.plan2)
+(create-ns 'com.wotbrew.cinq.plan)
+(alias 'plan 'com.wotbrew.cinq.plan)
 
 (defn possible-dependencies [dep-cols expr]
   (let [count-sym '%count]

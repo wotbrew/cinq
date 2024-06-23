@@ -1,6 +1,6 @@
 (ns com.wotbrew.cinq.tuple
   (:require [com.wotbrew.cinq.expr :as expr]
-            [com.wotbrew.cinq.plan2 :as plan])
+            [com.wotbrew.cinq.plan :as plan])
   (:import (com.wotbrew.cinq CinqUtil)))
 
 (defn sig

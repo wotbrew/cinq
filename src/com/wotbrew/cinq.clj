@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [use max min count set update replace run! read vec range])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
-            [com.wotbrew.cinq.plan2 :as plan]
+            [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.protocols :as p])
   (:import (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)))

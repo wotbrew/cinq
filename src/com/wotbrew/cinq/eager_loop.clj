@@ -1,7 +1,7 @@
 (ns com.wotbrew.cinq.eager-loop
   (:require [clojure.set :as set]
             [com.wotbrew.cinq.expr :as expr]
-            [com.wotbrew.cinq.plan2 :as plan]
+            [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]

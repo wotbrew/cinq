@@ -1,4 +1,4 @@
-(ns com.wotbrew.cinq.plan2
+(ns com.wotbrew.cinq.plan
   (:require [clojure.set :as set]
             [clojure.walk :as walk]
             [com.wotbrew.cinq.expr :as expr]

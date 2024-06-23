@@ -3,7 +3,7 @@
             [com.wotbrew.cinq.expr :as expr]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r]
-            [com.wotbrew.cinq.plan2 :as plan]))
+            [com.wotbrew.cinq.plan :as plan]))
 
 (def ^:dynamic *env* {})
 
