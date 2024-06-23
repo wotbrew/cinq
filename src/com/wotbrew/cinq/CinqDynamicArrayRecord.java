@@ -61,10 +61,10 @@ public class CinqDynamicArrayRecord extends APersistentMap {
         Object v = vals[i];
         if(v != null) return v;
         int offset = offsets[i];
-        buffer.mark();
+        int pos = buffer.position();
         buffer.position(offset);
         v = decode.invoke(buffer, symbolList);
-        buffer.reset();
+        buffer.position(pos);
         vals[i] = v;
         return v;
     }
