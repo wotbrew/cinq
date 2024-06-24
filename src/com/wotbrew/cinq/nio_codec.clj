@@ -413,10 +413,10 @@
         (when (.hasRemaining ^ByteBuffer buffer)
           (-encode-key (name s) buffer))))
 
+  #_#_
   List
   (-encode-key [l buffer]
     (reduce (fn [lossy x]
-              (prn x (.remaining ^ByteBuffer buffer))
               (if (<= 16 (.remaining ^ByteBuffer buffer))
                 (if (-encode-key x buffer)
                     lossy
