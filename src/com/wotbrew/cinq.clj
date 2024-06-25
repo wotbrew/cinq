@@ -61,7 +61,7 @@
 (defmacro exists? [query] `(boolean (scalar ~query true)))
 
 (defmacro run! [query & body]
-  `(doseq [f# (q ~query (fn [] ~@body))] (f#)))
+  `(reduce (fn [_# f#] (f#)) nil (q ~query (fn [] ~@body))))
 
 (defmacro agg [init init-sym query & body]
   {:pre [(symbol? init-sym)]}
