@@ -1075,8 +1075,16 @@
     ;; todo only add this one conveying self tag is done differently (right now removing self when redudant stops type hints)
     ;; check perf - seems slower branch prune-scans, even when re-conveying the self tag (using meta)
     ;; jvm weirdness, maybe cache coincidence
-    #_#_[::scan ?src ?bindings]
-            [::scan ?src (filterv (fn [[col]] (contains? req-cols col)) ?bindings)]
+    [::scan ?src ?bindings]
+    [::scan ?src (vec (keep (fn [[col k :as binding]]
+                              (cond
+                                (contains? req-cols col)
+                                binding
+
+                                ;; keep self for tags, mark as unused
+                                (= :cinq/self k)
+                                [(vary-meta col assoc :not-used true) k]))
+                            ?bindings))]
 
     ;; todo group-project
     #_#_[::group-project ?ra ?bindings ?aggregates ?projection]

@@ -1,10 +1,12 @@
 (ns com.wotbrew.cinq.nio-codec
   "Encoding/decoding supported data to nio ByteBuffer's."
   (:import (clojure.lang Keyword Named Symbol)
-           (com.wotbrew.cinq CinqDynamicArrayRecord)
+           (com.wotbrew.cinq CinqDynamicArrayMap CinqUnsafeDynamicMap)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
            (java.util ArrayList Date HashMap List Map Set)))
+
+(set! *warn-on-reflection* true)
 
 (defprotocol Encode
   (encode-object [o buffer symbol-table]
@@ -74,6 +76,52 @@
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   (<= 16 (.remaining buffer)))
+
+(defn encode-map [^Map m ^ByteBuffer buffer symbol-table]
+  (let [len (.size m)]
+    ;; todo change type depending on whether all keys symbolic
+    (.putLong buffer t-map)
+    (.putInt buffer len)
+    (let [offset-table-pos (.position buffer)
+          offset-table-size (* len 4)
+          ctr (int-array 1)]
+      (and (< offset-table-size (.remaining buffer))
+           (do (dotimes [_ len]
+                 (.putInt buffer 0))
+               true)
+           ;; two loops provide the best encoding
+           (reduce
+             (fn [_ k]
+               (let [i (aget ctr 0)]
+                 (if-not (< i len)
+                   (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                   (do (aset ctr 0 (unchecked-inc i))
+                       ;; put key
+                       (if (and (buffer-min-remaining? buffer)
+                                (encode-object k buffer symbol-table))
+                         true
+                         (reduced false))))))
+             true
+             (keys m))
+           (let [start-pos (.position buffer)]
+             (aset ctr 0 0)
+             (reduce
+               (fn [_ v]
+                 (let [i (aget ctr 0)]
+                   (if-not (< i len)
+                     (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                     (do (aset ctr 0 (unchecked-inc i))
+                         ;; put offset from start
+                         (.putInt buffer
+                                  (unchecked-add-int offset-table-pos (unchecked-multiply-int i 4))
+                                  (unchecked-subtract (.position buffer) start-pos))
+                         ;; put val
+                         (if (and (buffer-min-remaining? buffer)
+                                  (encode-object v buffer symbol-table))
+                           true
+                           (reduced false))))))
+               true
+               (vals m)))))))
 
 (extend-protocol Encode
   nil
@@ -160,43 +208,7 @@
               (and (encode-object (namespace s) buffer nil)
                    (encode-object (name s) buffer nil)))))))
   Map
-  (encode-object [m buffer symbol-table]
-    (let [^Map m m
-          ^ByteBuffer buffer buffer
-          len (.size m)]
-      (.putLong buffer t-map)
-      (.putInt buffer len)
-      (let [offset-table-size (* len 8)
-            offset-table-pos (.position buffer)
-            ctr (int-array 1)]
-        (and (< offset-table-size (.remaining buffer))
-             (do (dotimes [_ len]
-                   (.putInt buffer 0)
-                   (.putInt buffer 0))
-                 true)
-             (reduce-kv
-               (fn [_ k v]
-                 (let [i (aget ctr 0)]
-                   (if-not (< i len)
-                     (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
-                     (let [key-pos (.position buffer)]
-                       (aset ctr 0 (unchecked-inc i))
-                       (.putInt buffer
-                                (unchecked-add offset-table-pos (unchecked-multiply i 8))
-                                (unchecked-subtract key-pos offset-table-pos))
-                       (if (and (buffer-min-remaining? buffer)
-                                (encode-object k buffer symbol-table))
-                         (let [val-pos (.position buffer)]
-                           (.putInt buffer
-                                    (unchecked-add offset-table-pos (unchecked-add 4 (unchecked-multiply i 8)))
-                                    (unchecked-subtract val-pos offset-table-pos))
-                           (if (and (buffer-min-remaining? buffer)
-                                    (encode-object v buffer symbol-table))
-                             true
-                             (reduced false)))
-                         (reduced false))))))
-               true
-               m)))))
+  (encode-object [m buffer symbol-table] (encode-map m buffer symbol-table))
   List
   (encode-object [l buffer symbol-table]
     (let [^List l l
@@ -262,29 +274,8 @@
 (defn decode-list [^ByteBuffer buffer symbol-list]
   (vec (decode-object-array buffer symbol-list)))
 
-(defn ensure-heap ^ByteBuffer [^ByteBuffer buffer]
-  (if (.isDirect buffer)
-    (let [buf (ByteBuffer/allocate (.remaining buffer))]
-      (.put buf buffer)
-      (.flip buf))
-    (.slice buffer)))
-
 (defn decode-map [^ByteBuffer buffer symbol-list]
-  (let [len (.getInt buffer)
-        start-pos (.position buffer)
-        offsets (int-array len)
-        keys (object-array len)
-        vals (object-array len)
-        table-size (unchecked-multiply-int len 8)]
-    (dotimes [i len]
-      (let [k-offset (.getInt buffer)
-            v-offset (.getInt buffer)]
-        (.mark buffer)
-        (.position buffer (unchecked-add-int start-pos k-offset))
-        (aset keys (int i) (decode-object buffer symbol-list))
-        (aset offsets (int i) (unchecked-subtract-int v-offset table-size))
-        (.reset buffer)))
-    (CinqDynamicArrayRecord. keys vals offsets (ensure-heap buffer) symbol-list)))
+  (CinqDynamicArrayMap/read buffer symbol-list))
 
 (defn decode-set [^ByteBuffer buffer symbol-list]
   (let [len (.getInt buffer)
@@ -320,6 +311,23 @@
       t-keyword (decode-keyword buffer)
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
+(defn decode-root-unsafe [^CinqUnsafeDynamicMap mut-record ^ByteBuffer buffer ^objects symbol-list]
+  (let [tid (.getLong buffer)]
+    (case2 tid
+      t-nil nil
+      t-true true
+      t-false false
+      t-long (.getLong buffer)
+      t-double (.getDouble buffer)
+      t-string (decode-string buffer)
+      t-list (decode-list buffer symbol-list)
+      t-map (do (.read mut-record buffer) mut-record)
+      t-set (decode-set buffer symbol-list)
+      t-date (decode-date buffer)
+      t-symbol (decode-symbol buffer)
+      t-keyword (decode-keyword buffer)
+      (aget symbol-list (unchecked-subtract tid t-max)))))
+
 (defn empty-symbol-table []
   (->SymbolTable (HashMap.) (object-array 32) (ArrayList.)))
 
@@ -329,7 +337,7 @@
     (loop [content-buf (ByteBuffer/allocate 16)]
       (if (encode-object o content-buf symbol-table)
         (loop [symbol-buf (ByteBuffer/allocate 16)]
-          (if (encode-object (symbol-list symbol-table) symbol-buf nil)
+          (if (encode-object (vec (symbol-list symbol-table)) symbol-buf nil)
             (let [_ (do (.flip content-buf)
                         (.flip symbol-buf))
                   cap (+ (.remaining content-buf) (.remaining symbol-buf))
@@ -341,7 +349,7 @@
         (recur (ByteBuffer/allocate (* 2 (.capacity content-buf))))))))
 
 (defn decode [^ByteBuffer buf]
-  (decode-object buf (decode-object buf [])))
+  (decode-object buf (object-array (decode-object buf []))))
 
 (comment
 
@@ -413,21 +421,20 @@
         (when (.hasRemaining ^ByteBuffer buffer)
           (-encode-key (name s) buffer))))
 
-  #_#_
-  List
-  (-encode-key [l buffer]
-    (reduce (fn [lossy x]
-              (if (<= 16 (.remaining ^ByteBuffer buffer))
-                (if (-encode-key x buffer)
-                    lossy
-                    (do
-                      ;; some kind of delimiter encoding
-                      ;; e.g [a, b] is < [ab]
-                      (.put buffer (unchecked-byte -127))
-                      lossy))
-                (reduced true)))
-            false
-            l))
+  #_#_List
+          (-encode-key [l buffer]
+                       (reduce (fn [lossy x]
+                                 (if (<= 16 (.remaining ^ByteBuffer buffer))
+                                   (if (-encode-key x buffer)
+                                     lossy
+                                     (do
+                                       ;; some kind of delimiter encoding
+                                       ;; e.g [a, b] is < [ab]
+                                       (.put buffer (unchecked-byte -127))
+                                       lossy))
+                                   (reduced true)))
+                               false
+                               l))
   Date
   (-encode-key [d buffer]
     (-encode-key (inst-ms d) buffer)))

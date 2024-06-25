@@ -5,7 +5,7 @@
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
   (:import (clojure.lang ILookup IReduceInit Reduced)
-           (com.wotbrew.cinq CinqUtil)
+           (com.wotbrew.cinq CinqScanFunctionUnsafe CinqUnsafeDynamicMap CinqUtil)
            (java.io Closeable)
            (java.nio ByteBuffer)
            (java.util ArrayList HashMap Map)
@@ -18,7 +18,21 @@
 
 (def ^:redef open-files #{})
 
-(defn- scan [^Cursor cursor f init symbol-list]
+(defn- scan-unsafe [^Cursor cursor f init symbol-list]
+  (if-not (.first cursor)
+    init
+    (let [mut-record (CinqUnsafeDynamicMap. symbol-list)]
+      (loop [acc init]
+        (let [rsn (.getLong ^ByteBuffer (.key cursor))
+              o (codec/decode-root-unsafe mut-record (.val cursor) symbol-list)
+              ret (f acc rsn o)]
+          (if (reduced? ret)
+            @ret
+            (if (.next cursor)
+              (recur ret)
+              ret)))))))
+
+(defn- scan-safe [^Cursor cursor f init symbol-list]
   (if-not (.first cursor)
     init
     (loop [acc init]
@@ -30,6 +44,11 @@
           (if (.next cursor)
             (recur ret)
             ret))))))
+
+(defn- scan [^Cursor cursor f init symbol-list]
+  (if (instance? CinqScanFunctionUnsafe f)
+    (scan-unsafe cursor f init symbol-list)
+    (scan-safe cursor f init symbol-list)))
 
 (defn- last-rsn ^long [^Cursor cursor]
   (if (.last cursor)
@@ -820,8 +839,11 @@
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench
-      (count (vec (:lineitem db)))
-      ))
+      (c/agg nil _ [li (:lineitem db)] nil)
+      )
+    )
+
+  (criterium.core/quick-bench (c/agg nil _ [li (:lineitem sf005)] nil))
 
   (defn q1 [{:keys [lineitem]}]
     (c/q [l lineitem

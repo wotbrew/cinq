@@ -6,8 +6,9 @@
             [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
-  (:import (clojure.lang IReduceInit)
-           (com.wotbrew.cinq CinqMultimap)
+  (:import (clojure.lang IFn IReduceInit)
+           (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunctionUnsafe)
+           (com.wotbrew.cinq.protocols Scannable)
            (java.util ArrayList Comparator HashMap)
            (java.util.function BiFunction Function)))
 
@@ -50,15 +51,16 @@
 
 (defn emit-scan [src bindings body]
   (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
+        self-not-used (:not-used (meta self-binding))
         self-tag (:tag (meta self-binding))
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
         rsn (gensym "rsn")
-        need-rsn (need-rsn? bindings)
-        lambda (if need-rsn
-                 `(fn scan-fn# [_# ^Long ~rsn ~o]
-                    (let [~rsn (long ~rsn)
+        lambda `(reify CinqScanFunction
+                  (apply [_# _# ~rsn o#]
+                    (let [~o o#
                           ~@(for [[sym k] bindings
+                                  :when (not (:not-used (meta sym)))
                                   form [sym
                                         (cond
                                           (= :cinq/self k) o
@@ -72,23 +74,11 @@
                                           :else (list `get o k))]]
                               form)]
                       (some-> ~body reduced)))
-                 `(fn reduce-fn# [_# ~o]
-                    (let [~@(for [[sym k] bindings
-                                  form [sym
-                                        (cond
-                                          (= :cinq/self k) o
-                                          (and self-class (class? self-class) (plan/kw-field self-class k))
-                                          (list (symbol (str ".-" (munge (name k)))) o)
-                                          (keyword? k) (list k o)
-                                          ;; todo should we get a special numeric key here from vec destructures to avoid
-                                          ;; ambiguity between get/nth
-                                          (number? k) `(get-numeric ~k ~o)
-                                          :else (list `get o k))]]
-                              form)]
-                      (some-> ~body reduced))))]
-    (if need-rsn
-      `(p/scan ~(rewrite-expr [] src) ~lambda nil)
-      `(reduce ~lambda nil ~(rewrite-expr [] src)))))
+                  ~@(if self-not-used [`com.wotbrew.cinq.CinqScanFunctionUnsafe] []))]
+    `(let [src# ~(rewrite-expr [] src)]
+       (if (instance? Scannable src#)
+         (p/scan src# ~lambda nil)
+         (reduce ~lambda nil src#)))))
 
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))
