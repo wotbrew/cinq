@@ -7,40 +7,6 @@
 
 (def ^:dynamic *env* {})
 
-(defn normalize-binding [binding]
-  (cond
-    (vector? binding)
-    (if (= :as (butlast binding))
-      (into [[(last binding) :cinq/self]]
-            (for [[i sym] (map-indexed vector (drop-last 2 binding))]
-              [sym i]))
-      (vec (for [[i sym] (map-indexed vector binding)] [sym i])))
-
-    (map? binding)
-    (vec (for [[k v] binding
-               [sym x]
-               (cond
-                 (symbol? k) [[k v]]
-                 (= :keys k)
-                 (for [k v]
-                   [(symbol nil (name k)) k])
-
-                 (= :strs k)
-                 (for [s v]
-                   [(symbol nil s) s])
-
-                 (= :as k)
-                 [[v :cinq/self]]
-
-                 :else (throw (Exception. "Unsupported binding form")))]
-           [sym x]))
-
-    (symbol? binding) [[binding :cinq/self]]
-
-    :else (throw (Exception. "Unsupported binding form"))))
-
-(declare parse-query)
-
 (defn lookup-sym? [expr]
   (and (symbol? expr)
        (or (when (namespace expr)
@@ -60,6 +26,53 @@
           {:kw (keyword (namespace s) b)
            :a (symbol a)
            :t (:tag (meta s))})))
+
+(defn normalize-binding [binding]
+  (cond
+    (vector? binding)
+    (if (= :as (last (butlast binding)))
+      (into [[(last binding) :cinq/self]]
+            (for [[i sym] (map-indexed vector (drop-last 2 binding))]
+              (if-not (symbol? sym)
+                (throw (Exception. "Unsupported binding form"))
+                [sym i])))
+      (vec (for [[i sym] (map-indexed vector binding)]
+             (if-not (symbol? sym)
+               (throw (Exception. "Unsupported binding form"))
+               [sym i]))))
+
+    (map? binding)
+    (vec (for [[k v] binding
+               [sym x]
+               (cond
+                 (lookup-sym? binding)
+                 (throw (Exception. "Not permitted to use lookup symbols in destructure"))
+
+                 (symbol? k) [[k v]]
+
+                 (= :keys k)
+                 (for [k v]
+                   (if (lookup-sym? k)
+                     (throw (Exception. "Not permitted to use lookup symbols in destructure"))
+                     [(symbol nil (name k)) (keyword (namespace k) (name k))]))
+
+                 (= :strs k)
+                 (for [s v]
+                   [(symbol nil (name s)) (str s)])
+
+                 (= :as k)
+                 [[v :cinq/self]]
+
+                 :else (throw (Exception. "Unsupported binding form")))]
+           [sym x]))
+
+    (lookup-sym? binding) (throw (Exception. "Not permitted to use lookup symbols in destructure"))
+
+    (symbol? binding) [[binding :cinq/self]]
+
+    :else (throw (Exception. "Unsupported binding form"))))
+
+(declare parse-query)
 
 (def ^:redef n2n-rewrites #{})
 

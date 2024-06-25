@@ -229,13 +229,13 @@ This will likely be even more important later when you are scanning 2TB LMDB rel
 
 Putting interrupt checks naively on the main loop does come with a fairly significant perf cost or around 5%.
 
-Think about what to do.
+If reads were buffered this cost may go down? Or if we go down the columnar route we can put the check at vector points
 
 ---
 
 Nil as a record
 
-Yay or nay, I expect a few things might be trickier if nils are allowed (we'd need to box to disambiguate for e.g lmdb delete return
+Yay or nay, I expect a few things might be trickier if nils are allowed (we'd need to box to disambiguate for e.g lmdb delete return)
 
 ---
 
@@ -252,3 +252,123 @@ Test db per index
 
 This could mean a some multiple of the number of tables as opened dbis and extra per transaction overhead. Test though, might be fine.
 If we have a problem consider prefixing keys with a single byte (0 == table), (1+) == index. Can have a max of 254 indexes per table.
+
+---
+
+Escape analysis
+
+If columns do not escape a query, we do not need to copy them into heap memory.
+
+- if captured by a 'build' such as group/join hash table, we still can keep refs to native mem
+- if used in an expression (or intermediate) expression that might escape (due to side effect or return from query, or embedding in a return)
+  we need to copy
+- read head can make this easier to deal with as we can have a .valAtUnsafe vs .valAt or .getUnsafe .get for the root.
+---
+
+Read head
+
+Perhaps considering the above 'escape analysis' point. The scan operator should introduce a 'read head' flyweight rather than a reference to a unique object.
+- for objects that do not escape, we can use a flyweight and not reallocate (or continue sitting atop native mem)
+- if we want to experiment with column decomposition in storage or alternative 'multiple tuples per native read' this will help keep compiler the same
+
+With a read head we could also experiment with late lookups of column, such as if a column is only used after a filter.
+
+For fixed layouts a custom read head can be compiled with fixed fields .getFoo etc mapping to offsets.
+
+Which read head is used will be up to the scan operator, a read head constructor that is able to create a native vs managed head is passed as an arg to scan
+
+(scan rel f init make-read-head)
+
+e.g if the scan is for a record type, the compiler emits a custom make-read-head ctor that is passed as an argument.
+
+---
+
+immu / bitemp
+
+- immutable relvar
+  implies system_from, system_to cols
+  update = cut
+  delete = cut
+
+  implies $now denormalized index for each var. use c/latest to return a new db/tx which wraps all relvars
+  implies $now index for each index (-> db c/latest :foo :id (get 42))
+
+- bitemporal relvar
+
+  implies system_from, system_to, valid_from, valid_to cols
+  update = cut
+  delete = cut
+
+  implies $now denormalized index for each var. use c/latest to return a new db/tx which wraps all relvars
+  implies $now index for each index (-> db c/latest :foo :id (get 42))
+
+---
+
+javascript
+
+- queries emit a lot of code, what to do about that?
+- indexeddb rather than lmdb
+- async transactions / reads
+- conditional compilation and specialisation based on prim types would not be present
+
+---
+
+Index intersection
+
+(c/merge (c/get idx0 42) (c/range idx2 < 42))
+
+Add a rsn scan interface method to indexes to do some int-intersection
+
+---
+
+Composite indexes
+
+- lists / vectors should be ok?
+- what does index-key look like
+- how does partial index query work
+- how are these encoded correctly
+
+---
+
+Hash only indexes
+
+- indexing maps and sets will give you hash lookups but no range queries (obviously)
+- prefix coding a hash (find algo that preserves unorderedness of structures)
+- should sorted maps / sets get special treatment? i.e these could get a their own typeid?
+
+---
+
+Constraints
+
+Unique (and primary?)
+Foreign key
+Schema
+
+Encoded as data, saved in variables table
+
+(c/create-relvar db :foo schema) supply initial schema
+
+(c/set-schema relvar schema)
+;; throw if cannot enforce
+
+(c/drop-schema relvar)
+;; wild west
+
+upserts, insert-ignore etc possible with primary/unique
+
+---
+
+auto-incr
+
+if named attribute can be set to reflect the rsn automatically e.g (c/auto-increment relvar :customer-id)
+
+---
+
+extended destructuring
+
+current limitations
+
+- nesting/composites, e.g [[a b]], {[x, y] :z}
+- lookup syms as bare symbols in bind e.g (c/q [a:b coll] a:b)
+
+Currently bind does not follow clj destructuring, as maps do not have a seq path for example
