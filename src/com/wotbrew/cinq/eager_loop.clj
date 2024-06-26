@@ -80,11 +80,18 @@
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
         rsn (gensym "rsn")
-        lambda `(reify CinqScanFunction
+        lambda `(reify IFn
+                  (invoke [f# agg# o#] (.apply f# agg# -1 o#))
+                  (invoke [f# agg# rsn# o#] (.apply f# agg# rsn# o#))
+
+                  CinqScanFunction
                   ;; todo
                   ;; for bindings that are :not-used but have a predicate
                   ;; nativeFilter impl (precompiled kernels?) write to scan memory?
                   ;; filter impl
+
+                  (filter [_# _# _#] true)
+                  (nativeFilter [_# _# _#] true)
 
                   (apply [_# _# ~rsn o#]
                     (let [~o o#
