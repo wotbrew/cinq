@@ -1,13 +1,14 @@
 (ns com.wotbrew.cinq.eager-loop
   (:require [clojure.set :as set]
             [com.wotbrew.cinq.expr :as expr]
+            [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.column :as col]
             [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
   (:import (clojure.lang IFn IReduceInit)
-           (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunctionUnsafe)
+           (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunction$NativeFilter)
            (com.wotbrew.cinq.protocols Scannable)
            (java.util ArrayList Comparator HashMap)
            (java.util.function BiFunction Function)))
@@ -42,14 +43,14 @@
 (defn first-or-null [rel]
   (reduce (fn [_ x] (reduced x)) nil rel))
 
-(defn need-rsn? [bindings] (some (comp #{:cinq/rsn} second) bindings))
+(defn need-rsn? [scan-bindings] (some (comp #{:cinq/rsn} second) scan-bindings))
 
 (defn get-numeric [k o]
   (if (associative? o)
     (get o k)
     (nth o k nil)))
 
-(defn sort-bindings [scan-bindings]
+(defn sort-scan-bindings [scan-bindings]
   (-> (group-by first scan-bindings)
       vals
       (->> (map peek)
@@ -60,7 +61,7 @@
                           first))
            vec)))
 
-(defn emit-binding-expr [k o rsn self-class]
+(defn emit-scan-binding-expr [k o rsn self-class]
   (cond
     (= :cinq/self k) o
     (= :cinq/rsn k) rsn
@@ -72,50 +73,202 @@
     (number? k) `(get-numeric ~k ~o)
     :else (list `get o k)))
 
+(defn scan-reduce-rsn [src ^CinqScanFunction f]
+  (let [a (long-array 1)]
+    (aset a 0 -1)
+    (reduce (fn [acc x] (f acc (aset a 0 (unchecked-inc (aget a 0))) x)) nil src)))
+
+(defn run-scan-rsn [f src]
+  (if (instance? Scannable src)
+    (p/scan src f nil)
+    (scan-reduce-rsn src f)))
+
+(defn run-scan-no-rsn [f src]
+  (if (instance? Scannable src)
+    (p/scan src f nil)
+    (reduce (fn [acc x] (f acc -1 x)) nil src)))
+
+(defn scan-binding-used? [sym] (not (:not-used (meta sym))))
+
+(defn native-pred-expr [[sym k pred] bound-syms]
+  (when (and (keyword? k) (not (#{:cinq/self :cinq/rsn} k)))
+    (m/match pred
+
+      (m/and [::plan/= ?a ?b]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :=}
+
+      (m/and [::plan/= ?b ?a]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :=}
+
+      (m/and [::plan/< ?a ?b]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :>}
+      (m/and [::plan/< ?b ?a]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :<}
+
+      (m/and [::plan/<= ?a ?b]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :>=}
+      (m/and [::plan/<= ?b ?a]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :<=}
+
+      (m/and [::plan/> ?a ?b]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :<}
+      (m/and [::plan/> ?b ?a]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :>}
+
+      (m/and [::plan/>= ?a ?b]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :<=}
+      (m/and [::plan/>= ?b ?a]
+             (m/guard (and (bound-syms ?a) (not (bound-syms ?b)))))
+      {:test ?b
+       :k k
+       :cmp :>=}
+
+      _ nil)))
+
+(defn classify-scan-binding [[sym _ pred :as binding] bound-syms]
+  (let [used (scan-binding-used? sym)]
+    (cond
+      (true? pred) [:bind used]
+      (native-pred-expr binding bound-syms) [:filter used]
+      :else [:condition used])))
+
 (defn emit-scan [src bindings body]
-  (let [bindings (sort-bindings bindings)
+  (let [bindings (sort-scan-bindings bindings)
         self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
         self-not-used (:not-used (meta self-binding))
         self-tag (:tag (meta self-binding))
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
         rsn (gensym "rsn")
-        lambda `(reify IFn
-                  (invoke [f# agg# o#] (.apply f# agg# -1 o#))
-                  (invoke [f# agg# rsn# o#] (.apply f# agg# rsn# o#))
+
+        bound-syms (set (map first bindings))
+
+        {top-level-bindings [:bind true]
+         filter-only [:filter false]
+         filter-bind [:filter true]
+         cond-only [:condition false]
+         cond-bind [:condition true]}
+        (group-by #(classify-scan-binding % bound-syms) bindings)
+
+        filter-bindings (concat filter-only filter-bind)
+        condition-bindings (concat cond-only cond-bind)
+
+        ;; temporary
+        #_#_ condition-used (concat filter-bindings condition-used)
+        #_#_ filter-bindings []
+
+        lambda `(reify
+                  IFn
+                  ~(if (seq filter-bindings)
+                     `(invoke [f# agg# rsn# o#]
+                              (if (.filter f# rsn# o#)
+                                (.apply f# agg# rsn# o#)
+                                agg#))
+                     `(invoke [f# agg# rsn# o#] (.apply f# agg# rsn# o#)))
 
                   CinqScanFunction
                   ;; todo
-                  ;; for bindings that are :not-used but have a predicate
-                  ;; nativeFilter impl (precompiled kernels?) write to scan memory?
-                  ;; filter impl
+                  ~(if (seq filter-bindings)
+                     `(filter [_# ~rsn o#]
+                              (let [~o o#]
+                                ~((fn emit-next-pred [bindings]
+                                    (if (empty? bindings)
+                                      true
+                                      (let [[sym k pred] (first bindings)]
+                                        `(let [~sym ~(emit-scan-binding-expr k o rsn self-class)]
+                                           (and ~(rewrite-expr [] pred)
+                                                ~(emit-next-pred (rest bindings)))))))
+                                  filter-bindings)))
+                     `(filter [_# _# _#] true))
 
-                  (filter [_# _# _#] true)
-                  (nativeFilter [_# _# _#] true)
+                  ~(if (seq filter-bindings)
+                     (let [bufsym (memoize gensym)
+                           keysym (memoize gensym)
+                           valbuf (gensym "valbuf")
+                           symbol-table (gensym "symbol-table")
+                           retexpr (fn [i expr]
+                                     (if (= 0 i)
+                                       expr
+                                       `(if ~expr
+                                          (do (.clear ~valbuf)
+                                              true)
+                                          false)))]
+                       `(nativeFilter
+                          [_# ~symbol-table]
+                          (let [~@(for [[sym :as binding] filter-bindings
+                                        :let [{:keys [k test]} (native-pred-expr binding bound-syms)]
+                                        form [(bufsym sym) `(codec/encode-heap ~test ~symbol-table false)
+                                              (keysym sym) `(codec/intern-symbol ~symbol-table ~k false)]]
+                                    form)]
+                            (when
+                              ;; if any buf is nil, cannot possibly pass pred
+                              (and ~@(for [[sym] filter-bindings form [(bufsym sym) (keysym sym)]] form))
+                              (reify CinqScanFunction$NativeFilter
+                                (apply [_# rsn# buf#]
+                                  (let [~valbuf (.slice buf#)]
+                                    (and ~@(for [[i [sym :as binding]] (map-indexed vector filter-bindings)
+                                                 :let [{:keys [cmp]} (native-pred-expr binding bound-syms)
+                                                       bufcmp-expr `(codec/bufcmp-ksv ~(bufsym sym) ~valbuf ~(keysym sym))]]
+                                             (retexpr
+                                               i
+                                               (case cmp
+                                                 := `(= 0 ~bufcmp-expr)
+                                                 :< `(< ~bufcmp-expr 0)
+                                                 :<= `(<= ~bufcmp-expr 0)
+                                                 :> `(> ~bufcmp-expr 0)
+                                                 :>= `(>= ~bufcmp-expr 0))))))))))))
+                     `(nativeFilter
+                        [_# _#]
+                        (reify CinqScanFunction$NativeFilter (apply [_# _rsn# _buf#] true))))
 
                   (apply [_# _# ~rsn o#]
-                    (let [~o o#
-                          ;; no pred
-                          ~@(for [[sym k pred] bindings
-                                  :when (true? pred)
-                                  :when (not (:not-used (meta sym)))
-                                  form [sym (emit-binding-expr k o rsn self-class)]]
-                              form)]
+                    (let [~o o#]
                       ;; with pred
                       ~((fn emit-next-binding [bindings]
                           (if (empty? bindings)
-                            `(some-> ~body reduced)
+                            (if (empty? top-level-bindings)
+                              `(some-> ~body reduced)
+                              `(let [~@(for [[sym k] (concat top-level-bindings filter-bind)
+                                             form [sym (emit-scan-binding-expr k o rsn self-class)]]
+                                         form)]
+                                 (some-> ~body reduced)))
                             (let [[sym k pred] (first bindings)]
-                              `(let [~sym ~(emit-binding-expr k o rsn self-class)]
+                              `(let [~sym ~(emit-scan-binding-expr k o rsn self-class)]
                                  (when ~(rewrite-expr [] pred)
                                    ~(emit-next-binding (rest bindings)))))))
-                        (filter (fn [[_ _ pred]] (not (true? pred))) bindings))))
-                  ~@(if self-not-used [`com.wotbrew.cinq.CinqScanFunctionUnsafe] []))]
-    `(let [src# ~(rewrite-expr [] src)
-           fn# ~lambda]
-       (if (instance? Scannable src#)
-         (p/scan src# fn# nil)
-         (reduce fn# nil src#)))))
+                        condition-bindings)))
+
+                  (rootDoesNotEscape [_#] ~(boolean self-not-used)))]
+    (if (need-rsn? bindings)
+      `(run-scan-rsn ~lambda ~(rewrite-expr [] src))
+      `(run-scan-no-rsn ~lambda ~(rewrite-expr [] src)))))
 
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))

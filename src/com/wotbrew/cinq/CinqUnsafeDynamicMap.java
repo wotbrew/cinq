@@ -28,6 +28,8 @@ public class CinqUnsafeDynamicMap implements ILookup {
 
     public void read(ByteBuffer buffer) {
         this.length = buffer.getInt();
+        // keysize
+        buffer.getInt();
         this.buffer = buffer;
         resizeIfNeeded();
         readOffsets();

@@ -19,6 +19,9 @@ public class CinqDynamicArrayMap extends APersistentMap {
 
     public static CinqDynamicArrayMap read(ByteBuffer buffer, Object[] symbolList) {
         int len = buffer.getInt();
+        // keysize
+        buffer.getInt();
+
         Object[] keys = new Object[len];
         Object[] vals = new Object[len];
         int[] offsets = new int[len];

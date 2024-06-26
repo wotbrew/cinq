@@ -462,14 +462,18 @@
         scan-bin-ops #{::= ::< ::<= ::> ::>=}]
     (m/match pred
       (m/and [?op ?a ?b]
-             (m/guard (and (expr/certainly-const-expr? ?a)
+             (m/guard (and (if (symbol? ?a)
+                             (nil? (binding-idx ?a))
+                             (expr/certainly-const-expr? ?a))
                            (symbol? ?b)
                            (scan-bin-ops ?op)
                            (binding-idx ?b))))
       (binding-idx ?b)
 
       (m/and [?op ?b ?a]
-             (m/guard (and (expr/certainly-const-expr? ?a)
+             (m/guard (and (if (symbol? ?a)
+                             (nil? (binding-idx ?a))
+                             (expr/certainly-const-expr? ?a))
                            (symbol? ?b)
                            (scan-bin-ops ?op)
                            (binding-idx ?b))))
@@ -1167,12 +1171,3 @@
 
 (defn possibly-dependent? [ra syms]
   (boolean (seq (expr/possible-dependencies syms ra))))
-
-(defn remove-withouts [ra]
-  ((-> (r/match
-         [::without ?ra ?cols]
-         ?ra
-         )
-       r/attempt
-       r/bottom-up)
-   ra))

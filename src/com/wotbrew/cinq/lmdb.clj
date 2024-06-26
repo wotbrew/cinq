@@ -5,7 +5,7 @@
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
   (:import (clojure.lang ILookup IReduceInit Reduced)
-           (com.wotbrew.cinq CinqScanFunctionUnsafe CinqUnsafeDynamicMap CinqUtil)
+           (com.wotbrew.cinq CinqScanFunction CinqUnsafeDynamicMap CinqUtil)
            (java.io Closeable)
            (java.nio ByteBuffer)
            (java.util ArrayList HashMap Map)
@@ -18,28 +18,32 @@
 
 (def ^:redef open-files #{})
 
-(defn- scan-unsafe [^Cursor cursor ^CinqScanFunctionUnsafe f init symbol-list]
+(defn- native-scan [^Cursor cursor ^CinqScanFunction f init symbol-table]
   (if-not (.first cursor)
     init
-    (let [mut-record (CinqUnsafeDynamicMap. symbol-list)]
-      (loop [acc init]
-        (let [rsn (.getLong ^ByteBuffer (.key cursor))
-              val (.val cursor)
-              pos (.position ^ByteBuffer val)]
-          (if-not (.nativeFilter f rsn val)
-            (if (.next cursor)
-              (recur acc)
-              acc)
-            (let [_ (.position ^ByteBuffer val pos)
-                  o (codec/decode-root-unsafe mut-record val symbol-list)
-                  ret (.apply f acc rsn o)]
-              (if (reduced? ret)
-                @ret
-                (if (.next cursor)
-                  (recur ret)
-                  ret)))))))))
+    (let [symbol-list (codec/symbol-list symbol-table)
+          mut-record (CinqUnsafeDynamicMap. symbol-list)
+          native-filter (.nativeFilter f symbol-table)]
+      (if-not native-filter
+        init
+        (loop [acc init]
+          (let [rsn (.getLong ^ByteBuffer (.key cursor))
+                val (.val cursor)
+                pos (.position ^ByteBuffer val)]
+            (if-not (.apply native-filter rsn val)
+              (if (.next cursor)
+                (recur acc)
+                acc)
+              (let [_ (.position ^ByteBuffer val pos)
+                    o (codec/decode-root-unsafe mut-record val symbol-list)
+                    ret (.apply f acc rsn o)]
+                (if (reduced? ret)
+                  @ret
+                  (if (.next cursor)
+                    (recur ret)
+                    ret))))))))))
 
-(defn- scan-safe [^Cursor cursor f init symbol-list]
+(defn- heap-scan [^Cursor cursor f init symbol-list]
   (if-not (.first cursor)
     init
     (loop [acc init]
@@ -52,10 +56,10 @@
             (recur ret)
             ret))))))
 
-(defn- scan [^Cursor cursor f init symbol-list]
-  (if (instance? CinqScanFunctionUnsafe f)
-    (scan-unsafe cursor f init symbol-list)
-    (scan-safe cursor f init symbol-list)))
+(defn- scan [^Cursor cursor f init symbol-table]
+  (if (and (instance? CinqScanFunction f) (.rootDoesNotEscape ^CinqScanFunction f))
+    (native-scan cursor f init symbol-table)
+    (heap-scan cursor f init (some-> symbol-table codec/symbol-list))))
 
 (defn- last-rsn ^long [^Cursor cursor]
   (if (.last cursor)
@@ -240,13 +244,12 @@
                 ^objects index-dbi-array
                 ^objects index-key-array
                 ^objects index-cur-array]
-  (let [reduced (reduced ::not-enough-space-in-write-buffer)
-        step (fn [_acc rsn r]
+  (let [step (fn [_acc rsn r]
                (.clear key-buffer)
                (.clear val-buffer)
                (.putLong key-buffer rsn)
-               (if-not (codec/encode-object r val-buffer symbol-table)
-                 reduced
+               (if-some [err (codec/encode-object r val-buffer symbol-table true)]
+                 (reduced err)
                  (do (.put dbi txn (.flip key-buffer) (.flip val-buffer) insert-flags)
                      (dotimes [i (alength index-key-array)]
                        (let [index-key (aget index-key-array i)
@@ -268,8 +271,8 @@
       (.clear key-buffer)
       (.clear val-buffer)
       (.putLong key-buffer rsn)
-      (if-not (codec/encode-object record val-buffer symbol-table)
-        (throw (ex-info "Not enough space in write-buffer during insert" {:cinq/error ::not-enough-space-in-write-buffer}))
+      (if-some [err (codec/encode-object record val-buffer symbol-table true)]
+        (throw (ex-info "Not enough space in write-buffer during insert" {:cinq/error err}))
         (.put dbi txn (.flip key-buffer) (.flip val-buffer) insert-flags)))))
 
 (defn- delete [^Cursor cursor ^ByteBuffer key-buffer ^long rsn symbol-list]
@@ -286,8 +289,8 @@
   (.putLong key-buffer rsn)
   ;; maybe reuse a cursor here?
   (with-open [cursor (.openCursor dbi txn)]
-    (if-not (codec/encode-object record val-buffer symbol-table)
-      (throw (ex-info "Not enough space in write-buffer during replace" {:cinq/error ::not-enough-space-in-write-buffer}))
+    (if-some [err (codec/encode-object record val-buffer symbol-table true)]
+      (throw (ex-info "Not enough space in write-buffer during replace" {:cinq/error err}))
       (if (.get cursor (.flip key-buffer) GetOp/MDB_SET)
         (.put cursor
               key-buffer
@@ -331,7 +334,7 @@
       not-found))
   p/Scannable
   (scan [_ f init]
-    (scan cursor f init (codec/symbol-list symbol-table)))
+    (scan cursor f init symbol-table))
   p/BigCount
   (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
@@ -393,7 +396,7 @@
   p/Scannable
   (scan [_ f init]
     (with-open [cursor (.openCursor dbi txn)]
-      (scan cursor f init (codec/symbol-list symbol-table))))
+      (scan cursor f init symbol-table)))
   p/BigCount
   (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
@@ -623,7 +626,7 @@
                           (index-insert index-cursor key-buffer val-buffer rsn key symbol-table))
                         nil)
                       nil
-                      (codec/symbol-list symbol-table)))
+                      symbol-table))
 
               (commit txn key-buffer val-buffer dbis symbol-table))
             (.put dbis index-dbi-name index-dbi)
@@ -750,11 +753,11 @@
 
           ;; read symbols
           (with-open [cursor (.openCursor symbol-dbi txn)]
-            (scan cursor (fn [_ _ symbol] (codec/intern-symbol symbol-table symbol)) nil nil))
+            (scan cursor (fn [_ _ symbol] (codec/intern-symbol symbol-table symbol true)) nil nil))
 
           ;; read variables
           (with-open [cursor (.openCursor variables-dbi txn)]
-            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil (codec/symbol-list symbol-table))))
+            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil symbol-table)))
 
         (codec/clear-adds symbol-table)
         (->LMDBDatabase file
@@ -841,8 +844,8 @@
   (time (count (vec (:lineitem db))))
   (time (count (vec (:orderkey (:lineitem db)))))
 
-  ((requiring-resolve 'clj-async-profiler.core/serve-ui) "localhost" 5001)
-  ((requiring-resolve 'clojure.java.browse/browse-url) "http://127.0.0.1:5001")
+  ((requiring-resolve 'clj-async-profiler.core/serve-ui) "localhost" 5000)
+  ((requiring-resolve 'clojure.java.browse/browse-url) "http://127.0.0.1:5000")
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench
@@ -927,7 +930,7 @@
   (:lmdb/symbols db)
   (c/rel-first (:partsupp db))
 
-  (= (vec db) (q1 sf005))
+  (= (vec (q1 db)) (q1 sf005))
 
   (q2 sf005)
   (time (count (q2 db)))

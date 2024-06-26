@@ -259,27 +259,11 @@ Escape analysis
 
 If columns do not escape a query, we do not need to copy them into heap memory.
 
+We are already doing this a little bit to choose an unsafe top-level type for records.
+
 - if captured by a 'build' such as group/join hash table, we still can keep refs to native mem
 - if used in an expression (or intermediate) expression that might escape (due to side effect or return from query, or embedding in a return)
   we need to copy
-- read head can make this easier to deal with as we can have a .valAtUnsafe vs .valAt or .getUnsafe .get for the root.
----
-
-Read head
-
-Perhaps considering the above 'escape analysis' point. The scan operator should introduce a 'read head' flyweight rather than a reference to a unique object.
-- for objects that do not escape, we can use a flyweight and not reallocate (or continue sitting atop native mem)
-- if we want to experiment with column decomposition in storage or alternative 'multiple tuples per native read' this will help keep compiler the same
-
-With a read head we could also experiment with late lookups of column, such as if a column is only used after a filter.
-
-For fixed layouts a custom read head can be compiled with fixed fields .getFoo etc mapping to offsets.
-
-Which read head is used will be up to the scan operator, a read head constructor that is able to create a native vs managed head is passed as an arg to scan
-
-(scan rel f init make-read-head)
-
-e.g if the scan is for a record type, the compiler emits a custom make-read-head ctor that is passed as an argument.
 
 ---
 
@@ -372,3 +356,38 @@ current limitations
 - lookup syms as bare symbols in bind e.g (c/q [a:b coll] a:b)
 
 Currently bind does not follow clj destructuring, as maps do not have a seq path for example
+
+---
+
+'in transaction dvar'
+
+if in a transaction already, root var reads should not implicitly open read/write transaction
+
+e.g (def ^:dynamic *transactions* {})
+
+if-some [ tx (*transactions (.-db relvar)) ] proxy transaction variable instead
+
+this can also help with nested transactions, throwing a nice error if opening a write tx inside a read tx
+
+---
+
+scan chunking
+
+there is a lot of virtual call overhead calling .apply per-tuple.
+
+we could permit buffering some number of tuples before calling .apply
+
+- filtering can set bits in a bitmap
+- apply can capture the loop with the reduced checks
+- apply can take an array and a len parameter
+
+in the case of native, you can .apply to an lmdb cursor, and specialise the loop, including binary filters.
+
+---
+
+prim maps for integer joins
+
+joins could get specialised hash multimap for long keys. common case if we have auto-incr, sql data.
+
+
+

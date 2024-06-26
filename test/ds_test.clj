@@ -22,6 +22,7 @@
 
 (defn q1 [{:keys [people]}]
   (c/q [p people
+        ;; we want to get this straight from the buf!
         :when (= "Ivan" p:name)]
        p:id))
 
@@ -102,6 +103,8 @@
     (bench-q db qpred1))
 
 
-  (bench-q lmdb q1)
+  (clj-async-profiler.core/profile
+    (bench-q lmdb q1)
+    )
 
   )

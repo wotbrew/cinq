@@ -6,10 +6,17 @@ import java.nio.ByteBuffer;
 
 public interface CinqScanFunction extends IFn {
 
+    boolean rootDoesNotEscape();
+
     Object apply(Object acc, long rsn, Object x);
 
+    interface NativeFilter {
+        boolean apply(long rsn, ByteBuffer x);
+    }
+
+    NativeFilter nativeFilter(Object symbolTable);
+
     // implement both of these if you have scan filters
-    boolean nativeFilter(long rsn, ByteBuffer val);
     boolean filter(long rsn, Object x);
 
     // when used in IReduceInit we implicitly apply the filter
