@@ -24,7 +24,7 @@
   (m/match ra
     [::scan ?src ?bindings]
     (let [smap (into {} (map (fn [[sym]] [sym (with-meta (*gensym* (name sym)) (meta sym))]) ?bindings))]
-      [[::scan ?src (mapv (fn [[sym e]] [(smap sym) e]) ?bindings)] smap])
+      [[::scan ?src (mapv (fn [[sym e pred]] [(smap sym) e pred]) ?bindings)] smap])
 
     [::where ?ra ?pred]
     (let [[ra smap] (unique-ify* ?ra)]
@@ -142,7 +142,7 @@
     [::scan _ ?cols]
     (let [self-class (self-class ?cols)]
       (if (isa? self-class IRecord)
-        (mapv (fn [[col k]]
+        (mapv (fn [[col k _pred]]
                 (resolve-tag
                   (if-some
                     [new-tag
@@ -367,7 +367,7 @@
     [::scan ?src ?bindings]
     (let [self-sym (some (fn [[sym k]] (when (= :cinq/self k) sym)) ?bindings)
           matching-lookups (filter (fn [[_ _ s]] (= self-sym s)) lookups)]
-      [[::scan ?src (into ?bindings (map (fn [[_ kw :as lookup]] [(lookup-sym lookup) kw])) matching-lookups)]
+      [[::scan ?src (into ?bindings (map (fn [[_ kw :as lookup]] [(lookup-sym lookup) kw true])) matching-lookups)]
        (into {} (map (fn [lookup] [lookup (lookup-sym lookup)]) matching-lookups))])
 
     [::where ?ra ?pred]
@@ -456,6 +456,26 @@
 
 (defn push-lookups [ra]
   (first (push-lookups* ra #{})))
+
+(defn pred-scan-binding [scan-bindings pred]
+  (let [binding-idx (into {} (map-indexed (fn [i [sym]] [sym i])) scan-bindings)
+        scan-bin-ops #{::= ::< ::<= ::> ::>=}]
+    (m/match pred
+      (m/and [?op ?a ?b]
+             (m/guard (and (expr/certainly-const-expr? ?a)
+                           (symbol? ?b)
+                           (scan-bin-ops ?op)
+                           (binding-idx ?b))))
+      (binding-idx ?b)
+
+      (m/and [?op ?b ?a]
+             (m/guard (and (expr/certainly-const-expr? ?a)
+                           (symbol? ?b)
+                           (scan-bin-ops ?op)
+                           (binding-idx ?b))))
+      (binding-idx ?b)
+
+      _ nil)))
 
 (def rewrites
   (r/match
@@ -618,6 +638,28 @@
     [::let [::let ?ra ?binding-a] ?binding-b]
     [::let ?ra (into ?binding-a ?binding-b)]
     ;; endregion
+
+    ;; region push predicate into scan
+    (m/and [::where [::scan ?expr ?bindings] ?pred]
+           (m/guard (pred-scan-binding ?bindings ?pred)))
+    (let [i (pred-scan-binding ?bindings ?pred)]
+      [::scan ?expr (update ?bindings i (fn [[col k pred]] [col k (conjoin-predicates pred ?pred)]))])
+
+    (m/and [::where [::scan ?expr ?bindings] [::and & ?preds]]
+           (m/guard (some #(pred-scan-binding ?bindings %) ?preds)))
+    (let [bind-deps (group-by #(pred-scan-binding ?bindings %) ?preds)
+          no-bind (get bind-deps nil)
+          new-bindings (reduce-kv
+                         #(update %1 %2 (fn [[col k pred]] [col k (reduce conjoin-predicates pred %3)]))
+                         ?bindings
+                         (dissoc bind-deps nil))
+          new-scan [::scan ?expr new-bindings]]
+      (case (count no-bind)
+        0 new-scan
+        1 [::where new-scan (first no-bind)]
+        [::where new-scan (into [::and] no-bind)]))
+    ;; endregion
+
     ))
 
 (defn fix-max
@@ -990,7 +1032,7 @@
   (-> ((fn ! [ra]
          (m/match ra
            [::scan ?src ?bindings]
-           [[:scan ?src (into {} ?bindings)]]
+           [[:scan ?src ?bindings]]
 
            [::join* ?rels ?preds]
            [:join* ?rels ?preds]
@@ -1028,8 +1070,18 @@
              (list ?kw ?s)
              [::= ?a ?b]
              (list '= ?a ?b)
+             [::< ?a ?b]
+             (list '< ?a ?b)
+             [::<= ?a ?b]
+             (list '<= ?a ?b)
+             [::> ?a ?b]
+             (list '> ?a ?b)
+             [::>= ?a ?b]
+             (list '>= ?a ?b)
              [::and & ?clauses]
              (list* 'and ?clauses)
+             [::or & ?clauses]
+             (list* 'or ?clauses)
              )
            r/attempt
            r/bottom-up))
@@ -1076,14 +1128,18 @@
     ;; check perf - seems slower branch prune-scans, even when re-conveying the self tag (using meta)
     ;; jvm weirdness, maybe cache coincidence
     [::scan ?src ?bindings]
-    [::scan ?src (vec (keep (fn [[col k :as binding]]
+    [::scan ?src (vec (keep (fn [[col k pred :as binding]]
                               (cond
                                 (contains? req-cols col)
                                 binding
 
                                 ;; keep self for tags, mark as unused
                                 (= :cinq/self k)
-                                [(vary-meta col assoc :not-used true) k]))
+                                [(vary-meta col assoc :not-used (= true pred)) k pred]
+
+                                ;; keep if filtered
+                                (not= true pred)
+                                [(vary-meta col assoc :not-used (= true pred)) k pred]))
                             ?bindings))]
 
     ;; todo group-project
@@ -1111,3 +1167,12 @@
 
 (defn possibly-dependent? [ra syms]
   (boolean (seq (expr/possible-dependencies syms ra))))
+
+(defn remove-withouts [ra]
+  ((-> (r/match
+         [::without ?ra ?cols]
+         ?ra
+         )
+       r/attempt
+       r/bottom-up)
+   ra))

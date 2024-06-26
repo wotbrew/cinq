@@ -49,36 +49,66 @@
     (get o k)
     (nth o k nil)))
 
+(defn sort-bindings [scan-bindings]
+  (-> (group-by first scan-bindings)
+      vals
+      (->> (map peek)
+           (sort-by (juxt (fn [[_ _ pred]]
+                            (if (true? pred)
+                              1
+                              0))
+                          first))
+           vec)))
+
+(defn emit-binding-expr [k o rsn self-class]
+  (cond
+    (= :cinq/self k) o
+    (= :cinq/rsn k) rsn
+    (and self-class (class? self-class) (plan/kw-field self-class k))
+    (list (symbol (str ".-" (munge (name k)))) o)
+    (keyword? k) (list k o)
+    ;; todo should we get a special numeric key here from vec destructures to avoid
+    ;; ambiguity between get/nth
+    (number? k) `(get-numeric ~k ~o)
+    :else (list `get o k)))
+
 (defn emit-scan [src bindings body]
-  (let [self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
+  (let [bindings (sort-bindings bindings)
+        self-binding (last (keep #(when (= :cinq/self (second %)) (first %)) bindings))
         self-not-used (:not-used (meta self-binding))
         self-tag (:tag (meta self-binding))
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
         rsn (gensym "rsn")
         lambda `(reify CinqScanFunction
+                  ;; todo
+                  ;; for bindings that are :not-used but have a predicate
+                  ;; nativeFilter impl (precompiled kernels?) write to scan memory?
+                  ;; filter impl
+
                   (apply [_# _# ~rsn o#]
                     (let [~o o#
-                          ~@(for [[sym k] bindings
+                          ;; no pred
+                          ~@(for [[sym k pred] bindings
+                                  :when (true? pred)
                                   :when (not (:not-used (meta sym)))
-                                  form [sym
-                                        (cond
-                                          (= :cinq/self k) o
-                                          (= :cinq/rsn k) rsn
-                                          (and self-class (class? self-class) (plan/kw-field self-class k))
-                                          (list (symbol (str ".-" (munge (name k)))) o)
-                                          (keyword? k) (list k o)
-                                          ;; todo should we get a special numeric key here from vec destructures to avoid
-                                          ;; ambiguity between get/nth
-                                          (number? k) `(get-numeric ~k ~o)
-                                          :else (list `get o k))]]
+                                  form [sym (emit-binding-expr k o rsn self-class)]]
                               form)]
-                      (some-> ~body reduced)))
+                      ;; with pred
+                      ~((fn emit-next-binding [bindings]
+                          (if (empty? bindings)
+                            `(some-> ~body reduced)
+                            (let [[sym k pred] (first bindings)]
+                              `(let [~sym ~(emit-binding-expr k o rsn self-class)]
+                                 (when ~(rewrite-expr [] pred)
+                                   ~(emit-next-binding (rest bindings)))))))
+                        (filter (fn [[_ _ pred]] (not (true? pred))) bindings))))
                   ~@(if self-not-used [`com.wotbrew.cinq.CinqScanFunctionUnsafe] []))]
-    `(let [src# ~(rewrite-expr [] src)]
+    `(let [src# ~(rewrite-expr [] src)
+           fn# ~lambda]
        (if (instance? Scannable src#)
-         (p/scan src# ~lambda nil)
-         (reduce ~lambda nil src#)))))
+         (p/scan src# fn# nil)
+         (reduce fn# nil src#)))))
 
 (defn emit-where [ra pred body]
   (emit-loop ra `(when ~(rewrite-expr [ra] pred) ~body)))

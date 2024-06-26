@@ -18,19 +18,26 @@
 
 (def ^:redef open-files #{})
 
-(defn- scan-unsafe [^Cursor cursor f init symbol-list]
+(defn- scan-unsafe [^Cursor cursor ^CinqScanFunctionUnsafe f init symbol-list]
   (if-not (.first cursor)
     init
     (let [mut-record (CinqUnsafeDynamicMap. symbol-list)]
       (loop [acc init]
         (let [rsn (.getLong ^ByteBuffer (.key cursor))
-              o (codec/decode-root-unsafe mut-record (.val cursor) symbol-list)
-              ret (f acc rsn o)]
-          (if (reduced? ret)
-            @ret
+              val (.val cursor)
+              pos (.position ^ByteBuffer val)]
+          (if-not (.nativeFilter f rsn val)
             (if (.next cursor)
-              (recur ret)
-              ret)))))))
+              (recur acc)
+              acc)
+            (let [_ (.position ^ByteBuffer val pos)
+                  o (codec/decode-root-unsafe mut-record val symbol-list)
+                  ret (.apply f acc rsn o)]
+              (if (reduced? ret)
+                @ret
+                (if (.next cursor)
+                  (recur ret)
+                  ret)))))))))
 
 (defn- scan-safe [^Cursor cursor f init symbol-list]
   (if-not (.first cursor)

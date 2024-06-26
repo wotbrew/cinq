@@ -4,7 +4,7 @@
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq CinqUtil)
+  (:import (com.wotbrew.cinq CinqScanFunction CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))

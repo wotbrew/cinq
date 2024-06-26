@@ -1,9 +1,8 @@
 (ns ds-test
-  (:require [clojure.java.io :as io]
+  (:require [clojure.java.io]
             [clojure.test :refer :all]
             [com.wotbrew.cinq :as c]
-            [com.wotbrew.cinq.lmdb :as lmdb]
-            [com.wotbrew.cinq.protocols :as p]))
+            [com.wotbrew.cinq.lmdb :as lmdb]))
 
 (def next-eid (volatile! 0))
 

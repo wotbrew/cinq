@@ -230,7 +230,9 @@
     (reduce (fn [acc stmt] (if acc (assoc stmt :prev acc) stmt)) nil statements)))
 
 (defn parse-selection [selection-binding]
-  (let [tree (parse-tree selection-binding)]
+  (let [tree (parse-tree selection-binding)
+        scan-bindings (fn [bindings] (mapv (fn [b] (conj b true)) bindings))
+        scan (fn [expr bindings] [::plan/scan expr (scan-bindings bindings)])]
     ((fn ! [tree]
        (case (:op tree)
          :from
@@ -238,20 +240,20 @@
            [::plan/apply
             :cross-join
             (! (:prev tree))
-            [::plan/where [::plan/scan (:expr tree) (:bindings tree)] true]]
-           [::plan/scan (:expr tree) (:bindings tree)])
+            [::plan/where (scan (:expr tree) (:bindings tree)) true]]
+           (scan (:expr tree) (:bindings tree)))
 
          :join
          [::plan/apply
           :cross-join
           (! (:prev tree))
-          [::plan/where [::plan/scan (:expr tree) (:bindings tree)] (:condition tree)]]
+          [::plan/where (scan (:expr tree) (:bindings tree)) (:condition tree)]]
 
          :left-join
          [::plan/apply
           :left-join
           (! (:prev tree))
-          [::plan/where [::plan/scan (:expr tree) (:bindings tree)] (:condition tree)]]
+          [::plan/where (scan (:expr tree) (:bindings tree)) (:condition tree)]]
 
          :when
          [::plan/where (! (:prev tree)) (:pred tree)]
@@ -330,7 +332,7 @@
   (or (maybe-parse rel-expr)
       (let [s (plan/*gensym* "s")]
         [::plan/project
-         [::plan/scan rel-expr [[s :cinq/self]]]
+         [::plan/scan rel-expr [[s :cinq/self true]]]
          [[s s]]])))
 
 (comment

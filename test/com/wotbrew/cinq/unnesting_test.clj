@@ -3,34 +3,41 @@
             [com.wotbrew.cinq :as c]))
 
 (deftest simple-unnesting-test
-  (is (=
-        '[[:scan
-           lineitem
-           {l1__3 :cinq/self
-            l1__3:orderkey :orderkey}]
-          [:semi-join
-           [[:scan
-             lineitem
-             {l2__2 :cinq/self
-              l2__2:orderkey :orderkey}]
-            [:without
-             #{l2__2}]]
-           (=
-             l1__3:orderkey
-             l2__2:orderkey)]
-          [:without
-           #{l1__3:orderkey}]
-          [:project
-           {col__1 l1__3}]]
-        (c/plan (c/q [l1 lineitem
-                      :when (c/exists? [l2 lineitem :when (= l1:orderkey l2:orderkey)])]
-                  l1)))))
+  (is (= '[[:scan
+            lineitem
+            [[l1__3
+              :cinq/self
+              true]
+             [l1__3:orderkey
+              :orderkey
+              true]]]
+           [:semi-join
+            [[:scan
+              lineitem
+              [[l2__2
+                :cinq/self
+                true]
+               [l2__2:orderkey
+                :orderkey
+                true]]]
+             [:without
+              #{l2__2}]]
+            (=
+              l1__3:orderkey
+              l2__2:orderkey)]
+           [:without
+            #{l1__3:orderkey}]
+           [:project
+            {col__1 l1__3}]]
+         (c/plan (c/q [l1 lineitem
+                       :when (c/exists? [l2 lineitem :when (= l1:orderkey l2:orderkey)])]
+                   l1)))))
 
 
 ;; todo mark-join:
 #_(c/p [p professors
-      :when (or (c/exists? [c courses :when (= c:lecturer p:persid)]) p:sabbatical)]
-     p)
+        :when (or (c/exists? [c courses :when (= c:lecturer p:persid)]) p:sabbatical)]
+       p)
 
 ;; https://cs.emis.de/LNI/Proceedings/Proceedings241/383.pdf
 
