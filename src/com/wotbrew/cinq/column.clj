@@ -1,5 +1,5 @@
 (ns com.wotbrew.cinq.column
-  (:import (clojure.lang ArrayIter Counted IDeref Indexed RT)
+  (:import (clojure.lang ArrayIter Counted IDeref ILookup Indexed RT)
            (com.wotbrew.cinq CinqUtil)
            (java.io Writer)))
 
@@ -22,6 +22,9 @@
   (nth [this i not-found] (let [data (get-longs this)] (if (< i (alength data)) (aget data i) not-found)))
   Iterable
   (iterator [this] (ArrayIter/createFromObject (get-longs this)))
+  ILookup
+  (valAt [_x _k] nil)
+  (valAt [_x _k not-found] not-found)
   IColumn
   ;; require forcing
   (getObject [_ i] (aget data i))
@@ -43,6 +46,9 @@
   (nth [this i not-found] (let [data (get-doubles this)] (if (< i (alength data)) (aget data i) not-found)))
   Iterable
   (iterator [this] (ArrayIter/createFromObject (get-doubles this)))
+  ILookup
+  (valAt [_ _] nil)
+  (valAt [_x _k not-found] not-found)
   IColumn
   ;; require forcing
   (getObject [_ i] (aget data i))
@@ -64,6 +70,12 @@
   (nth [this i not-found] (let [data (get-objects this)] (if (< i (alength data)) (aget data i) not-found)))
   Iterable
   (iterator [this] (ArrayIter/create (get-objects this)))
+  ILookup
+  (valAt [x k] (.valAt x k nil))
+  (valAt [x k _not-found]
+    (Column. nil (fn []
+                   (let [arr (get-objects x)]
+                     (amap arr idx ret (get (aget arr idx) k))))))
   IColumn
   ;; require forcing
   (getObject [_ i] (aget data i))
