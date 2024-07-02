@@ -462,18 +462,14 @@
         scan-bin-ops #{::= ::< ::<= ::> ::>=}]
     (m/match pred
       (m/and [?op ?a ?b]
-             (m/guard (and (if (symbol? ?a)
-                             (nil? (binding-idx ?a))
-                             (expr/certainly-const-expr? ?a))
+             (m/guard (and (not (binding-idx ?a))
                            (symbol? ?b)
                            (scan-bin-ops ?op)
                            (binding-idx ?b))))
       (binding-idx ?b)
 
       (m/and [?op ?b ?a]
-             (m/guard (and (if (symbol? ?a)
-                             (nil? (binding-idx ?a))
-                             (expr/certainly-const-expr? ?a))
+             (m/guard (and (not (binding-idx ?a))
                            (symbol? ?b)
                            (scan-bin-ops ?op)
                            (binding-idx ?b))))
