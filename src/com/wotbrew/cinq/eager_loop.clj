@@ -387,7 +387,7 @@
     (emit-loop
       left
       `(let [~limit (int-array 1)
-             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] body)]
+             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 limit] body)]
          (when-not (identical? stop# ~limit)
            stop#)))))
 
@@ -397,7 +397,7 @@
     (emit-loop
       left
       `(let [~limit (int-array 1)
-             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] ::matched)]
+             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 limit] ::matched)]
          (cond
            (identical? stop# ~limit) nil
            (identical? stop# ::matched) nil

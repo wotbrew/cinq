@@ -1059,7 +1059,7 @@
            (conj (! ?ra) [:project (into {} ?bindings)])
 
            [::semi-join ?a ?b ?pred]
-           (conj (! ?a) [:semi-join (! ?b) ?pred])
+           (conj (! ?a) [(if (equi-join? ?a ?b ?pred) :equi-semi-join :semi-join) (! ?b) ?pred])
 
            [?op ?ra & ?args]
            (conj (! ?ra) (into [(keyword (name ?op))] ?args))))

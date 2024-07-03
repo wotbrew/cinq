@@ -6,35 +6,45 @@
   (is (= []
          (vec (c/q
                 [a []
-                 :when (c/scalar [b []]
-                         true)]
+                 :when (c/exists? [b []])]
                 true))))
 
   (is (= []
          (vec (c/q
                 [a [1]
-                 :when (c/scalar [b []]
-                         true)]
+                 :when (c/exists? [b []])]
                 true))))
 
   (is (= [true]
          (vec (c/q
                 [a [1]
-                 :when (c/scalar [b [1]]
-                         true)]
+                 :when (c/exists? [b [1]])]
                 true))))
 
   (is (= [true]
          (vec
            (c/q
              [a [1]
-              :when (c/scalar [b [1]
-                               :when (= a b)]
-                      true)]
+              :when (c/exists? [b [1] :when (= a b)])]
              true))))
 
   (is (= [2]
          (vec
            (c/q [a [1, 2]
-                 :when (not (c/scalar [b [1] :when (= a b)] true))]
-             a)))))
+                 :when (not (c/exists? [b [1] :when (= a b)]))]
+             a))))
+
+  (is (= [1]
+         (vec
+           (c/q [a [1]
+                 :when (c/exists? [b [a]])]
+             a))))
+
+  (is (= []
+         (vec
+           (c/q [a [1]
+                 :when (not (c/exists? [b [a]]))]
+             a))))
+
+
+  )
