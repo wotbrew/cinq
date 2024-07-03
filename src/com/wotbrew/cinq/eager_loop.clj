@@ -321,7 +321,7 @@
 
 (defn add-theta-where [ra theta-expressions]
   (if (seq theta-expressions)
-    [::plan/where ra (into [::plan/and]) theta-expressions]
+    [::plan/where ra (into [::plan/and] theta-expressions)]
     ra))
 
 (defn emit-apply-left-join [left right theta body]
@@ -849,4 +849,6 @@
     (emit-union ?ras body)
 
     _
-    (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra}))))
+    (do
+      (clojure.pprint/pprint (plan/stack-view ra))
+      (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra})))))
