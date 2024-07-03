@@ -321,7 +321,7 @@
 
 (defn add-theta-where [ra theta-expressions]
   (if (seq theta-expressions)
-    [::plan/where ra (into [::plan/and]) theta-expressions]
+    [::plan/where ra (into [::plan/and] theta-expressions)]
     ra))
 
 (defn emit-apply-left-join [left right theta body]
@@ -387,7 +387,7 @@
     (emit-loop
       left
       `(let [~limit (int-array 1)
-             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] body)]
+             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 limit] body)]
          (when-not (identical? stop# ~limit)
            stop#)))))
 
@@ -397,7 +397,7 @@
     (emit-loop
       left
       `(let [~limit (int-array 1)
-             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 ~limit] ::matched)]
+             stop# ~(emit-loop [::plan/limit (add-theta-where right theta-expressions) 1 limit] ::matched)]
          (cond
            (identical? stop# ~limit) nil
            (identical? stop# ::matched) nil
@@ -849,4 +849,6 @@
     (emit-union ?ras body)
 
     _
-    (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra}))))
+    (do
+      (clojure.pprint/pprint (plan/stack-view ra))
+      (throw (ex-info (format "Unknown plan %s" (first ra)) {:ra ra})))))
