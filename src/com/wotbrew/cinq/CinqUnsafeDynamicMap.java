@@ -14,6 +14,7 @@ public class CinqUnsafeDynamicMap implements ILookup {
     private ByteBuffer buffer;
     private final Object[] symbolList;
     private final IFn decodeInstance;
+    int offsetPos;
     int startPos;
 
     private final static Var decode = (Var) Clojure.var("com.wotbrew.cinq.nio-codec/decode-object");
@@ -32,7 +33,8 @@ public class CinqUnsafeDynamicMap implements ILookup {
         buffer.getInt();
         this.buffer = buffer;
         resizeIfNeeded();
-        readOffsets();
+        offsetPos = buffer.position();
+        buffer.position(buffer.position() + (4 * length));
         readKeys();
         startPos = this.buffer.position();
     }
@@ -40,12 +42,6 @@ public class CinqUnsafeDynamicMap implements ILookup {
     private void readKeys() {
         for (int i = 0; i < length; i++) {
             keys[i] = decodeInstance.invoke(buffer, symbolList);
-        }
-    }
-
-    private void readOffsets() {
-        for (int i = 0; i < length; i++) {
-            offsets[i] = buffer.getInt();
         }
     }
 
@@ -75,6 +71,9 @@ public class CinqUnsafeDynamicMap implements ILookup {
             return indexOfObject(key);
     }
 
+    int getOffset(int idx) {
+        return buffer.getInt(offsetPos + (idx * 4));
+    }
 
     @Override
     public Object valAt(Object key, Object notFound) {
@@ -82,7 +81,7 @@ public class CinqUnsafeDynamicMap implements ILookup {
         if (i == -1) {
             return notFound;
         }
-        int offset = offsets[i];
+        int offset = getOffset(i);
         buffer.position(startPos + offset);
         return decodeInstance.invoke(buffer, symbolList);
     }
