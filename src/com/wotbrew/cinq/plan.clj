@@ -236,7 +236,9 @@
          (do
            (! ?expr)
            (dotimes [i (count ?bindings)]
-             (! (nth (nth ?bindings i) 1))))
+             (let [[_ k pred] (nth ?bindings i)]
+               (! k)
+               (! pred))))
          _
          (cond
            (symbol? expr) (when (cmap expr) (swap! dmap conj (find cmap expr)))
@@ -298,15 +300,6 @@
       [::let ?ra ?bindings]
       (when (empty? (dependent-cols* (into {} ?bindings) pred))
         1)
-
-      [::group-by ?ra ?bindings]
-      (let [group-cols (dependent-cols ?ra pred)
-            binding-set (set (map first ?bindings))]
-        (when (->> group-cols
-                   keys
-                   (remove binding-set)
-                   empty?)
-          1))
 
       _ nil)))
 
