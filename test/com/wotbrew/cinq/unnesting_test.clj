@@ -73,6 +73,6 @@
 
 (comment
 
-  (time (count (unnest-q1 unnest-dataset)))
+  (time (c/rel-count (unnest-q1 unnest-dataset)))
 
   )
