@@ -1,7 +1,8 @@
 (ns com.wotbrew.cinq.lmdb-test
   (:require [clojure.test :refer :all]
             [com.wotbrew.cinq :as c]
-            [com.wotbrew.cinq.lmdb :as lmdb])
+            [com.wotbrew.cinq.lmdb :as lmdb]
+            [com.wotbrew.cinq.protocols :as p])
   (:import (java.io File)))
 
 (defonce ^:redef db (lmdb/database (File/createTempFile "cinq-test" ".cinq")))
@@ -61,3 +62,32 @@
     42)
 
   (is (= [0, 1] (vec (:foo db)))))
+
+(deftest index-test
+  (let [foo (c/create db :foo)
+        idx (p/create-index db :foo :id)]
+    (p/rel-set foo [])
+    (is (= [] (vec (get idx 42))))
+
+    (p/rel-set foo [{:id 42}])
+    (is (= [{:id 42}] (vec (get idx 42))))
+
+    (p/insert foo {:id 42})
+    (is (= [{:id 42} {:id 42}] (vec (get idx 42))))
+
+    (p/insert foo {:id 43})
+    (p/insert foo {:id 44})
+    (p/insert foo {:id 45})
+
+    (is (= [{:id 42} {:id 42}] (vec (get idx 42))))
+    (is (= [{:id 43}] (vec (get idx 43))))
+    (is (= [{:id 44} {:id 45}] (vec (c/range idx > 43))))
+    (is (= [{:id 42} {:id 42} {:id 43}] (vec (c/range idx <= 43))))
+
+    (is (= [{:id 43}] (vec (c/range idx > 42 < 44))))
+
+    (c/delete [f foo :when (= f:id 42) :limit 1])
+
+    (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
+    (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))
+    (is (= [42] (vec (c/q [f (get idx 42) :when (< f:id 43)] f:id))))))
