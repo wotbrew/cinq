@@ -253,9 +253,10 @@
                       ;; with pred
                       ~((fn emit-next-binding [bindings]
                           (if (empty? bindings)
-                            (if (empty? top-level-bindings)
+                            (if (and (empty? top-level-bindings)
+                                     (empty? filter-bindings))
                               `(some-> ~body reduced)
-                              `(let [~@(for [[sym k] (concat top-level-bindings filter-bind)
+                              `(let [~@(for [[sym k] (concat top-level-bindings filter-bindings)
                                              form [sym (emit-scan-binding-expr k o rsn self-class)]]
                                          form)]
                                  (some-> ~body reduced)))
