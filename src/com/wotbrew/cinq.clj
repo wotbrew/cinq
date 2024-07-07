@@ -87,6 +87,8 @@
 
 (defn create [db k] (p/create-relvar db k))
 
+(defn create-index [db relvar-key index-key] (p/create-index db relvar-key index-key))
+
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
 (defn insert [relvar record] (p/insert relvar record))
@@ -98,12 +100,17 @@
     (sequential? binding) {binding :cinq/self, rsn :cinq/rsn}
     :else (throw (ex-info "Unsupported binding form" {:binding binding}))))
 
-(defmacro delete [query]
+(extend-protocol p/VariableProxy
+  Object
+  (get-relvar [o] o))
+
+(defmacro delete
+  [query]
   {:pre [(<= 2 (clojure.core/count query))]}
   (let [rsn (gensym "rsn")
         rv (gensym "relvar")
         [binding relvar & query] query]
-    `(let [~rv ~relvar]
+    `(let [~rv (p/get-relvar ~relvar)]
        (agg
          0
          affected-records#
@@ -117,7 +124,7 @@
   (let [rsn (gensym "rsn")
         rv (gensym "relvar")
         [binding relvar & query] query]
-    `(let [~rv ~relvar]
+    `(let [~rv (p/get-relvar ~relvar)]
        (agg
          0
          affected-records#

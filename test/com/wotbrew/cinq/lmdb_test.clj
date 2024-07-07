@@ -65,28 +65,31 @@
 
 (deftest index-test
   (let [foo (c/create db :foo)
-        idx (p/create-index db :foo :id)]
-    (p/rel-set foo [])
+        idx (c/create-index db :foo :id)]
+
+    (c/rel-set foo [])
+    (is (= [] (vec (idx 42))))
     (is (= [] (vec (get idx 42))))
 
-    (p/rel-set foo [{:id 42}])
+    (c/rel-set foo [{:id 42}])
+    (is (= [{:id 42}] (vec (idx 42))))
     (is (= [{:id 42}] (vec (get idx 42))))
 
-    (p/insert foo {:id 42})
-    (is (= [{:id 42} {:id 42}] (vec (get idx 42))))
+    (c/insert foo {:id 42})
+    (is (= [{:id 42} {:id 42}] (vec (idx 42))))
 
-    (p/insert foo {:id 43})
-    (p/insert foo {:id 44})
-    (p/insert foo {:id 45})
+    (c/insert foo {:id 43})
+    (c/insert foo {:id 44})
+    (c/insert foo {:id 45})
 
-    (is (= [{:id 42} {:id 42}] (vec (get idx 42))))
-    (is (= [{:id 43}] (vec (get idx 43))))
+    (is (= [{:id 42} {:id 42}] (vec (idx 42))))
+    (is (= [{:id 43}] (vec (idx 43))))
     (is (= [{:id 44} {:id 45}] (vec (c/range idx > 43))))
     (is (= [{:id 42} {:id 42} {:id 43}] (vec (c/range idx <= 43))))
 
     (is (= [{:id 43}] (vec (c/range idx > 42 < 44))))
 
-    (c/delete [f foo :when (= f:id 42) :limit 1])
+    (c/delete [f (idx 42) :limit 1])
 
     (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
     (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))

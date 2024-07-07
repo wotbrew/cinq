@@ -25,3 +25,6 @@
 
 (defprotocol Index
   (range-scan [rel test-a a test-b b]))
+
+(defprotocol VariableProxy
+  (get-relvar [proxy]))

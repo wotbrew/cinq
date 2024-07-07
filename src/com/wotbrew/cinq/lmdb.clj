@@ -4,7 +4,7 @@
             [com.wotbrew.cinq :as c]
             [com.wotbrew.cinq.nio-codec :as codec]
             [com.wotbrew.cinq.protocols :as p])
-  (:import (clojure.lang ILookup IReduceInit Reduced)
+  (:import (clojure.lang IFn ILookup IReduceInit Reduced)
            (com.wotbrew.cinq CinqScanFunction CinqUnsafeDynamicMap CinqUtil)
            (java.io Closeable)
            (java.nio ByteBuffer)
@@ -71,7 +71,8 @@
 (defn- reduce-scan [r f init]
   (p/scan r (fn [acc _ x] (f acc x)) init))
 
-(defn get-index-entry [^Txn txn
+(defn get-index-entry [relvar
+                       ^Txn txn
                        ^Dbi dbi
                        ^Dbi rsn-dbi
                        ^ByteBuffer key-buffer
@@ -79,7 +80,10 @@
                        symbol-table
                        index-key
                        k]
-  (reify p/Scannable
+  (reify
+    p/VariableProxy
+    (get-relvar [_] relvar)
+    p/Scannable
     (scan [_ f init]
       (with-open [cursor (.openCursor dbi txn)]
         (.clear key-buffer)
@@ -114,7 +118,8 @@
     (reduce [index-entry f init]
       (reduce-scan index-entry f init))))
 
-(defn get-index-range-entry [^Txn txn
+(defn get-index-range-entry [relvar
+                             ^Txn txn
                              ^Dbi dbi
                              ^Dbi rsn-dbi
                              ^ByteBuffer key-buffer
@@ -130,7 +135,11 @@
   (let [pred-a (if start-test #(start-test %1 %2) (constantly true))
         pred-b (if end-test #(end-test %1 %2) (constantly true))
         pred #(and (pred-a %1 %2) (pred-b %1 %3))]
-    (reify p/Scannable
+    (reify
+      p/VariableProxy
+      (get-relvar [_] relvar)
+
+      p/Scannable
       (scan [_ f init]
         (with-open [cursor (.openCursor dbi txn)]
           (.clear key-buffer)
@@ -186,8 +195,14 @@
               ret))))
       init)))
 
-(defn get-index [^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer ^ByteBuffer rsn-buffer index-key symbol-table]
-  (reify p/Scannable
+(defn get-index [relvar ^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer ^ByteBuffer rsn-buffer index-key symbol-table]
+  (reify
+    IFn
+    (invoke [i k] (.valAt i k))
+    (invoke [i k not-found] (.valAt i k not-found))
+    p/VariableProxy
+    (get-relvar [_] relvar)
+    p/Scannable
     (scan [_ f init]
       (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table)))
     IReduceInit
@@ -196,13 +211,13 @@
 
     ;; lookup one key
     ILookup
-    (valAt [_ k] (get-index-entry txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key k))
+    (valAt [_ k] (get-index-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key k))
     (valAt [r k _not-found] (.valAt r k))
 
     p/Index
     ;; range query
     (range-scan [_ test-a a test-b b]
-      (get-index-range-entry txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key test-a a test-b b))
+      (get-index-range-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key test-a a test-b b))
 
     ))
 
@@ -330,7 +345,7 @@
   (valAt [r k] (.valAt r k nil))
   (valAt [r k not-found]
     (if-some [{index-dbi-name :dbi-name} (indexes k)]
-      (get-index txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
+      (get-index r txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
       not-found))
   p/Scannable
   (scan [_ f init]
@@ -391,7 +406,7 @@
   (valAt [r k] (.valAt r k nil))
   (valAt [r k not-found]
     (if-some [{index-dbi-name :dbi-name} (indexes k)]
-      (get-index txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
+      (get-index r txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
       not-found))
   p/Scannable
   (scan [_ f init]
@@ -667,16 +682,25 @@
    indexes]
   ILookup
   (valAt [r index-key] (.valAt r index-key nil))
-  (valAt [_ index-key not-found]
+  (valAt [r index-key not-found]
     (if (indexes index-key)
-      (reify p/Scannable
+      (reify
+        IFn
+        (invoke [i k] (.valAt i k))
+        (invoke [i k not-found] (.valAt i k not-found))
+        p/VariableProxy
+        (get-relvar [_] r)
+        p/Scannable
         (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) f init))))
         IReduceInit
         (reduce [index f init]
           (reduce-scan index f init))
         ILookup
         (valAt [_ entry-key]
-          (reify p/Scannable
+          (reify
+            p/VariableProxy
+            (get-relvar [_] r)
+            p/Scannable
             (scan [_ f init]
               (variable-read
                 db k
