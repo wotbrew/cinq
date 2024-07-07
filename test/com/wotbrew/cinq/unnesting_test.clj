@@ -11,7 +11,7 @@
              [l1__3:orderkey
               :orderkey
               true]]]
-           [:semi-join
+           [:equi-semi-join
             [[:scan
               lineitem
               [[l2__2
