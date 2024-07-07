@@ -8,5 +8,6 @@
                                   [criterium "0.4.6"]
                                   [org.lmdbjava/lmdbjava "0.9.0"]]
                    :source-paths ["dev"]}}
-  :jvm-opts ^:replace []
+  :jvm-opts ^:replace ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+                       "--add-exports" "java.base/sun.nio.ch=ALL-UNNAMED"]
   :repl-options {:init-ns cinq.core})
