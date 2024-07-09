@@ -91,7 +91,7 @@ Give the relvar a new value.
 ;; => #cinq/rel [{:name "Dave"}]
 ```
 
-#### `insert`
+#### Insert
 
 Add a row into a relation variable, the row can be anything [encodable](#encoding). It returns a new `row sequence number` or `rsn` (that is probably not going to be relevant for some time!). 
 
@@ -99,24 +99,41 @@ Add a row into a relation variable, the row can be anything [encodable](#encodin
 (c/insert (:customers db) [{:name "Jikl"}]) ;; => 2
 ```
 
-#### `update`
+#### Update
 
-Update takes a query that identifies the rows you want to replace (always the first binding), and an expr that returns the new value.
-
-Returns the number of affected rows.
+Use `c/update` in a `c/run` body. This lets you target any tuple in a query with an update.
+So if you have a join say, you can update any joined tuple. This is more powerful than a typical update statement in a SQL database.
 
 ```clojure 
-(c/update [c (:customers db) :when (= "Jikl" c:name)] (assoc c :name "Jill"))
+(c/run 
+  [c (:customers db) 
+   :when (= "Jikl" c:name)]
+  (c/update c (assoc c :name "Jill")))
 ```
 
-#### `delete`
-
-Delete takes a query that identifies the rows to delete. The first binding is assumed to be the relvar you are deleting from.
-
-Returns the number of affected rows.
+Use `c/update-where` for straightforward cases:
 
 ```clojure 
-(c/delete [c (:customers db) :when (= "Jill" c:name)])
+(c/update-where (:customers db) [c] (= "Jikl" c:name) (assoc c :name "Jill"))
+```
+
+#### Delete
+
+Like `c/update`, cinq provides a `c/delete` form you can use in `c/run` bodies.
+
+```clojure 
+(c/run 
+  [c (:customers db)
+   :when (= "Jill" c:name)]
+  (c/delete c))
+```
+
+Yes, you can mix/match update, delete, and any other arbitrary side effect in a single run expression.
+
+See again, `c/delete-where` for straightforward cases.
+
+```clojure 
+(c/delete-where (:customers db) [c] (= "Jill" c:name))
 ```
 
 ### Transactions
