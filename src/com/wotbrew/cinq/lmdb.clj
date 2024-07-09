@@ -81,8 +81,6 @@
                        index-key
                        k]
   (reify
-    p/VariableProxy
-    (get-relvar [_] relvar)
     p/Scannable
     (scan [_ f init]
       (with-open [cursor (.openCursor dbi txn)]
@@ -137,9 +135,6 @@
         pred-b (if end-test #(end-test %1 %2) (constantly true))
         pred #(and (pred-a %1 %2) (pred-b %1 %3))]
     (reify
-      p/VariableProxy
-      (get-relvar [_] relvar)
-
       p/Scannable
       (scan [_ f init]
         (with-open [cursor (.openCursor dbi txn)]
@@ -202,8 +197,6 @@
     IFn
     (invoke [i k] (.valAt i k))
     (invoke [i k not-found] (.valAt i k not-found))
-    p/VariableProxy
-    (get-relvar [_] relvar)
     p/Scannable
     (scan [_ f init]
       (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table)))
@@ -691,18 +684,14 @@
         IFn
         (invoke [i k] (.valAt i k))
         (invoke [i k not-found] (.valAt i k not-found))
-        p/VariableProxy
-        (get-relvar [_] r)
         p/Scannable
-        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) f init))))
+        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) (fn [acc _ rsn x] (f acc r rsn x)) init))))
         IReduceInit
         (reduce [index f init]
           (reduce-scan index f init))
         ILookup
         (valAt [_ entry-key]
           (reify
-            p/VariableProxy
-            (get-relvar [_] r)
             p/Scannable
             (scan [_ f init]
               (variable-read
@@ -710,7 +699,7 @@
                 (fn [v]
                   (let [^ILookup idx (.valAt ^ILookup v index-key)
                         entry (.valAt idx entry-key)]
-                    (p/scan entry f init)))))
+                    (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
             IReduceInit
             (reduce [index-entry f init]
               (reduce-scan index-entry f init))))
@@ -724,13 +713,13 @@
                 (fn [v]
                   (let [^ILookup idx (.valAt ^ILookup v index-key)
                         entry (p/range-scan idx test-a a test-b b)]
-                    (p/scan entry f init)))))
+                    (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
             IReduceInit
             (reduce [index-entry f init]
               (reduce-scan index-entry f init)))))
       not-found))
   p/Scannable
-  (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
+  (scan [r f init] (variable-read db k (fn [v] (p/scan v (fn [acc _ rsn x] (f acc r rsn x)) init))))
   IReduceInit
   (reduce [relvar f start] (p/scan relvar (fn [acc _ _ record] (f acc record)) start))
   p/BigCount
@@ -819,10 +808,10 @@
   (c/rel-set (:foo db) (range 1e6))
   (c/rel-set (:foo db) nil)
   (c/insert (:foo db) (str (random-uuid)))
-  (c/update [f (:foo db) :when (= f 42)] "The answer")
+  (c/update-where (:foo db) [f] (= 42 f) "The answer")
   (c/q [f (:foo db) :when (string? f) :limit 10] f)
-  (c/delete [f (:foo db) :when (string? f)])
-  (c/write [db db] (c/update [f (:foo db) :when (even? f)] 42))
+  (c/delete-where (:foo db) [f] (string? f))
+  (c/write [db db] (c/update-where (:foo db) [f] (even? f) 42))
   (c/q [f (:foo db) :when (odd? f) :limit 10] f)
 
   (:foo db)
@@ -836,7 +825,7 @@
     (c/rel-set (:foo db) [{:id 42}])
     (c/rel-set (:foo db) [{:id 44} {:id 42}, {:id 43}])
     (c/insert (:foo db) {:id 44})
-    (c/delete [f (:foo db) :when (= 42 f:id)])
+    (c/delete-where (:foo db) [f] (= 42 f:id))
     (:foo db)
     (p/create-index db :foo :id)
     (:id (:foo db))

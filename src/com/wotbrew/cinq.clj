@@ -1,10 +1,12 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use max min count set update replace run! read vec range])
+  (:refer-clojure :exclude [use max min count set update replace run! read range])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan :as plan]
-            [com.wotbrew.cinq.protocols :as p])
-  (:import (com.wotbrew.cinq CinqScanFunction CinqUtil)
+            [com.wotbrew.cinq.protocols :as p]
+            [meander.epsilon :as m]
+            [meander.strategy.epsilon :as r])
+  (:import (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
@@ -52,7 +54,7 @@
         compile-plan)))
 
 (defn- throw-only-in-queries [v]
-  (throw (ex-info (format "%s only supported in queries" v) {})))
+  (throw (ex-info (format "%s only supported in cinq queries" v) {})))
 
 (defn rel-first [rel] (reduce (fn [_ x] (reduced x)) nil rel))
 
@@ -60,12 +62,44 @@
 
 (defmacro exists? [query] `(boolean (scalar ~query true)))
 
-(defmacro run! [query & body]
-  `(reduce (fn [_# f#] (f#)) nil (q ~query (fn [] ~@body))))
+(defn- throw-only-in-run [v]
+  (throw (ex-info (format "%s only supported in cinq/run! bodies" v) {})))
+
+(defmacro delete [target] (throw-only-in-run #'delete))
+
+(defmacro update [target expr] (throw-only-in-run #'update))
 
 (defmacro agg [init init-sym query & body]
   {:pre [(symbol? init-sym)]}
   `(clojure.core/reduce (fn [~init-sym f#] (f# ~init-sym)) ~init (q ~query (fn [~init-sym] ~@body))))
+
+(defmacro run! [query & body]
+  (let [srelvar (fn [?alias] (symbol (str ?alias ":cinq") "relvar"))
+        srsn (fn [?alias] (symbol (str ?alias ":cinq") "rsn"))
+        match
+        #(m/match %
+           (m/and (?f & ?args)
+                  (m/guard (symbol? ?f)))
+           (condp = (resolve &env ?f)
+             #'update
+             (m/match ?args
+               (m/and (?alias ?expr)
+                      (m/guard (simple-symbol? ?alias)))
+               `(do (p/delete ~(srelvar ?alias) ~(srsn ?alias))
+                    (p/insert ~(srelvar ?alias) ~?expr))
+               _
+               (throw (ex-info "Invalid update call" {:args ?args})))
+
+             #'delete
+             (m/match ?args
+               (m/and (?alias)
+                      (m/guard (simple-symbol? ?alias)))
+               `(p/delete ~(srelvar ?alias) ~(srsn ?alias))
+               _ (throw (ex-info "Invalid delete call" {:args ?args})))
+             %)
+           _ %)
+        rw (r/top-down (r/attempt match))]
+    `(agg nil _# ~query ~@(rw body))))
 
 (defmacro sum [expr] (#'throw-only-in-queries #'sum))
 
@@ -93,46 +127,36 @@
 
 (defn insert [relvar record] (p/insert relvar record))
 
-(defn- add-rsn-to-binding [binding rsn]
-  (cond
-    (symbol? binding) {rsn :cinq/rsn :as binding}
-    (map? binding) (assoc binding rsn :cinq/rsn)
-    (sequential? binding) {binding :cinq/self, rsn :cinq/rsn}
-    :else (throw (ex-info "Unsupported binding form" {:binding binding}))))
+(defn ensure-binding-target [binding]
+  (let [sym (delay (gensym "self"))]
+    (cond
+      (symbol? binding) [binding binding]
+      (map? binding) [(assoc binding @sym :cinq/self) @sym]
+      (sequential? binding) [{binding :cinq/self, @sym :cinq/self} @sym]
+      :else (throw (ex-info "Unsupported binding form" {:binding binding})))))
 
-(extend-protocol p/VariableProxy
-  Object
-  (get-relvar [o] o))
+(defn incr-counter [^longs ctr]
+  (aset ctr 0 (unchecked-inc (aget ctr 0))))
 
-(defmacro delete
-  [query]
-  {:pre [(<= 2 (clojure.core/count query))]}
-  (let [rsn (gensym "rsn")
-        rv (gensym "relvar")
-        [binding relvar & query] query]
-    `(let [~rv (p/get-relvar ~relvar)]
-       (agg
-         0
-         affected-records#
-         ~(into [(add-rsn-to-binding binding rsn) rv] query)
-         (if (p/delete ~rv ~rsn)
-           (unchecked-inc affected-records#)
-           affected-records#)))))
+(defmacro update-where [relvar binding pred expr]
+  (let [[bind sym] (ensure-binding-target (first binding))]
+    `(let [ctr# (long-array 1)]
+       (run! ~(into [bind] [relvar :when pred]) (when (update ~sym ~expr) (incr-counter ctr#)))
+       (aget ctr# 0))))
 
-(defmacro update [query expr]
-  {:pre [(<= 2 (clojure.core/count query))]}
-  (let [rsn (gensym "rsn")
-        rv (gensym "relvar")
-        [binding relvar & query] query]
-    `(let [~rv (p/get-relvar ~relvar)]
-       (agg
-         0
-         affected-records#
-         ~(into [(add-rsn-to-binding binding rsn) rv] query)
-         (if (p/delete ~rv ~rsn)
-           (do (p/insert ~rv ~expr)
-               (unchecked-inc affected-records#))
-           affected-records#)))))
+(defmacro delete-where [relvar binding pred]
+  (let [[bind sym] (ensure-binding-target (first binding))]
+    `(let [ctr# (long-array 1)]
+       (run! ~(into [bind] [relvar :when pred]) (when (delete ~sym) (incr-counter ctr#)))
+       (aget ctr# 0))))
+
+(defmacro update-all [relvar binding expr]
+  (let [[bind sym] (ensure-binding-target (first binding))]
+    `(let [ctr# (long-array 1)]
+       (run! [~bind ~relvar] (when (update ~sym ~expr) (incr-counter ctr#)))
+       (aget ctr# 0))))
+
+(declare rel-count)
 
 (extend-protocol p/Scannable
   nil

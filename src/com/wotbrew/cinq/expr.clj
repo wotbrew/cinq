@@ -1,6 +1,5 @@
 (ns com.wotbrew.cinq.expr
-  (:require [clojure.string :as str]
-            [clojure.walk :as walk]
+  (:require [clojure.walk :as walk]
             [com.wotbrew.cinq.column :as col]
             [meander.epsilon :as m])
   (:import (com.wotbrew.cinq CinqUtil)))

@@ -29,13 +29,13 @@
   (c/insert (:foo db) 3)
   (is (= [1, 2, 3, 4, 3] (vec (:foo db))))
 
-  (is (= 3 (c/delete [f (:foo db) :when (#{3, 1} f)])))
+  (is (= 3 (c/delete-where (:foo db) [f] (#{3, 1} f))))
   (is (= [2, 4] (vec (:foo db))))
 
   (c/insert (:foo db) 3)
   (is (= [2, 4, 3] (vec (:foo db))))
 
-  (c/update [f (:foo db) :when (even? f)] (inc f))
+  (c/update-where (:foo db) [f] (even? f) (inc f))
   (is (= [3, 3, 5] (vec (:foo db)))))
 
 (deftest tx-test
@@ -91,7 +91,7 @@
 
     (is (= [{:id 43}] (vec (c/range idx > 42 < 44))))
 
-    (c/delete [f (idx 42) :limit 1])
+    (c/run! [f (idx 42) :limit 1] (c/delete f))
 
     (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
     (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))
