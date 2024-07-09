@@ -8,10 +8,10 @@
 (defonce ^:redef db (lmdb/database (File/createTempFile "cinq-test" ".cinq")))
 
 (defn- cleanup []
-  (c/run! [{:keys [k, rsn]} (:lmdb/variables db)
+  (c/run [{:keys [k, rsn]} (:lmdb/variables db)
            :when rsn]
-    ;; later we might delete the database
-    (c/rel-set (get db k) []))
+         ;; later we might delete the database
+         (c/rel-set (get db k) []))
   (.close db)
   (.bindRoot #'db (lmdb/database (File/createTempFile "cinq-test" ".cinq"))))
 
@@ -91,7 +91,7 @@
 
     (is (= [{:id 43}] (vec (c/range idx > 42 < 44))))
 
-    (c/run! [f (idx 42) :limit 1] (c/delete f))
+    (c/run [f (idx 42) :limit 1] (c/delete f))
 
     (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
     (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))

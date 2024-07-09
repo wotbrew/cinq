@@ -31,7 +31,7 @@ bar
   [f b])
 
 
-(c/run!
+(c/run
   [f foo
    b bar
    :when (= f b)]

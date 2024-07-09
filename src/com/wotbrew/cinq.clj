@@ -1,5 +1,5 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use max min count set update replace run! read range])
+  (:refer-clojure :exclude [use max min count set update replace read range])
   (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan :as plan]
@@ -63,7 +63,7 @@
 (defmacro exists? [query] `(boolean (scalar ~query true)))
 
 (defn- throw-only-in-run [v]
-  (throw (ex-info (format "%s only supported in cinq/run! bodies" v) {})))
+  (throw (ex-info (format "%s only supported in cinq/run bodies" v) {})))
 
 (defmacro delete [target] (throw-only-in-run #'delete))
 
@@ -73,7 +73,7 @@
   {:pre [(symbol? init-sym)]}
   `(clojure.core/reduce (fn [~init-sym f#] (f# ~init-sym)) ~init (q ~query (fn [~init-sym] ~@body))))
 
-(defmacro run! [query & body]
+(defmacro run [query & body]
   (let [srelvar (fn [?alias] (symbol (str ?alias ":cinq") "relvar"))
         srsn (fn [?alias] (symbol (str ?alias ":cinq") "rsn"))
         match
@@ -141,19 +141,19 @@
 (defmacro update-where [relvar binding pred expr]
   (let [[bind sym] (ensure-binding-target (first binding))]
     `(let [ctr# (long-array 1)]
-       (run! ~(into [bind] [relvar :when pred]) (when (update ~sym ~expr) (incr-counter ctr#)))
+       (run ~(into [bind] [relvar :when pred]) (when (update ~sym ~expr) (incr-counter ctr#)))
        (aget ctr# 0))))
 
 (defmacro delete-where [relvar binding pred]
   (let [[bind sym] (ensure-binding-target (first binding))]
     `(let [ctr# (long-array 1)]
-       (run! ~(into [bind] [relvar :when pred]) (when (delete ~sym) (incr-counter ctr#)))
+       (run ~(into [bind] [relvar :when pred]) (when (delete ~sym) (incr-counter ctr#)))
        (aget ctr# 0))))
 
 (defmacro update-all [relvar binding expr]
   (let [[bind sym] (ensure-binding-target (first binding))]
     `(let [ctr# (long-array 1)]
-       (run! [~bind ~relvar] (when (update ~sym ~expr) (incr-counter ctr#)))
+       (run [~bind ~relvar] (when (update ~sym ~expr) (incr-counter ctr#)))
        (aget ctr# 0))))
 
 (declare rel-count)
