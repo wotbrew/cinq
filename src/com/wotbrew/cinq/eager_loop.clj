@@ -61,10 +61,11 @@
                           first))
            vec)))
 
-(defn emit-scan-binding-expr [k o rsn self-class]
+(defn emit-scan-binding-expr [k o rsn rv self-class]
   (cond
     (= :cinq/self k) o
     (= :cinq/rsn k) rsn
+    (= :cinq/relvar k) rv
     (and self-class (class? self-class) (plan/kw-field self-class k))
     (list (symbol (str ".-" (munge (name k)))) o)
     (keyword? k) (list k o)
@@ -76,7 +77,7 @@
 (defn scan-reduce-rsn [src ^CinqScanFunction f]
   (let [a (long-array 1)]
     (aset a 0 -1)
-    (reduce (fn [acc x] (f acc (aset a 0 (unchecked-inc (aget a 0))) x)) nil src)))
+    (reduce (fn [acc x] (f acc nil (aset a 0 (unchecked-inc (aget a 0))) x)) nil src)))
 
 (defn run-scan-rsn [f src]
   (if (instance? Scannable src)
@@ -86,7 +87,7 @@
 (defn run-scan-no-rsn [f src]
   (if (instance? Scannable src)
     (p/scan src f nil)
-    (reduce (fn [acc x] (f acc -1 x)) nil src)))
+    (reduce (fn [acc x] (f acc nil -1 x)) nil src)))
 
 (defn scan-binding-used? [sym] (not (:not-used (meta sym))))
 
@@ -167,6 +168,7 @@
         self-class (if (symbol? self-tag) (resolve self-tag) self-tag)
         o (if self-tag (with-meta (gensym "o") {:tag self-tag}) (gensym "o"))
         rsn (gensym "rsn")
+        rv (gensym "rv")
 
         bound-syms (set (map first bindings))
 
@@ -187,11 +189,11 @@
         lambda `(reify
                   IFn
                   ~(if (seq filter-bindings)
-                     `(invoke [f# agg# rsn# o#]
+                     `(invoke [f# agg# rv# rsn# o#]
                               (if (.filter f# rsn# o#)
-                                (.apply f# agg# rsn# o#)
+                                (.apply f# agg# rv# rsn# o#)
                                 agg#))
-                     `(invoke [f# agg# rsn# o#] (.apply f# agg# rsn# o#)))
+                     `(invoke [f# agg# rv# rsn# o#] (.apply f# agg# rv# rsn# o#)))
 
                   CinqScanFunction
                   ;; todo
@@ -202,7 +204,7 @@
                                     (if (empty? bindings)
                                       true
                                       (let [[sym k pred] (first bindings)]
-                                        `(let [~sym ~(emit-scan-binding-expr k o rsn self-class)]
+                                        `(let [~sym ~(emit-scan-binding-expr k o rsn rv self-class)]
                                            (and ~(rewrite-expr [] pred)
                                                 ~(emit-next-pred (rest bindings)))))))
                                   filter-bindings)))
@@ -248,7 +250,7 @@
                         [_# _#]
                         (reify CinqScanFunction$NativeFilter (apply [_# _rsn# _buf#] true))))
 
-                  (apply [_# _# ~rsn o#]
+                  (apply [_# _# ~rv ~rsn o#]
                     (let [~o o#]
                       ;; with pred
                       ~((fn emit-next-binding [bindings]
@@ -257,11 +259,11 @@
                                      (empty? filter-bindings))
                               `(some-> ~body reduced)
                               `(let [~@(for [[sym k] (concat top-level-bindings filter-bindings)
-                                             form [sym (emit-scan-binding-expr k o rsn self-class)]]
+                                             form [sym (emit-scan-binding-expr k o rsn rv self-class)]]
                                          form)]
                                  (some-> ~body reduced)))
                             (let [[sym k pred] (first bindings)]
-                              `(let [~sym ~(emit-scan-binding-expr k o rsn self-class)]
+                              `(let [~sym ~(emit-scan-binding-expr k o rsn rv self-class)]
                                  (when ~(rewrite-expr [] pred)
                                    ~(emit-next-binding (rest bindings)))))))
                         condition-bindings)))
@@ -288,7 +290,7 @@
             (aset ~rsn 0 -1)
             (.reduce this#
                      (fn [acc# x#]
-                       (f# acc# (aset ~rsn 0 (unchecked-inc (aget ~rsn 0))) x#)) init#)))
+                       (f# acc# nil (aset ~rsn 0 (unchecked-inc (aget ~rsn 0))) x#)) init#)))
         IReduceInit
         (reduce [_ ~f init#]
           (let [~box (object-array 1)]

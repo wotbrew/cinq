@@ -144,15 +144,15 @@
         (fn [acc record]
           (let [i (aget ctr 0)]
             (aset ctr 0 (unchecked-inc i))
-            (f acc i record)))
+            (f acc nil i record)))
         init
         this))))
 
 (extend-protocol clojure.core.protocols/CollReduce
   Scannable
   (coll-reduce
-    ([scan f start] (p/scan scan (fn [acc _rsn record] (f acc record)) start))
-    ([scan f] (p/scan scan (fn [acc _rsn record] (f acc record)) (f)))))
+    ([scan f start] (p/scan scan (fn [acc _rv _rsn record] (f acc record)) start))
+    ([scan f] (p/scan scan (fn [acc _rv _rsn record] (f acc record)) (f)))))
 
 (defmethod print-method Scannable
   [o w]
@@ -160,7 +160,7 @@
     (do
       (.write w "#cinq/rel [")
       (let [ictr (volatile! -1)]
-        (p/scan o (fn [print-length _ x]
+        (p/scan o (fn [print-length _ _ x]
                     (let [i (vswap! ictr inc)]
                       (if (and (not *print-dup*) print-length)
                         (if (<= print-length 0)

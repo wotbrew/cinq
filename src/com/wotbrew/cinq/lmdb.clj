@@ -18,7 +18,7 @@
 
 (def ^:redef open-files #{})
 
-(defn- native-scan [^Cursor cursor ^CinqScanFunction f init symbol-table]
+(defn- native-scan [^Cursor cursor ^CinqScanFunction f init symbol-table rv]
   (if-not (.first cursor)
     init
     (let [symbol-list (codec/symbol-list symbol-table)
@@ -36,30 +36,30 @@
                 acc)
               (let [_ (.position ^ByteBuffer val pos)
                     o (codec/decode-root-unsafe mut-record val symbol-list)
-                    ret (.apply f acc rsn o)]
+                    ret (.apply f acc rv rsn o)]
                 (if (reduced? ret)
                   @ret
                   (if (.next cursor)
                     (recur ret)
                     ret))))))))))
 
-(defn- heap-scan [^Cursor cursor f init symbol-list]
+(defn- heap-scan [^Cursor cursor f init symbol-list rv]
   (if-not (.first cursor)
     init
     (loop [acc init]
       (let [rsn (.getLong ^ByteBuffer (.key cursor))
             o (codec/decode-object (.val cursor) symbol-list)
-            ret (f acc rsn o)]
+            ret (f acc rv rsn o)]
         (if (reduced? ret)
           @ret
           (if (.next cursor)
             (recur ret)
             ret))))))
 
-(defn- scan [^Cursor cursor f init symbol-table]
+(defn- scan [^Cursor cursor f init symbol-table rv]
   (if (and (instance? CinqScanFunction f) (.rootDoesNotEscape ^CinqScanFunction f))
-    (native-scan cursor f init symbol-table)
-    (heap-scan cursor f init (some-> symbol-table codec/symbol-list))))
+    (native-scan cursor f init symbol-table rv)
+    (heap-scan cursor f init (some-> symbol-table codec/symbol-list) rv)))
 
 (defn- last-rsn ^long [^Cursor cursor]
   (if (.last cursor)
@@ -69,7 +69,7 @@
     -1))
 
 (defn- reduce-scan [r f init]
-  (p/scan r (fn [acc _ x] (f acc x)) init))
+  (p/scan r (fn [acc _ _ x] (f acc x)) init))
 
 (defn get-index-entry [relvar
                        ^Txn txn
@@ -107,6 +107,7 @@
                     (if-not (CinqUtil/eq ke k)
                       (if has-next (recur acc) acc)
                       (let [r (f acc
+                                 relvar
                                  (.getLong ^ByteBuffer (.key rsn-cursor))
                                  record)]
                         (if (reduced? r)
@@ -169,6 +170,7 @@
                         (if-not (pred ke start end)
                           (if has-next (recur acc) acc)
                           (let [r (f acc
+                                     relvar
                                      (.getLong ^ByteBuffer (.key rsn-cursor))
                                      record)]
                             (if (reduced? r)
@@ -180,14 +182,14 @@
       (reduce [index-entry f init]
         (reduce-scan index-entry f init)))))
 
-(defn scan-index [^Dbi dbi ^Dbi rsn-dbi ^Txn txn f init symbol-list]
+(defn scan-index [^Dbi dbi ^Dbi rsn-dbi ^Txn txn f init symbol-list rv]
   (with-open [cursor (.openCursor dbi txn)
               rsn-cursor (.openCursor rsn-dbi txn)]
     (if (.first cursor)
       (loop [acc init]
         (let [_ (.get rsn-cursor (.val cursor) GetOp/MDB_SET)
               o (codec/decode-object (.val rsn-cursor) symbol-list)
-              ret (f acc (.getLong ^ByteBuffer (.val cursor) 0) o)]
+              ret (f acc rv (.getLong ^ByteBuffer (.val cursor) 0) o)]
           (if (instance? Reduced ret)
             @ret
             (if (.next cursor)
@@ -259,7 +261,7 @@
                 ^objects index-dbi-array
                 ^objects index-key-array
                 ^objects index-cur-array]
-  (let [step (fn [_acc rsn r]
+  (let [step (fn [_acc _relvar rsn r]
                (.clear key-buffer)
                (.clear val-buffer)
                (.putLong key-buffer rsn)
@@ -348,13 +350,13 @@
       (get-index r txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
       not-found))
   p/Scannable
-  (scan [_ f init]
-    (scan cursor f init symbol-table))
+  (scan [rv f init]
+    (scan cursor f init symbol-table rv))
   p/BigCount
   (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
   (reduce [relvar f start]
-    (p/scan relvar (fn [acc _ record] (f acc record)) start))
+    (p/scan relvar (fn [acc _ _ record] (f acc record)) start))
   p/Relvar
   (rel-set [relvar rel]
     (set! (.-next-rsn relvar) -1)
@@ -409,14 +411,14 @@
       (get-index r txn (.get dbis index-dbi-name) dbi key-buffer rsn-buffer k symbol-table)
       not-found))
   p/Scannable
-  (scan [_ f init]
+  (scan [rv f init]
     (with-open [cursor (.openCursor dbi txn)]
-      (scan cursor f init symbol-table)))
+      (scan cursor f init symbol-table rv)))
   p/BigCount
   (big-count [_] (.-entries (.stat dbi txn)))
   IReduceInit
   (reduce [relvar f start]
-    (p/scan relvar (fn [acc _ record] (f acc record)) start)))
+    (p/scan relvar (fn [acc _ _ record] (f acc record)) start)))
 
 (defn- commit [^Txn txn ^ByteBuffer key-buffer ^ByteBuffer val-buffer ^Map dbis symbol-table]
   (try
@@ -515,7 +517,7 @@
       (p/scan (rel-fn) f init))
     IReduceInit
     (reduce [_ f init]
-      (p/scan (rel-fn) (fn [acc _ r] (f acc r)) init))))
+      (p/scan (rel-fn) (fn [acc _ _ r] (f acc r)) init))))
 
 (defn- stat-rel [^Env env]
   (intrinsic-rel
@@ -636,12 +638,13 @@
               (with-open [rsn-cursor (.openCursor rsn-dbi txn)
                           index-cursor (.openCursor index-dbi txn)]
                 (scan rsn-cursor
-                      (fn [_ rsn o]
+                      (fn [_ _ rsn o]
                         (when-some [key (get o index-key)]
                           (index-insert index-cursor key-buffer val-buffer rsn key symbol-table))
                         nil)
                       nil
-                      symbol-table))
+                      symbol-table
+                      nil))
 
               (commit txn key-buffer val-buffer dbis symbol-table))
             (.put dbis index-dbi-name index-dbi)
@@ -729,7 +732,7 @@
   p/Scannable
   (scan [_ f init] (variable-read db k (fn [v] (p/scan v f init))))
   IReduceInit
-  (reduce [relvar f start] (p/scan relvar (fn [acc _ record] (f acc record)) start))
+  (reduce [relvar f start] (p/scan relvar (fn [acc _ _ record] (f acc record)) start))
   p/BigCount
   (big-count [_] (variable-read db k p/big-count))
   p/Relvar
@@ -777,11 +780,11 @@
 
           ;; read symbols
           (with-open [cursor (.openCursor symbol-dbi txn)]
-            (scan cursor (fn [_ _ symbol] (codec/intern-symbol symbol-table symbol true)) nil nil))
+            (scan cursor (fn [_ _ _ symbol] (codec/intern-symbol symbol-table symbol true)) nil nil nil))
 
           ;; read variables
           (with-open [cursor (.openCursor variables-dbi txn)]
-            (scan cursor (fn [_ _ {:keys [k] :as record}] (.put varmap k record)) nil symbol-table)))
+            (scan cursor (fn [_ _ _ {:keys [k] :as record}] (.put varmap k record)) nil symbol-table nil)))
 
         (codec/clear-adds symbol-table)
         (->LMDBDatabase file

@@ -111,7 +111,7 @@
       (->> "row counts should match"
            (is (= (count result) (c/rel-count rs))))
       (p/scan rs
-              (fn [_ i row]
+              (fn [_ _ i row]
                 (doseq [[relv tpch col] (map vector row (nth result i nil) (range))
                         :let [parsed (try
                                        (cond

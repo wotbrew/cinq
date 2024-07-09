@@ -11,7 +11,9 @@
   (c/run! [{:keys [k, rsn]} (:lmdb/variables db)
            :when rsn]
     ;; later we might delete the database
-    (c/rel-set (get db k) [])))
+    (c/rel-set (get db k) []))
+  (.close db)
+  (.bindRoot #'db (lmdb/database (File/createTempFile "cinq-test" ".cinq"))))
 
 (use-fixtures :each (fn [f] (try (f) (finally (cleanup)))))
 
