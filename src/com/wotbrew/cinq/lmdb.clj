@@ -78,7 +78,7 @@
                        ^ByteBuffer key-buffer
                        ^ByteBuffer rsn-buffer
                        symbol-table
-                       index-key
+                       indexed-key
                        k]
   (reify
     p/Scannable
@@ -101,7 +101,7 @@
                     (throw (IllegalStateException. "Could not find rsn during index seek, suspect index corruption")))
                   (let [record (codec/decode-object (.val rsn-cursor) (codec/symbol-list symbol-table))
                         ;; todo use lossy byte to determine whether we know ke == k from the buf
-                        ke (get record index-key)]
+                        ke (get record indexed-key)]
                     (if-not (CinqUtil/eq ke k)
                       (if has-next (recur acc) acc)
                       (let [r (f acc
@@ -124,7 +124,7 @@
                              ^ByteBuffer key-buffer
                              ^ByteBuffer rsn-buffer
                              symbol-table
-                             index-key
+                             indexed-key
                              ;; either cinq/gt or cinq/gte
                              start-test
                              start
@@ -161,7 +161,7 @@
                       (when-not (.get rsn-cursor rsn-buffer GetOp/MDB_SET)
                         (throw (IllegalStateException. "Could not find rsn during index seek, suspect index corruption")))
                       (let [record (codec/decode-object (.val rsn-cursor) (codec/symbol-list symbol-table))
-                            ke (get record index-key)]
+                            ke (get record indexed-key)]
                         (if-not (pred ke start end)
                           (if has-next (recur acc) acc)
                           (let [r (f acc
@@ -192,27 +192,28 @@
               ret))))
       init)))
 
-(defn get-index [relvar ^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer ^ByteBuffer rsn-buffer index-key symbol-table]
+(defn get-index [relvar ^Txn txn ^Dbi dbi ^Dbi rsn-dbi ^ByteBuffer key-buffer ^ByteBuffer rsn-buffer indexed-key symbol-table]
   (reify
     IFn
     (invoke [i k] (.valAt i k))
     (invoke [i k not-found] (.valAt i k not-found))
     p/Scannable
     (scan [_ f init]
-      (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table)))
+      (scan-index dbi rsn-dbi txn f init (codec/symbol-list symbol-table) relvar))
     IReduceInit
     (reduce [index f init]
       (reduce-scan index f init))
 
     ;; lookup one key
     ILookup
-    (valAt [_ k] (get-index-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key k))
+    (valAt [_ k] (get-index-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table indexed-key k))
     (valAt [r k _not-found] (.valAt r k))
 
     p/Index
-    ;; range query
-    (range-scan [_ test-a a test-b b]
-      (get-index-range-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table index-key test-a a test-b b))
+    (indexed-key [_] indexed-key)
+    (getn [i k] (.valAt i k))
+    (get1 [i k not-found] (c/rel-first (.valAt i k) not-found))
+    (range-scan [_ test-a a test-b b] (get-index-range-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table indexed-key test-a a test-b b))
 
     ))
 
@@ -677,15 +678,15 @@
    ^ByteBuffer val-buffer
    indexes]
   ILookup
-  (valAt [r index-key] (.valAt r index-key nil))
-  (valAt [r index-key not-found]
-    (if (indexes index-key)
+  (valAt [r indexed-key] (.valAt r indexed-key nil))
+  (valAt [r indexed-key not-found]
+    (if (indexes indexed-key)
       (reify
         IFn
         (invoke [i k] (.valAt i k))
         (invoke [i k not-found] (.valAt i k not-found))
         p/Scannable
-        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v index-key) (fn [acc _ rsn x] (f acc r rsn x)) init))))
+        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v indexed-key) (fn [acc _ rsn x] (f acc r rsn x)) init))))
         IReduceInit
         (reduce [index f init]
           (reduce-scan index f init))
@@ -697,7 +698,7 @@
               (variable-read
                 db k
                 (fn [v]
-                  (let [^ILookup idx (.valAt ^ILookup v index-key)
+                  (let [^ILookup idx (.valAt ^ILookup v indexed-key)
                         entry (.valAt idx entry-key)]
                     (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
             IReduceInit
@@ -705,13 +706,16 @@
               (reduce-scan index-entry f init))))
         (valAt [r k _not-found] (.valAt r k))
         p/Index
+        (indexed-key [_] indexed-key)
+        (get1 [idx k not-found] (c/rel-first (.valAt idx k) not-found))
+        (getn [idx k] (.valAt idx k))
         (range-scan [_ test-a a test-b b]
           (reify p/Scannable
             (scan [_ f init]
               (variable-read
                 db k
                 (fn [v]
-                  (let [^ILookup idx (.valAt ^ILookup v index-key)
+                  (let [^ILookup idx (.valAt ^ILookup v indexed-key)
                         entry (p/range-scan idx test-a a test-b b)]
                     (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
             IReduceInit
@@ -827,11 +831,14 @@
     (c/insert (:foo db) {:id 44})
     (c/delete-where (:foo db) [f] (= 42 f:id))
     (:foo db)
-    (p/create-index db :foo :id)
+    (c/create-index db [:foo :id])
     (:id (:foo db))
     (get (:id (:foo db)) 42)
     (get (:id (:foo db)) 43)
     (get (:id (:foo db)) 44)
+    (-> db :foo :id (c/getn 44))
+    (-> db :foo :id (c/get1 44))
+    (-> db :foo :id (c/get1 45 ::not-found))
 
     (c/range (:id (:foo db)) > 0)
     (c/range (:id (:foo db)) < 44)
@@ -839,7 +846,8 @@
     (c/range (:id (:foo db)) > 40 <= 42)
 
 
-    (c/rel-set (:foo db) [{:id (range 1024)}])
+    (c/rel-set (:foo db) (for [i (range 1024)] {:id i}))
+    (:foo db)
 
     )
 

@@ -24,4 +24,7 @@
   (scan [rel f init]))
 
 (defprotocol Index
-  (range-scan [rel test-a a test-b b]))
+  (indexed-key [idx])
+  (getn [idx key])
+  (get1 [idx key not-found])
+  (range-scan [idx test-a a test-b b]))

@@ -1,13 +1,14 @@
 (ns com.wotbrew.cinq
-  (:refer-clojure :exclude [use max min count set update replace read range])
-  (:require [com.wotbrew.cinq.eager-loop :as el]
+  (:refer-clojure :exclude [use max min count set update replace read range var])
+  (:require [clojure.core :as clj]
+            [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.protocols :as p]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r])
   (:import (com.wotbrew.cinq CinqUtil)
-           (com.wotbrew.cinq.protocols Scannable)))
+           (com.wotbrew.cinq.protocols BigCount IncrementalRelvar Index Relvar Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
 
@@ -56,7 +57,9 @@
 (defn- throw-only-in-queries [v]
   (throw (ex-info (format "%s only supported in cinq queries" v) {})))
 
-(defn rel-first [rel] (reduce (fn [_ x] (reduced x)) nil rel))
+(defn rel-first
+  ([rel] (reduce (fn [_ x] (reduced x)) nil rel))
+  ([rel not-found] (reduce (fn [_ x] (reduced x)) not-found rel)))
 
 (defmacro scalar [query selection] `(rel-first (q ~query ~selection)))
 
@@ -119,13 +122,18 @@
 
 (defmacro read [binding & body] `(p/read-transaction ~(second binding) (fn [~(first binding)] ~@body)))
 
-(defn create [db k] (p/create-relvar db k))
+(defn create [db relvar-id]
+  {:pre [(keyword? relvar-id)]}
+  (p/create-relvar db relvar-id))
 
-(defn create-index [db relvar-key index-key] (p/create-index db relvar-key index-key))
+(defn create-index [db [relvar-id indexed-key]]
+  {:pre [(keyword? relvar-id)
+         (keyword? indexed-key)]}
+  (p/create-index db relvar-id indexed-key))
 
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
-(defn insert [relvar record] (p/insert relvar record))
+(defn insert [relvar row] (p/insert relvar row))
 
 (defn ensure-binding-target [binding]
   (let [sym (delay (gensym "self"))]
@@ -178,28 +186,6 @@
     ([scan f start] (p/scan scan (fn [acc _rv _rsn record] (f acc record)) start))
     ([scan f] (p/scan scan (fn [acc _rv _rsn record] (f acc record)) (f)))))
 
-(defmethod print-method Scannable
-  [o w]
-  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
-    (do
-      (.write w "#cinq/rel [")
-      (let [ictr (volatile! -1)]
-        (p/scan o (fn [print-length _ _ x]
-                    (let [i (vswap! ictr inc)]
-                      (if (and (not *print-dup*) print-length)
-                        (if (<= print-length 0)
-                          (do (.write w " ...") (reduced print-length))
-                          (do
-                            (when-not (= 0 i) (.write w " "))
-                            (print-method x w)
-                            (dec print-length)))
-                        (do
-                          (when-not (= 0 i) (.write w " "))
-                          (print-method x w)
-                          nil))))
-                *print-length*))
-      (.write w "] "))))
-
 (extend-protocol p/BigCount
   nil
   (big-count [_] 0)
@@ -241,3 +227,148 @@
      < (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
      <= (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
      (p/range-scan index (index-test start-test) start-key (index-test end-test) end-key))))
+
+(defn getn
+  "Index lookup returning a relation of rows (cinq) eq to the key,
+  same as (get idx k) for non-unique indexes.
+
+  Like (get idx k), always returns a relation, even on key miss."
+  [index k]
+  (p/getn index k))
+
+(defn get1
+  "Index unique-or-first lookup, returns the matching record or not-found (default nil)."
+  ([index k] (p/get1 index k nil))
+  ([index k not-found] (p/get1 index k not-found)))
+
+(defmethod print-method Scannable [o w]
+  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
+    (do
+      (.write w "#cinq/rel [")
+      (let [ictr (volatile! -1)]
+        (p/scan o (fn [print-length _ _ x]
+                    (let [i (vswap! ictr inc)]
+                      (if (and (not *print-dup*) print-length)
+                        (if (<= print-length 0)
+                          (do (.write w " ...") (reduced print-length))
+                          (do
+                            (when-not (= 0 i) (.write w " "))
+                            (print-method x w)
+                            (dec print-length)))
+                        (do
+                          (when-not (= 0 i) (.write w " "))
+                          (print-method x w)
+                          nil))))
+                *print-length*))
+      (.write w "] "))))
+
+(defmethod print-method Relvar [o w]
+  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
+    (do
+      (.write w "#cinq/var [")
+      (let [ictr (volatile! -1)]
+        (p/scan o (fn [print-length _ _ x]
+                    (let [i (vswap! ictr inc)]
+                      (if (and (not *print-dup*) print-length)
+                        (if (<= print-length 0)
+                          (do (.write w " ...") (reduced print-length))
+                          (do
+                            (when-not (= 0 i) (.write w " "))
+                            (print-method x w)
+                            (dec print-length)))
+                        (do
+                          (when-not (= 0 i) (.write w " "))
+                          (print-method x w)
+                          nil))))
+                *print-length*))
+      (.write w "] "))))
+
+(defmethod print-method Index [o w]
+  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
+    (do
+      (.write w "#cinq/idx [")
+      (let [ictr (volatile! -1)
+            index-key (p/indexed-key o)]
+        (p/scan o (fn [print-length _ _ x]
+                    (let [i (vswap! ictr inc)
+                          k (get x index-key)]
+                      (if (and (not *print-dup*) print-length)
+                        (if (<= print-length 0)
+                          (do (.write w " ...") (reduced print-length))
+                          (do
+                            (when-not (= 0 i) (.write w ", "))
+                            (.write w "[")
+                            (print-method k w)
+                            (.write w " ")
+                            (print-method x w)
+                            (.write w "]")
+                            (dec print-length)))
+                        (do
+                          (when-not (= 0 i) (.write w ", "))
+                          (.write w "[")
+                          (print-method k w)
+                          (.write w " ")
+                          (print-method x w)
+                          (.write w "]")
+                          nil))))
+                *print-length*))
+      (.write w "] "))))
+
+(prefer-method print-method Relvar Scannable)
+
+(prefer-method print-method Index Scannable)
+
+(deftype CollRelation [coll]
+  Scannable
+  (scan [_ f init] (p/scan coll f init))
+  BigCount
+  (big-count [_] (clj/count coll)))
+
+(deftype RefVariable [ref]
+  Scannable
+  (scan [rv f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init @ref))
+  Relvar
+  (rel-set [rv rel]
+    (dosync
+      (ref-set ref
+               (p/scan
+                 rel
+                 (fn [acc _ rsn o] (assoc acc rsn o))
+                 (sorted-map))))
+    nil)
+  IncrementalRelvar
+  (insert [_ o]
+    (dosync
+      (let [ret (volatile! nil)]
+        (alter ref
+               (fn [sm]
+                 (let [[last-rsn] (first (reverse sm))
+                       rsn (if last-rsn (inc last-rsn) 0)]
+                   (vreset! ret rsn)
+                   (assoc sm rsn o))))
+        @ret)))
+  (delete [_ rsn]
+    (dosync
+      (let [ret (volatile! false)]
+        (alter ref
+               (fn [sm]
+                 (if (contains? sm rsn)
+                   (do (vreset! ret true) (dissoc sm rsn))
+                   sm)))
+        @ret)))
+  BigCount
+  (big-count [_] (clj/count @ref)))
+
+(defn rel [rows] (->CollRelation rows))
+
+(defn relvar [] (->RefVariable (ref (sorted-map))))
+
+(comment
+
+  (doto (var)
+    (insert 42)
+    (insert 43))
+
+  (rel [1 2 3 4])
+
+  )

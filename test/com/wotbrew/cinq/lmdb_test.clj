@@ -1,8 +1,7 @@
 (ns com.wotbrew.cinq.lmdb-test
   (:require [clojure.test :refer :all]
             [com.wotbrew.cinq :as c]
-            [com.wotbrew.cinq.lmdb :as lmdb]
-            [com.wotbrew.cinq.protocols :as p])
+            [com.wotbrew.cinq.lmdb :as lmdb])
   (:import (java.io File)))
 
 (defonce ^:redef db (lmdb/database (File/createTempFile "cinq-test" ".cinq")))
@@ -67,7 +66,7 @@
 
 (deftest index-test
   (let [foo (c/create db :foo)
-        idx (c/create-index db :foo :id)]
+        idx (c/create-index db [:foo :id])]
 
     (c/rel-set foo [])
     (is (= [] (vec (idx 42))))

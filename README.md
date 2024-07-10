@@ -1,11 +1,12 @@
 # cinq
 
-Language integrated query and ACID relational database for Clojure.
+`status: in development`
 
-- Very fast (for the JVM) query compiler. Emits unboxed math, fused loops - applies relational planner optimisations such as sub query de-nesting.
-- Optional single-file databases with full ACID transactions.
-- Integrated with Clojure and the REPL, reified relations, query clojure things, use clojure expressions directly, write transactions in clojure.
-- Relation-first programming style, where relations are first-class objects that you operate on - as opposed to a 'send your query to the database' style).
+(C)lojure (In)tegrated (Q)uery extends Clojure on the JVM to relational programming.
+
+- Work with larger than memory relations
+- Single-file databases with full ACID transactions
+- Integrated with Clojure, reified relations, query clojure things, use clojure expressions directly, write transactions in clojure.
 
 ## Query
 
@@ -51,7 +52,6 @@ This allows `cinq` to work with very large relations.
 (c/create db :customers)
 
 ;; to get the :customers relvar, look it up in the map. The relvar starts empty
-
 (:customers db)
 ;; =>
 #cinq/rel []

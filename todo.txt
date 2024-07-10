@@ -1,3 +1,51 @@
+---
+Printing
+
+#cinq/rel [1, 2, 3, 4] Scannable.
+#cinq/var [1, 2, 3, 4] Variable
+#cinq/idx [[42 {:n 42}] [42 {:n 42, :a 43}]] Index
+#cinq/uni {42 {:n 42}} UniqueIndex
+
+---
+
+Identifiers
+
+Variable = keyword, optionally qualified
+Index = pair [?variable ?keyword]
+
+---
+
+Primary, Unique, FK
+
+Before a complete picture is formed around schema, start with discrete operations that do the work on the db.
+
+;; might be nice, to have a data literal for 'index key', including 'relvar' - this makes more sense when considering foreign keys.
+(c/add-index db [:customers :birthdate])
+
+;; index can then be looked up with the db using both components, or rel using second component
+(get db [:customers :birthdate]) == (get-in db [:customers :birthdate])
+
+;; associate :unique true with an existing index, throw if already a value on insert
+;; throw if index does not exist
+(c/add-unique-index db [:customers :email] true)
+
+;; perhaps if indexes were created either as unique or not, rather than toggled - we can use a different type.
+;; I think a unique index can behave like an eager clojure map of key -> val, rather than key -> rel (for all keys).
+;; i.e (-> db :customers :email (get "foo@bar.com)) returns {:email "foo@bar.com", ...}"
+;;     (-> db :customers :email (put "foo@bar.com" {:email "foo@bar.com", ...})) (assert on :email = key).
+;; can then do put-if-absent, upd, upd-or-merge etc etc.
+
+;; add a foreign key into the
+(foreign-key db [:orders :customer-id] [:customers :id] {:on-delete :cascade})
+
+- On insert test if value when given is a hit for the supplied index.
+- When :customer is deleted, a cascades array is checked to :cascade or :set-nil the referenced order.
+  Behaviour if not specified is to crash (as a constraint would be invalidated)
+
+Like create-index, these functions create and return an index. In the case of foreign keys, it may only attach or modify metadata associated with an existing index (that it is a foreign key).
+
+---
+
 Implicit group
 
 (q [f foo] (c/count))
