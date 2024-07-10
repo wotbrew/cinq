@@ -318,12 +318,6 @@
 
 (prefer-method print-method Index Scannable)
 
-(deftype CollRelation [coll]
-  Scannable
-  (scan [_ f init] (p/scan coll f init))
-  BigCount
-  (big-count [_] (clj/count coll)))
-
 (deftype RefVariable [ref]
   Scannable
   (scan [rv f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init @ref))
@@ -359,16 +353,20 @@
   BigCount
   (big-count [_] (clj/count @ref)))
 
-(defn rel [rows] (->CollRelation rows))
+(defn relvar
+  "An in-memory relvar, for testing and experimentation at the repl.
 
-(defn relvar [] (->RefVariable (ref (sorted-map))))
+  Participates in Clojure's STM, so inherits the transactional
+  behaviour of clojure.lang.Ref.
+
+  Will be quite slow compared to com.wotbrew.cinq.lmdb backed relvars."
+  []
+  (->RefVariable (ref (sorted-map))))
 
 (comment
 
   (doto (var)
     (insert 42)
     (insert 43))
-
-  (rel [1 2 3 4])
 
   )
