@@ -7,7 +7,8 @@
             [com.wotbrew.cinq.protocols :as p]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r])
-  (:import (com.wotbrew.cinq CinqUtil)
+  (:import (clojure.lang IReduce IReduceInit)
+           (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.protocols BigCount IncrementalRelvar Index Relvar Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
@@ -321,6 +322,8 @@
 (deftype RefVariable [ref]
   Scannable
   (scan [rv f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init @ref))
+  IReduceInit
+  (reduce [_ f init] (reduce f init (vals @ref)))
   Relvar
   (rel-set [rv rel]
     (dosync
@@ -365,7 +368,7 @@
 
 (comment
 
-  (doto (var)
+  (doto (relvar)
     (insert 42)
     (insert 43))
 
