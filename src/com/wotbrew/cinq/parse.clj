@@ -97,6 +97,12 @@
 
 (declare parse)
 
+(defn- rewrite-variadic-bin-op [op a b args]
+  (if (empty? args)
+    [op a b]
+    (let [[c & xs] args]
+      [::plan/and [op a b] (rewrite-variadic-bin-op op b c xs)])))
+
 (def expr-rewrites
   (r/match
     ;; lookup symbols, e.g foo:bar == (:bar foo)
@@ -126,17 +132,20 @@
     [::plan/count]
 
     ;; comparisons
-    (= ?a ?b)
-    [::plan/= ?a ?b]
+    (= ?a ?b & ?args)
+    (rewrite-variadic-bin-op ::plan/= ?a ?b ?args)
 
-    (< ?a ?b)
-    [::plan/< ?a ?b]
-    (<= ?a ?b)
-    [::plan/<= ?a ?b]
-    (>= ?a ?b)
-    [::plan/>= ?a ?b]
-    (> ?a ?b)
-    [::plan/> ?a ?b]
+    (< ?a ?b & ?args)
+    (rewrite-variadic-bin-op ::plan/< ?a ?b ?args)
+
+    (<= ?a ?b & ?args)
+    (rewrite-variadic-bin-op ::plan/<= ?a ?b ?args)
+
+    (> ?a ?b & ?args)
+    (rewrite-variadic-bin-op ::plan/> ?a ?b ?args)
+
+    (>= ?a ?b & ?args)
+    (rewrite-variadic-bin-op ::plan/>= ?a ?b ?args)
 
     ;; bools
     (and & ?clause)

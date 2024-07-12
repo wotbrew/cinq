@@ -21,6 +21,8 @@ public class CinqDynamicArrayMap extends APersistentMap {
         int len = buffer.getInt();
         // keysize
         buffer.getInt();
+        // valsize
+        int valsize = buffer.getInt();
 
         Object[] keys = new Object[len];
         Object[] vals = new Object[len];
@@ -30,20 +32,25 @@ public class CinqDynamicArrayMap extends APersistentMap {
 
         decodeOffsets(buffer, len, offsets);
         decodeKeys(buffer, symbolList, len, keys, decodeInstance);
-        ByteBuffer heapBuffer = ensureHeapSlice(buffer);
+        ByteBuffer heapBuffer = ensureHeapSlice(buffer, valsize);
 
         return new CinqDynamicArrayMap(keys, vals, offsets, heapBuffer, symbolList, decodeInstance);
     }
 
-    private static ByteBuffer ensureHeapSlice(ByteBuffer buffer) {
+    private static ByteBuffer ensureHeapSlice(ByteBuffer buffer, int valsize) {
         ByteBuffer heapBuffer;
+        int oldpos = buffer.position();
+        int oldlimit = buffer.limit();
+        buffer.limit(buffer.position() + valsize);
         if (buffer.isDirect()) {
-            heapBuffer = ByteBuffer.allocate(buffer.remaining());
+            heapBuffer = ByteBuffer.allocate(valsize);
             heapBuffer.put(buffer);
             heapBuffer.flip();
         } else {
             heapBuffer = buffer.slice();
         }
+        buffer.position(oldpos + valsize);
+        buffer.limit(oldlimit);
         return heapBuffer;
     }
 

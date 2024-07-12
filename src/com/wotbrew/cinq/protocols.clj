@@ -3,7 +3,6 @@
 
 (defprotocol Database
   (create-relvar [db relvar-key])
-  (create-index [db relvar-key index-key])
   (write-transaction [db f])
   (read-transaction [db f]))
 
@@ -28,3 +27,6 @@
   (getn [idx key])
   (get1 [idx key not-found])
   (range-scan [idx test-a a test-b b]))
+
+(defprotocol Indexable
+  (index [indexable indexed-key]))

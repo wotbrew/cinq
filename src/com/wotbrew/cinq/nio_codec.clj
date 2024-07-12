@@ -37,26 +37,25 @@
 (deftype SymbolTable [^Map map ^:volatile-mutable ^objects list-array ^ArrayList adds]
   ISymbolTable
   (intern-symbol [_ symbol allow-intern]
-    (if-not allow-intern
-      ;; with read-intern we are going to be hitting m from multiple threads
-      (.get map symbol)
-
-      (let [n (.size map)
-            tid (unchecked-add t-max (long n))]
-        (if-some [previous-n (.putIfAbsent map symbol tid)]
-          previous-n
-          (do (.add adds symbol)
-              (if (< n (alength list-array))
-                (aset list-array n symbol)
-                (let [new-list-array (object-array (* 2 (alength list-array)))]
-                  (System/arraycopy list-array 0 new-list-array 0 n)
-                  (aset new-list-array n symbol)
-                  (set! list-array new-list-array)))
-              tid)))))
+    (or (.get map symbol)
+        (when allow-intern
+          (let [n (.size map)
+                tid (unchecked-add t-max (long n))]
+            (.put map symbol tid)
+            (.add adds symbol)
+            (if (< n (alength list-array))
+              (aset list-array n symbol)
+              (let [new-list-array (object-array (* 2 (alength list-array)))]
+                (System/arraycopy list-array 0 new-list-array 0 n)
+                (aset new-list-array n symbol)
+                (set! list-array new-list-array)))
+            tid))))
   (rollback-adds [_]
     (dotimes [i (.size adds)]
-      (aset list-array i nil)
-      (.remove map (.get adds i)))
+      (let [k (.get adds i)
+            n (unchecked-subtract (long (.get map k)) t-max)]
+        (aset list-array n nil)
+        (.remove map k)))
     (.clear adds))
   (clear-adds [_]
     (.clear adds))
@@ -85,52 +84,59 @@
     ;; todo change type depending on whether all keys symbolic
     (.putLong buffer t-map)
     (.putInt buffer len)
-    (let [keys-size-pos (.position buffer)
-          offset-table-pos (unchecked-add-int keys-size-pos 4)
-          _ (.position buffer offset-table-pos)
-          offset-table-size (* len 4)
-          ctr (int-array 1)]
-      (if-not (< offset-table-size (.remaining buffer))
-        ::not-enough-space
+    (if-not (buffer-min-remaining? buffer)
+      ::not-enough-space
+      (let [keys-size-pos (.position buffer)
+            vals-size-pos (unchecked-add-int keys-size-pos 4)
+            offset-table-pos (unchecked-add-int vals-size-pos 4)
+            _ (.position buffer offset-table-pos)
+            offset-table-size (* len 4)
+            ctr (int-array 1)]
+        (if-not (< offset-table-size (.remaining buffer))
+          ::not-enough-space
 
-        (let [kvs (sort-by key m)]
-          (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
-          (or
-            ;; two loops provide the best encoding
-            (reduce
-              (fn [_ [k]]
-                (let [i (aget ctr 0)]
-                  (if-not (< i len)
-                    (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
-                    (do (aset ctr 0 (unchecked-inc i))
-                        ;; put key
-                        (if-not (buffer-min-remaining? buffer)
-                          ::not-enough-space
-                          (some-> (encode-object k buffer symbol-table intern-flag) reduced))))))
-              nil
-              kvs)
-            (let [curr-pos (.position buffer)
-                  keys-size (unchecked-subtract-int curr-pos (unchecked-add-int offset-table-pos offset-table-size))]
-              (.putInt buffer keys-size-pos keys-size)
-              nil)
-            (let [start-pos (.position buffer)]
-              (aset ctr 0 0)
+          (let [kvs (sort-by key m)]
+            (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
+            (or
+              ;; two loops provide the best encoding
               (reduce
-                (fn [_ [_ v]]
+                (fn [_ [k]]
                   (let [i (aget ctr 0)]
                     (if-not (< i len)
                       (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
                       (do (aset ctr 0 (unchecked-inc i))
-                          ;; put offset from start
-                          (.putInt buffer
-                                   (unchecked-add-int offset-table-pos (unchecked-multiply-int i 4))
-                                   (unchecked-subtract (.position buffer) start-pos))
-                          ;; put val
+                          ;; put key
                           (if-not (buffer-min-remaining? buffer)
                             ::not-enough-space
-                            (some-> (encode-object v buffer symbol-table intern-flag) reduced))))))
+                            (some-> (encode-object k buffer symbol-table intern-flag) reduced))))))
                 nil
-                kvs))))))))
+                kvs)
+              (let [begin-vals-pos (.position buffer)
+                    keys-size (unchecked-subtract-int begin-vals-pos (unchecked-add-int offset-table-pos offset-table-size))]
+                (.putInt buffer keys-size-pos keys-size)
+                (or
+                  (let [start-pos (.position buffer)]
+                    (aset ctr 0 0)
+                    (reduce
+                      (fn [_ [_ v]]
+                        (let [i (aget ctr 0)]
+                          (if-not (< i len)
+                            (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                            (do (aset ctr 0 (unchecked-inc i))
+                                ;; put offset from start
+                                (.putInt buffer
+                                         (unchecked-add-int offset-table-pos (unchecked-multiply-int i 4))
+                                         (unchecked-subtract (.position buffer) start-pos))
+                                ;; put val
+                                (if-not (buffer-min-remaining? buffer)
+                                  ::not-enough-space
+                                  (some-> (encode-object v buffer symbol-table intern-flag) reduced))))))
+                      nil
+                      kvs))
+                  (let [end-vals-pos (.position buffer)
+                        vals-size (unchecked-subtract-int end-vals-pos begin-vals-pos)]
+                    (.putInt buffer vals-size-pos vals-size)
+                    nil))))))))))
 
 (extend-protocol Encode
   nil
@@ -232,7 +238,7 @@
       (.putInt buffer (.size l))
       (reduce
         (fn [_ x]
-          (if (not (buffer-min-remaining? buffer))
+          (if-not (buffer-min-remaining? buffer)
             (reduced ::not-enough-space)
             (some-> (encode-object x buffer symbol-table intern-flag) reduced)))
         nil
@@ -245,7 +251,7 @@
       (.putInt buffer (.size s))
       (reduce
         (fn [_ x]
-          (if (not (buffer-min-remaining? buffer))
+          (if-not (buffer-min-remaining? buffer)
             (reduced ::not-enough-space)
             (some-> (encode-object x buffer symbol-table intern-flag) reduced)))
         nil
@@ -362,7 +368,7 @@
         (recur (ByteBuffer/allocate (* 2 (.capacity content-buf))))))))
 
 (defn decode [^ByteBuffer buf]
-  (decode-object buf (object-array (decode-object buf []))))
+  (decode-object buf (object-array (decode-object buf (object-array 0)))))
 
 (comment
 
@@ -476,6 +482,7 @@
     (if (= t-map tid)
       (let [len (.getInt valbuf)
             key-size (.getInt valbuf)
+            _val-size (.getInt valbuf)
             offset-pos (.position valbuf)
             offset-table-size (unchecked-multiply-int len 4)
             key-start-pos (unchecked-add-int offset-pos offset-table-size)

@@ -218,10 +218,8 @@
                            retexpr (fn [i expr]
                                      (if (= 0 i)
                                        expr
-                                       `(if ~expr
-                                          (do (.clear ~valbuf)
-                                              true)
-                                          false)))]
+                                       `(do (.clear ~valbuf)
+                                            ~expr)))]
                        `(nativeFilter
                           [_# ~symbol-table]
                           (let [~@(for [[sym :as binding] filter-bindings

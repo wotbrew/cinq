@@ -1,15 +1,14 @@
 (ns com.wotbrew.cinq
   (:refer-clojure :exclude [use max min count set update replace read range var])
-  (:require [clojure.core :as clj]
-            [com.wotbrew.cinq.eager-loop :as el]
+  (:require [com.wotbrew.cinq.eager-loop :as el]
             [com.wotbrew.cinq.parse :as parse]
             [com.wotbrew.cinq.plan :as plan]
             [com.wotbrew.cinq.protocols :as p]
+            [com.wotbrew.cinq.range-test :as range-test]
+            [com.wotbrew.cinq.ref-var :as ref-var]
             [meander.epsilon :as m]
             [meander.strategy.epsilon :as r])
-  (:import (clojure.lang IReduce IReduceInit)
-           (com.wotbrew.cinq CinqUtil)
-           (com.wotbrew.cinq.protocols BigCount IncrementalRelvar Index Relvar Scannable)))
+  (:import (com.wotbrew.cinq.protocols Index Relvar Scannable)))
 
 (defn optimize-plan [ra] (plan/rewrite ra))
 
@@ -127,10 +126,9 @@
   {:pre [(keyword? relvar-id)]}
   (p/create-relvar db relvar-id))
 
-(defn create-index [db [relvar-id indexed-key]]
-  {:pre [(keyword? relvar-id)
-         (keyword? indexed-key)]}
-  (p/create-index db relvar-id indexed-key))
+(defn index [relvar indexed-key]
+  {:pre [(keyword? indexed-key)]}
+  (p/index relvar indexed-key))
 
 (defn rel-set [relvar rel] (p/rel-set relvar rel))
 
@@ -195,19 +193,6 @@
 
 (defn rel-count [rel] (p/big-count rel))
 
-(defn- lt [a b] (< (CinqUtil/compare a b) 0))
-(defn- lte [a b] (<= (CinqUtil/compare a b) 0))
-(defn- gt [a b] (> (CinqUtil/compare a b) 0))
-(defn- gte [a b] (>= (CinqUtil/compare a b) 0))
-
-(defn- index-test [test-fn]
-  (condp identical? test-fn
-    < lt
-    <= lte
-    > gt
-    >= gte
-    (throw (ex-info "Not a valid range query test, accepted (<, <=, >, >=)" {}))))
-
 (defn range
   "Index range scan.
 
@@ -220,14 +205,14 @@
   (range index > 3 <= 100) all values between 3-100 incl."
   ([index test a]
    (condp identical? test
-     > (p/range-scan index gt a nil nil)
-     >= (p/range-scan index gte a nil nil)
-     (p/range-scan index nil nil (index-test test) a)))
+     > (p/range-scan index range-test/gt a nil nil)
+     >= (p/range-scan index range-test/gte a nil nil)
+     (p/range-scan index nil nil (range-test/index-test test) a)))
   ([index start-test start-key end-test end-key]
    (condp identical? start-test
-     < (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
-     <= (p/range-scan index (index-test end-test) end-key (index-test start-test) start-key)
-     (p/range-scan index (index-test start-test) start-key (index-test end-test) end-key))))
+     < (p/range-scan index (range-test/index-test end-test) end-key (range-test/index-test start-test) start-key)
+     <= (p/range-scan index (range-test/index-test end-test) end-key (range-test/index-test start-test) start-key)
+     (p/range-scan index (range-test/index-test start-test) start-key (range-test/index-test end-test) end-key))))
 
 (defn getn
   "Index lookup returning a relation of rows (cinq) eq to the key,
@@ -319,42 +304,6 @@
 
 (prefer-method print-method Index Scannable)
 
-(deftype RefVariable [ref]
-  Scannable
-  (scan [rv f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init @ref))
-  IReduceInit
-  (reduce [_ f init] (reduce f init (vals @ref)))
-  Relvar
-  (rel-set [rv rel]
-    (dosync
-      (ref-set ref
-               (p/scan
-                 rel
-                 (fn [acc _ rsn o] (assoc acc rsn o))
-                 (sorted-map))))
-    nil)
-  IncrementalRelvar
-  (insert [_ o]
-    (dosync
-      (let [ret (volatile! nil)]
-        (alter ref
-               (fn [sm]
-                 (let [[last-rsn] (first (reverse sm))
-                       rsn (if last-rsn (inc last-rsn) 0)]
-                   (vreset! ret rsn)
-                   (assoc sm rsn o))))
-        @ret)))
-  (delete [_ rsn]
-    (dosync
-      (let [ret (volatile! false)]
-        (alter ref
-               (fn [sm]
-                 (if (contains? sm rsn)
-                   (do (vreset! ret true) (dissoc sm rsn))
-                   sm)))
-        @ret)))
-  BigCount
-  (big-count [_] (clj/count @ref)))
 
 (defn relvar
   "An in-memory relvar, for testing and experimentation at the repl.
@@ -364,12 +313,32 @@
 
   Will be quite slow compared to com.wotbrew.cinq.lmdb backed relvars."
   []
-  (->RefVariable (ref (sorted-map))))
+  (ref-var/->RefVariable (ref [(sorted-map) {}])))
 
 (comment
 
-  (doto (relvar)
-    (insert 42)
-    (insert 43))
+  (let [a (relvar)
+        b (relvar)]
+    (dosync
+      (rel-set a [1, 2, 3])
+      (rel-set b [1, 2])
+      (run [x a
+            y b
+            :when (= x y)]
+        (update x (inc x))
+        (update y (dec y))))
+    (println "a:" a)
+    (println "b:" b))
+
+  (def x (relvar))
+  x
+  (index x :foo)
+  (insert x {:foo 42})
+  (insert x {:foo 43})
+  (-> x :foo (get 42))
+  (-> x :foo (range > 42))
+  (-> x :foo (range > 41 < 43))
+  (-> x :foo (get1 43))
+  (-> x :foo (get1 44))
 
   )

@@ -6,7 +6,10 @@
                  [meander/epsilon "0.0.650"]]
   :profiles {:dev {:dependencies [[io.airlift.tpch/tpch "0.10"]
                                   [criterium "0.4.6"]
-                                  [org.lmdbjava/lmdbjava "0.9.0"]]
+                                  [org.lmdbjava/lmdbjava "0.9.0"]
+                                  [org.clojure/data.csv "1.1.0"]
+                                  [org.clojure/test.check "1.1.1"]
+                                  [djblue/portal "0.56.0"]]
                    :source-paths ["dev"]}}
   :jvm-opts ^:replace ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                        "--add-exports" "java.base/sun.nio.ch=ALL-UNNAMED"]

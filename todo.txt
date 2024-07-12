@@ -1,10 +1,14 @@
 ---
-Printing
 
-#cinq/rel [1, 2, 3, 4] Scannable.
-#cinq/var [1, 2, 3, 4] Variable
-#cinq/idx [[42 {:n 42}] [42 {:n 42, :a 43}]] Index
-#cinq/uni {42 {:n 42}} UniqueIndex
+lmdb root variable scan does not use bufcmp-ksv, only tx variables do
+
+---
+
+lmdb create-relvar can throw map-resized
+
+---
+
+Index max/min top-k
 
 ---
 

@@ -1,18 +1,28 @@
 (ns com.wotbrew.cinq.lmdb-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.java.io :as io]
+            [clojure.spec.alpha :as s]
+            [clojure.spec.gen.alpha :as gen]
+            [clojure.test :refer :all]
+            [clojure.test.check :as tc]
+            [clojure.test.check.generators :as tcg]
+            [clojure.test.check.properties :as tcp]
             [com.wotbrew.cinq :as c]
-            [com.wotbrew.cinq.lmdb :as lmdb])
+            [com.wotbrew.cinq.lmdb :as lmdb]
+            [com.wotbrew.cinq.nio-codec :as codec])
   (:import (java.io File)))
 
-(defonce ^:redef db (lmdb/database (File/createTempFile "cinq-test" ".cinq")))
+(defn temp-db []
+  (lmdb/database (File/createTempFile "cinq-test" ".cinq")))
+
+(defonce ^:redef db (temp-db))
 
 (defn- cleanup []
   (c/run [{:keys [k, rsn]} (:lmdb/variables db)
-           :when rsn]
-         ;; later we might delete the database
-         (c/rel-set (get db k) []))
+          :when rsn]
+    ;; later we might delete the database
+    (c/rel-set (get db k) []))
   (.close db)
-  (.bindRoot #'db (lmdb/database (File/createTempFile "cinq-test" ".cinq"))))
+  (.bindRoot #'db (temp-db)))
 
 (use-fixtures :each (fn [f] (try (f) (finally (cleanup)))))
 
@@ -66,7 +76,7 @@
 
 (deftest index-test
   (let [foo (c/create db :foo)
-        idx (c/create-index db [:foo :id])]
+        idx (c/index foo :id)]
 
     (c/rel-set foo [])
     (is (= [] (vec (idx 42))))
@@ -94,4 +104,47 @@
 
     (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
     (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))
-    (is (= [42] (vec (c/q [f (get idx 42) :when (< f:id 43)] f:id))))))
+    (is (= [42] (vec (c/q [f (get idx 42) :when (< f:id 43)] f:id)))))
+  )
+
+(s/def ::value
+  (s/or :int int?
+        :float (s/with-gen float? #(gen/double* {:NaN? false, :infinite? false}))
+        :string string?
+        :keyword keyword?
+        #_#_:symbol symbol?
+        :list (s/every ::value :max-count 10)
+        :map (s/map-of keyword? ::value :max-count 10)
+        :inst (s/with-gen inst? (fn [] (tcg/fmap #(java.util.Date. %) (tcg/choose 0 1720780830887))))))
+
+(s/def ::value-seq (s/every ::value :max-count 10))
+
+(deftest round-trip-test
+  (let [file (File/createTempFile "cinq-test" ".cinq")
+        open-db (partial lmdb/database file)
+        no-shrink true
+        vgen ((if no-shrink tcg/no-shrink identity) (s/gen ::value-seq))
+        rt (fn [vseq]
+             (try
+               (and (with-open [db (open-db)]
+                      (c/rel-set (c/create db :foo) vseq)
+                      (= (vec vseq) (vec (:foo db))))
+                    (with-open [db (open-db)]
+                      (= (vec vseq) (vec (:foo db)))))
+               (finally
+                 (io/delete-file file true))))
+        prop (tcp/for-all [vseq vgen] (rt vseq))
+        tr (if true
+             {:pass? true}
+             (tc/quick-check 100 prop #_#_:reporter-fn prn))]
+
+    (is (:pass? tr))
+
+    (when-not (:pass? tr)
+      (prn (:seed tr))
+      (prn (:smallest (:shrunk tr))))
+
+    (is (rt []))
+    (is (rt [[]]))
+    (is (rt [[{} 0]]))
+    (is (rt (map (fn [i] (keyword (str "i" i))) (range 512))))))
