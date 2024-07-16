@@ -11,14 +11,14 @@
     (codec/bufcmp-ksv test-buffer index-buffer key-int)))
 
 (deftest bufcmp-ksv-test
-  (is (neg? (cmp nil nil :a)))
+  (is (= nil (cmp nil nil :a)))
   (is (= 0 (cmp nil {:a nil} :a)))
   (is (neg? (cmp nil {:a 42} :a)))
   (is (pos? (cmp 44 {:a 42} :a)))
   (is (= 0 (cmp 44 {:a 44} :a)))
   (is (neg? (cmp 42 {:a 44, :b 42} :a)))
   (is (= 0 (cmp 42 {:a 44, :b 42} :b)))
-  (is (neg? (cmp 42 {:a 44, :b 42} :c)))
+  (is (= nil (cmp 42 {:a 44, :b 42} :c)))
   (is (= 0 (cmp {} {:a {}} :a)))
   (is (not= 0 (cmp {} {:a nil} :a)))
   (is (not= 0 (cmp {} {:a {:b 42}} :a)))

@@ -1,10 +1,10 @@
 (ns com.wotbrew.cinq.range-test
   (:import (com.wotbrew.cinq CinqUtil)))
 
-(defn lt [a b] (< (CinqUtil/compare a b) 0))
-(defn lte [a b] (<= (CinqUtil/compare a b) 0))
-(defn gt [a b] (> (CinqUtil/compare a b) 0))
-(defn gte [a b] (>= (CinqUtil/compare a b) 0))
+(defn lt [a b] (CinqUtil/lt a b))
+(defn lte [a b] (CinqUtil/lte a b))
+(defn gt [a b] (CinqUtil/gt a b))
+(defn gte [a b] (CinqUtil/gte a b))
 
 (defn index-test [test-fn]
   (condp identical? test-fn

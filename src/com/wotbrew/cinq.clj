@@ -304,7 +304,6 @@
 
 (prefer-method print-method Index Scannable)
 
-
 (defn relvar
   "An in-memory relvar, for testing and experimentation at the repl.
 
@@ -342,3 +341,4 @@
   (-> x :foo (get1 44))
 
   )
+

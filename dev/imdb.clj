@@ -120,7 +120,7 @@
      :averageRating (apply-or-null parse-double averageRating)
      :numVotes (apply-or-null parse-long numVotes)}))
 
-(def csv-db
+(def tsv-db
   {:names names-tsv
    :akas akas-tsv
    :titles titles-tsv
@@ -138,7 +138,7 @@
 (defonce lmdb (lmdb/database "tmp/imdb.cinq"))
 
 (defn load-tsv-data-into-lmdb []
-  (doseq [[k tsv] csv-db
+  (doseq [[k tsv] tsv-db
           :let [rel (get lmdb k)]]
     (when-not (c/rel-first rel)
       (println "Loading" k)
@@ -208,7 +208,7 @@
 
 (comment
 
-  (doseq [[k tsv] csv-db
+  (doseq [[k tsv] tsv-db
           :let [rel (get lmdb k)]]
     (when-not (c/rel-first rel) (c/rel-set rel tsv)))
 
@@ -225,7 +225,7 @@
         :when (= p:nconst n:nconst)]
     n:primaryName)
 
-  (time (vec (film-cast csv-db "Alien")))
+  (time (vec (film-cast tsv-db "Alien")))
   (time (vec (film-cast lmdb "Alien")))
 
   (require 'criterium.core)
@@ -237,15 +237,16 @@
     )
 
   (c/q [t titles
-        :when (str/starts-with? t:primaryTitle "Star Wars")]
-    t:primaryTitle)
+        :when (and (= :videoGame t:titleType)
+                   (str/starts-with? t:primaryTitle "Star Wars"))]
+    [t:primaryTitle (c/scalar [r ratings :when (= r:tconst t:tconst)] r:averageRating)])
 
   (c/q [t titles
-        :when (and (< 180 t:runtimeMinutes)
-                   (= t:titleType :movie)
-                   (< 1990 t:startYear 2001))
+        :when (and (= t:titleType :movie) (< 1990 t:startYear 2001))
         :join [r ratings (= t:tconst r:tconst)]
-        :when (< 4.5 r:averageRating)]
-    t)
+        :when (and (< 8.0 r:averageRating) (< 10000 r:numVotes))
+        :order [r:averageRating :desc]
+        :limit 10]
+    t:primaryTitle)
 
   )

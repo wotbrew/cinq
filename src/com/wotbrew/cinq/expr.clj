@@ -81,13 +81,13 @@
                `(CinqUtil/eq ~?a ~?b)
 
                [::plan/<= ?a ?b]
-               `(<= (CinqUtil/compare ~?a ~?b) 0)
+               `(CinqUtil/lte ~?a ~?b)
                [::plan/< ?a ?b]
-               `(< (CinqUtil/compare ~?a ~?b) 0)
+               `(CinqUtil/lt ~?a ~?b)
                [::plan/>= ?a ?b]
-               `(>= (CinqUtil/compare ~?a ~?b) 0)
+               `(CinqUtil/gte ~?a ~?b)
                [::plan/> ?a ?b]
-               `(> (CinqUtil/compare ~?a ~?b) 0)
+               `(CinqUtil/gt ~?a ~?b)
 
                [::plan/scalar-sq ?plan]
                `(first ~(compile-plan ?plan))
@@ -138,25 +138,25 @@
     (inst? expr) true
     :else false))
 
-(defn pred-can-be-reordered? [expr]
+(defn expr-can-be-reordered? [expr]
   (m/match
     expr
-    [::plan/= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/and & ?clause] (every? pred-can-be-reordered? ?clause)
-    [::plan/or & ?clause] (every? pred-can-be-reordered? ?clause)
-    [::plan/< ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/<= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/> ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/>= ?a ?b] (and (pred-can-be-reordered? ?a) (pred-can-be-reordered? ?b))
-    [::plan/lookup ?kw ?expr ?t] (pred-can-be-reordered? ?expr)
-    [::plan/not ?expr] (pred-can-be-reordered? ?expr)
-    [::plan/in ?expr ?set] (pred-can-be-reordered? ?expr)
-    [::plan/contains ?coll ?expr] (and (pred-can-be-reordered? ?coll) (pred-can-be-reordered? ?expr))
-    [::plan/apply-n2n ?sym & ?args] (every? pred-can-be-reordered? ?args)
+    [::plan/= ?a ?b] (and (expr-can-be-reordered? ?a) (expr-can-be-reordered? ?b))
+    [::plan/and & ?clause] (every? expr-can-be-reordered? ?clause)
+    [::plan/or & ?clause] (every? expr-can-be-reordered? ?clause)
+    [::plan/< ?a ?b] (and (expr-can-be-reordered? ?a) (expr-can-be-reordered? ?b))
+    [::plan/<= ?a ?b] (and (expr-can-be-reordered? ?a) (expr-can-be-reordered? ?b))
+    [::plan/> ?a ?b] (and (expr-can-be-reordered? ?a) (expr-can-be-reordered? ?b))
+    [::plan/>= ?a ?b] (and (expr-can-be-reordered? ?a) (expr-can-be-reordered? ?b))
+    [::plan/lookup ?kw ?expr ?t] (expr-can-be-reordered? ?expr)
+    [::plan/not ?expr] (expr-can-be-reordered? ?expr)
+    [::plan/in ?expr ?set] (expr-can-be-reordered? ?expr)
+    [::plan/contains ?coll ?expr] (and (expr-can-be-reordered? ?coll) (expr-can-be-reordered? ?expr))
+    [::plan/apply-n2n ?sym & ?args] (every? expr-can-be-reordered? ?args)
     (m/guard (symbol? expr)) true
-    (m/guard (map? expr)) (every? #(and (pred-can-be-reordered? (key %)) (pred-can-be-reordered? (val %))) expr)
-    (m/guard (vector? expr)) (every? pred-can-be-reordered? expr)
-    (m/guard (set? expr)) (every? pred-can-be-reordered? expr)
+    (m/guard (map? expr)) (every? #(and (expr-can-be-reordered? (key %)) (expr-can-be-reordered? (val %))) expr)
+    (m/guard (vector? expr)) (every? expr-can-be-reordered? expr)
+    (m/guard (set? expr)) (every? expr-can-be-reordered? expr)
     (m/guard (certainly-const-expr? expr)) true
     (m/guard (seq? expr)) false
     ;; reader literals should be ok as they have no env access

@@ -8,7 +8,7 @@
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
   (:import (clojure.lang IFn IReduceInit)
-           (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunction$NativeFilter)
+           (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunction$NativeFilter CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)
            (java.util ArrayList Comparator HashMap)
            (java.util.function BiFunction Function)))
@@ -183,8 +183,8 @@
         condition-bindings (concat cond-only cond-bind)
 
         ;; temporary
-        #_#_ condition-used (concat filter-bindings condition-used)
-        #_#_ filter-bindings []
+        #_#_condition-used (concat filter-bindings condition-used)
+        #_#_filter-bindings []
 
         lambda `(reify
                   IFn
@@ -239,11 +239,11 @@
                                              (retexpr
                                                i
                                                (case cmp
-                                                 := `(= 0 ~bufcmp-expr)
-                                                 :< `(< ~bufcmp-expr 0)
-                                                 :<= `(<= ~bufcmp-expr 0)
-                                                 :> `(> ~bufcmp-expr 0)
-                                                 :>= `(>= ~bufcmp-expr 0))))))))))))
+                                                 := `(CinqUtil/eq 0 ~bufcmp-expr)
+                                                 :< `(CinqUtil/lt ~bufcmp-expr 0)
+                                                 :<= `(CinqUtil/lte ~bufcmp-expr 0)
+                                                 :> `(CinqUtil/gt ~bufcmp-expr 0)
+                                                 :>= `(CinqUtil/gte ~bufcmp-expr 0))))))))))))
                      `(nativeFilter
                         [_# _#]
                         (reify CinqScanFunction$NativeFilter (apply [_# _rsn# _buf#] true))))
@@ -484,23 +484,27 @@
              (let [~@(t/emit-tuple-column-binding left-t left-cols (vec (remove (set right-cols) left-cols)))
                    ~@(t/emit-optional-column-binding right-t right-cols)]
                ~body))]
-       ~(emit-loop
-          right
-          `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
-             (or (loop [~i 0]
+       (or ~(emit-loop
+              right
+              `(when-some [~al (.get ~ht ~(t/emit-key (rewrite-expr [right] right-key-expr)))]
+                 (loop [~i 0]
                    (when (< ~i (.size ~al))
-                     ~(case (count theta-expressions)
-                        0 `(~cont-lambda (.get ~al ~i) ~(t/emit-tuple right))
-                        `(let [~left-t (.get ~al ~i)
-                               ~@(t/emit-tuple-column-binding left-t left-cols theta (set right-cols))]
-                           (if (and ~@theta-expressions)
-                             (~cont-lambda ~left-t ~(t/emit-tuple right))
-                             (recur (unchecked-inc ~i)))))))
-                 (.forEach ~ht (reify Function
-                                 (apply [_# t#]
-                                   (let [~left-t t#]
-                                     (when-not ~(t/get-mark left-t)
-                                       (~cont-lambda ~left-t nil))))))))))))
+                     (let [~left-t (.get ~al ~i)]
+                       (if ~(t/get-mark left-t)
+                         (recur (unchecked-inc ~i))
+                         ~(case (count theta-expressions)
+                            0 `(or (~cont-lambda ~left-t ~(t/emit-tuple right))
+                                   (recur (unchecked-inc ~i)))
+                            `(let [~@(t/emit-tuple-column-binding left-t left-cols theta (set right-cols))]
+                               (if (and ~@theta-expressions)
+                                 `(or (~cont-lambda ~left-t ~(t/emit-tuple right))
+                                      (recur (unchecked-inc ~i)))
+                                 (recur (unchecked-inc ~i)))))))))))
+           (.forEach ~ht (reify Function
+                           (apply [_# t#]
+                             (let [~left-t t#]
+                               (when-not ~(t/get-mark left-t)
+                                 (~cont-lambda ~left-t nil))))))))))
 
 (defn emit-equi-semi-join [left right left-key-expr right-key-expr theta body]
   (let [al (with-meta (gensym "al") {:tag `ArrayList})

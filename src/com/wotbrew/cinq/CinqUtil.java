@@ -218,68 +218,207 @@ public class CinqUtil {
   }
 
   // null != null, null != any-obj
-  public static boolean eq(Object a, Object b) {
-    if (a == null) return false;
-    if (b == null) return false;
+  public static Boolean eq(Object a, Object b) {
+    if (a == null) return null;
+    if (b == null) return null;
     // equiv very slow - investigate options
-    return a.equals(b);
+    if(a.equals(b)) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(long a, Object b) {
-    if (b == null) return false;
-    return b.equals(a);
+  public static Boolean eq(long a, Object b) {
+    if (b == null) return null;
+    // equiv very slow - investigate options
+    if(b.equals(a)) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(Object a, long b) {
-    if (a == null) return false;
-    return a.equals(b);
+  public static Boolean eq(Object a, long b) {
+    if (a == null) return null;
+    // equiv very slow - investigate options
+    if(a.equals(b)) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(double a, Object b) {
-    if (b == null) return false;
-    return b.equals(a);
+  public static Boolean eq(double a, Object b) {
+    if (b == null) return null;
+    // equiv very slow - investigate options
+    if(b.equals(a)) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(Object a, double b) {
-    if (a == null) return false;
-    return a.equals(b);
+  public static Boolean eq(Object a, double b) {
+    if (a == null) return null;
+    // equiv very slow - investigate options
+    if(a.equals(b)) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(long a, long b) {
-    return a == b;
+  public static Boolean eq(long a, long b) {
+    if(a == b) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(double a, double b) {
-    return a == b;
+  public static Boolean eq(double a, double b) {
+    if(a == b) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(double a, long b) {
-    return a == b;
+  public static Boolean eq(double a, long b) {
+    if(a == b) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static boolean eq(long a, double b) {
-    return a == b;
+  public static Boolean eq(long a, double b) {
+    if(a == b) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
 
-  public static int compare(long a, long b) {
-     return Long.compare(a, b);
+  public static Boolean lt(long a, long b) {
+    return a < b;
+  }
+  public static Boolean lt(double a, double b) {
+    return a < b;
+  }
+  public static Boolean lt(double a, long b) {
+    return Util.compare(a, b) < 0;
+  }
+  public static Boolean lt(long a, double b) {
+    return Util.compare(a, b) < 0;
+  }
+  public static Boolean lt(Object a, Object b) {
+    if(a == null) return null;
+    if(b == null) return null;
+    if(Util.compare(a, b) < 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lt(Object a, long b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) < 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lt(long a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) < 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lt(double a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) < 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lt(Object a, double b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) < 0) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
 
-  public static int compare(double a, double b) {
-      return Double.compare(a, b);
+  public static Boolean lte(long a, long b) {
+    return a <= b;
+  }
+  public static Boolean lte(double a, double b) {
+    return a <= b;
+  }
+  public static Boolean lte(double a, long b) {
+    return Util.compare(a, b) <= 0;
+  }
+  public static Boolean lte(long a, double b) {
+    return Util.compare(a, b) <= 0;
+  }
+  public static Boolean lte(Object a, Object b) {
+    if(a == null) return null;
+    if(b == null) return null;
+    if(Util.compare(a, b) <= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lte(Object a, long b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) <= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lte(long a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) <= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lte(double a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) <= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean lte(Object a, double b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) <= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  
+  public static Boolean gt(long a, long b) {
+    return a > b;
+  }
+  public static Boolean gt(double a, double b) {
+    return a > b;
+  }
+  public static Boolean gt(double a, long b) {
+    return Util.compare(a, b) > 0;
+  }
+  public static Boolean gt(long a, double b) {
+    return Util.compare(a, b) > 0;
+  }
+  public static Boolean gt(Object a, Object b) {
+    if(a == null) return null;
+    if(b == null) return null;
+    if(Util.compare(a, b) > 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gt(Object a, long b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) > 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gt(long a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) > 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gt(double a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) > 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gt(Object a, double b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) > 0) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
 
-  public static int compare(Object a, Object b) {
-    return Util.compare(a, b);
+  public static Boolean gte(long a, long b) {
+    return a >= b;
   }
-  public static int compare(Object a, long b) {
-    return Util.compare(a, b);
+  public static Boolean gte(double a, double b) {
+    return a >= b;
   }
-  public static int compare(long a, Object b) {
-    return Util.compare(a, b);
+  public static Boolean gte(double a, long b) {
+    return Util.compare(a, b) >= 0;
   }
-  public static int compare(double a, Object b) {
-    return Util.compare(a, b);
+  public static Boolean gte(long a, double b) {
+    return Util.compare(a, b) >= 0;
   }
-  public static int compare(Object a, double b) {
-    return Util.compare(a, b);
+  public static Boolean gte(Object a, Object b) {
+    if(a == null) return null;
+    if(b == null) return null;
+    if(Util.compare(a, b) >= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static int compare(long a, double b) {
-    return Util.compare(a, b);
+  public static Boolean gte(Object a, long b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) >= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
-  public static int compare(double a, long b) {
-    return Util.compare(a, b);
+  public static Boolean gte(long a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) >= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gte(double a, Object b) {
+    if(b == null) return null;
+    if(Util.compare(a, b) >= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
+  }
+  public static Boolean gte(Object a, double b) {
+    if(a == null) return null;
+    if(Util.compare(a, b) >= 0) return Boolean.TRUE;
+    return Boolean.FALSE;
   }
 }

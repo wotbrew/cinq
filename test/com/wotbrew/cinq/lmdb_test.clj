@@ -148,3 +148,48 @@
     (is (rt [[]]))
     (is (rt [[{} 0]]))
     (is (rt (map (fn [i] (keyword (str "i" i))) (range 512))))))
+
+(deftest native-eq-test
+  (let [foo (c/create db :foo)
+        _ (c/rel-set foo [{:n 42}])]
+    (is (= 42 (c/rel-first (c/q [f foo :when (= f:n 42)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (= 42 f:n2)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (= f:n nil)] f:n) ::no-result)))))
+
+(deftest native-cmp-test
+  (let [foo (c/create db :foo)
+        _ (c/rel-set foo [{:n 42, :n3 nil}])]
+
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n 42)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n 41)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n 42)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n 43)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n 42)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n 43)] f:n) ::no-result)))
+
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n nil)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n2 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n2 Long/MAX_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n3 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (< f:n3 Long/MAX_VALUE)] f:n) ::no-result)))
+
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n nil)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n2 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n2 Long/MAX_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n3 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (<= f:n3 Long/MAX_VALUE)] f:n) ::no-result)))
+
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n nil)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n2 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n2 Long/MAX_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n3 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (> f:n3 Long/MAX_VALUE)] f:n) ::no-result)))
+
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n nil)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n2 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n2 Long/MAX_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n3 Long/MIN_VALUE)] f:n) ::no-result)))
+    (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n3 Long/MAX_VALUE)] f:n) ::no-result)))
+
+    (is (= 42 (c/rel-first (c/q [f foo :when (<= f:n 42)] f:n))))
+    (is (= 42 (c/rel-first (c/q [f foo :when (>= f:n 42)] f:n))))))

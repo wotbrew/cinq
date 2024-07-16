@@ -266,7 +266,7 @@
   "Return a sub relation index (1, 2) for joins, left-joins, products if the predicate can be pushed into one of these sub relations.
   nil if not."
   [ra pred]
-  (when (expr/pred-can-be-reordered? pred)
+  (when (expr/expr-can-be-reordered? pred)
     (m/match ra
 
       (m/or [::cross-join ?a ?b]
@@ -493,14 +493,13 @@
     ;; if E not correlated with R
 
     (m/and [::apply ?mode ?left [::where ?right [::and & ?clauses]]]
-           (m/guard (#{:cross-join :left-join :single-join} ?mode))
+           (m/guard (#{:cross-join :left-join} ?mode))
            (m/guard (not-dependent? ?left ?right)))
     ;; =>
     (let [{dependent true, not-dependent false} (group-by #(dependent? ?left %) ?clauses)]
       [(case ?mode
          :cross-join ::join
-         :left-join ::left-join
-         :single-join ::single-join)
+         :left-join ::left-join)
        ?left
        (case (count not-dependent)
          0 ?right
@@ -512,15 +511,46 @@
          (into [::and] dependent))])
 
     (m/and [::apply ?mode ?left [::where ?right ?pred]]
-           (m/guard (#{:cross-join :left-join :single-join} ?mode))
+           (m/guard (#{:cross-join :left-join} ?mode))
            (m/guard (not-dependent? ?left ?right)))
     ;; =>
     [(case ?mode
        :cross-join ::join
-       :left-join ::left-join
-       :single-join ::single-join)
+       :left-join ::left-join)
      ?left
      ?right
+     ?pred]
+    ;; endregion
+
+    ;; region de-correlation rule 2 - scalar single joins
+    (m/and [::apply :single-join ?left [::project [::where ?right [::and & ?clauses]] [[?col ?expr]]]]
+           (m/guard (not-dependent? ?left ?right))
+           ;; avoid rewriting semi/anti-join candidates
+           (m/guard (not (true? ?expr)))
+           (m/guard (expr/expr-can-be-reordered? ?expr)))
+    ;; =>
+    (let [{dependent true, not-dependent false} (group-by #(dependent? ?left %) ?clauses)
+          right [::let ?right [[?col ?expr]]]]
+      [::single-join
+       ?left
+       (case (count not-dependent)
+         0 right
+         1 [::where right (first not-dependent)]
+         [::where right (into [::and] not-dependent)])
+       (case (count dependent)
+         0 true
+         1 (first dependent)
+         (into [::and] dependent))])
+
+    (m/and [::apply :single-join ?left [::project [::where ?right ?pred] [[?col ?expr]]]]
+           (m/guard (not-dependent? ?left ?right))
+           ;; avoid rewriting semi/anti-join candidates
+           (m/guard (not (true? ?expr)))
+           (m/guard (expr/expr-can-be-reordered? ?expr)))
+    ;; =>
+    [::single-join
+     ?left
+     [::let ?right [[?col ?expr]]]
      ?pred]
     ;; endregion
 
@@ -564,32 +594,32 @@
 
     (m/and [::join ?left ?right ?pred]
            (m/guard (not-dependent? ?right ?pred))
-           (m/guard (expr/pred-can-be-reordered? ?pred)))
+           (m/guard (expr/expr-can-be-reordered? ?pred)))
     ;; =>
     [::join [::where ?left ?pred] ?right true]
 
     (m/and [::join ?left ?right [::and & ?preds]]
            (m/guard (some #(and (not-dependent? ?right %)
-                                (expr/pred-can-be-reordered? %))
+                                (expr/expr-can-be-reordered? %))
                           ?preds)))
     ;; =>
-    (let [[push-left keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds)]
+    (let [[push-left keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/expr-can-be-reordered? %)) ?preds)]
       [::join [::where ?left (reduce conjoin-predicates true push-left)]
        ?right
        (reduce conjoin-predicates true keep-pred)])
 
     (m/and [::join ?left ?right ?pred]
            (m/guard (not-dependent? ?left ?pred))
-           (m/guard (expr/pred-can-be-reordered? ?pred)))
+           (m/guard (expr/expr-can-be-reordered? ?pred)))
     ;; =>
     [::join ?left [::where ?right ?pred] true]
 
     (m/and [::join ?left ?right [::and & ?preds]]
            (m/guard (some #(and (not-dependent? ?left %)
-                                (expr/pred-can-be-reordered? %))
+                                (expr/expr-can-be-reordered? %))
                           ?preds)))
     ;; =>
-    (let [[push-right keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/pred-can-be-reordered? %)) ?preds)]
+    (let [[push-right keep-pred] ((juxt filter remove) #(and (not-dependent? ?right %) (expr/expr-can-be-reordered? %)) ?preds)]
       [::join ?left
        [::where ?right (reduce conjoin-predicates true push-right)]
        (reduce conjoin-predicates true keep-pred)])
@@ -855,7 +885,7 @@
   (-> (r/match
         [::join* ?rels ?preds]
         (let [_ (assert (seq ?rels))
-              {reordable-preds true, outer-preds false} (group-by expr/pred-can-be-reordered? ?preds)
+              {reordable-preds true, outer-preds false} (group-by expr/expr-can-be-reordered? ?preds)
               original-order (zipmap ?rels (range))]
 
           ;; sort each unsatisfied predicate by how many relations do I need to add to satisfy the join

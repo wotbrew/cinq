@@ -97,6 +97,8 @@
 
 (declare parse)
 
+(defn true-or-nil [a] (if (nil? a) nil true))
+
 (defn- rewrite-variadic-bin-op [op a b args]
   (if (empty? args)
     [op a b]
@@ -132,18 +134,23 @@
     [::plan/count]
 
     ;; comparisons
+    (= ?a) `(true-or-nil ~?a)
     (= ?a ?b & ?args)
     (rewrite-variadic-bin-op ::plan/= ?a ?b ?args)
 
+    (< ?a) `(true-or-nil ~?a)
     (< ?a ?b & ?args)
     (rewrite-variadic-bin-op ::plan/< ?a ?b ?args)
 
+    (<= ?a) `(true-or-nil ~?a)
     (<= ?a ?b & ?args)
     (rewrite-variadic-bin-op ::plan/<= ?a ?b ?args)
 
+    (> ?a) `(true-or-nil ~?a)
     (> ?a ?b & ?args)
     (rewrite-variadic-bin-op ::plan/> ?a ?b ?args)
 
+    (>= ?a) `(true-or-nil ~?a)
     (>= ?a ?b & ?args)
     (rewrite-variadic-bin-op ::plan/>= ?a ?b ?args)
 

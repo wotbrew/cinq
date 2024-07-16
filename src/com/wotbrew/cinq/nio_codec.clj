@@ -477,7 +477,7 @@
         nil)
       (.flip buf))))
 
-(defn bufcmp-ksv ^long [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym]
+(defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym]
   (let [tid (.getLong valbuf)]
     (if (= t-map tid)
       (let [len (.getInt valbuf)
@@ -488,12 +488,12 @@
             key-start-pos (unchecked-add-int offset-pos offset-table-size)
             val-start-pos (unchecked-add-int key-start-pos key-size)]
         (if (= 0 len)
-          Integer/MIN_VALUE
+          nil
           (do
             (.position valbuf (+ (.position valbuf) (* len 4)))
             (loop [i 0]
               (if (= i len)
-                Integer/MIN_VALUE
+                nil
                 (let [k (.getLong valbuf)]
                   ;; is a kw
                   (if (<= t-max k)
@@ -514,4 +514,4 @@
                         ;; skip key
                         (decode valbuf)
                         (recur (inc i))))))))))
-      Integer/MIN_VALUE)))
+      nil)))
