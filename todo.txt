@@ -8,11 +8,6 @@ lmdb create-relvar can throw map-resized
 
 ---
 
-scalar projection decorrelation, we do semi/anti, but do not enable a join through projection rewrite,
-e.g (c/q [a as] (c/scalar [b bs :when (= a b)] b))
-
----
-
 Index max/min top-k
 
 ---
