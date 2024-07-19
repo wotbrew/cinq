@@ -191,5 +191,8 @@
     (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n3 Long/MIN_VALUE)] f:n) ::no-result)))
     (is (= ::no-result (c/rel-first (c/q [f foo :when (>= f:n3 Long/MAX_VALUE)] f:n) ::no-result)))
 
+    (is (= 42 (c/rel-first (c/q [f foo :when (= f:n 42)] f:n))))
+    (is (= 42 (c/rel-first (c/q [f foo :when (< f:n 43)] f:n))))
+    (is (= 42 (c/rel-first (c/q [f foo :when (> f:n 41)] f:n))))
     (is (= 42 (c/rel-first (c/q [f foo :when (<= f:n 42)] f:n))))
     (is (= 42 (c/rel-first (c/q [f foo :when (>= f:n 42)] f:n))))))

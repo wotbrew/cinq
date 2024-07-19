@@ -69,6 +69,21 @@
       rsn)
     -1))
 
+(defn- proxy-scan-function
+  "Allows the relvar parameter to be overriden, useful for root variables that dispatch to a tx variable
+  to do actual scans."
+  [rv f]
+  (if (instance? CinqScanFunction f)
+    (let [^CinqScanFunction f f]
+      (reify CinqScanFunction
+        (rootDoesNotEscape [_] (.rootDoesNotEscape f))
+        (apply [_ acc _ rsn x] (.apply f acc rv rsn x))
+        (nativeFilter [_ st] (.nativeFilter f st))
+        (filter [_ rsn x] (.filter f rsn x))
+        IFn
+        (invoke [_ acc _ rsn x] (f acc rv rsn x))))
+    (fn [acc _ rsn x] (f acc rv rsn x))))
+
 (defn- reduce-scan [r f init]
   (p/scan r (fn [acc _ _ x] (f acc x)) init))
 
@@ -734,7 +749,7 @@
         (invoke [i k] (.valAt i k))
         (invoke [i k not-found] (.valAt i k not-found))
         p/Scannable
-        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v indexed-key) (fn [acc _ rsn x] (f acc r rsn x)) init))))
+        (scan [_ f init] (variable-read db k (fn [v] (p/scan (.valAt ^ILookup v indexed-key) (proxy-scan-function r f) init))))
         IReduceInit
         (reduce [index f init]
           (reduce-scan index f init))
@@ -748,7 +763,7 @@
                 (fn [v]
                   (let [^ILookup idx (.valAt ^ILookup v indexed-key)
                         entry (.valAt idx entry-key)]
-                    (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
+                    (p/scan entry (proxy-scan-function r f) init)))))
             IReduceInit
             (reduce [index-entry f init]
               (reduce-scan index-entry f init))))
@@ -765,13 +780,13 @@
                 (fn [v]
                   (let [^ILookup idx (.valAt ^ILookup v indexed-key)
                         entry (p/range-scan idx test-a a test-b b)]
-                    (p/scan entry (fn [acc _ rsn x] (f acc r rsn x)) init)))))
+                    (p/scan entry (proxy-scan-function r f) init)))))
             IReduceInit
             (reduce [index-entry f init]
               (reduce-scan index-entry f init)))))
       not-found))
   p/Scannable
-  (scan [r f init] (variable-read db k (fn [v] (p/scan v (fn [acc _ rsn x] (f acc r rsn x)) init))))
+  (scan [r f init] (variable-read db k (fn [v] (p/scan v (proxy-scan-function r f) init))))
   IReduceInit
   (reduce [relvar f start] (p/scan relvar (fn [acc _ _ record] (f acc record)) start))
   p/BigCount

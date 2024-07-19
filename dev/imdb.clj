@@ -236,6 +236,8 @@
     (vec (film-cast-nlj lmdb "Blade Runner"))
     )
 
+  (set (c/q [t titles] t:titleType))
+
   (c/q [t titles
         :when (and (= :videoGame t:titleType)
                    (str/starts-with? t:primaryTitle "Star Wars"))]

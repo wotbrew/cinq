@@ -308,15 +308,7 @@ Currently bind does not follow clj destructuring, as maps do not have a seq path
 
 ---
 
-'in transaction dvar'
-
-if in a transaction already, root var reads should not implicitly open read/write transaction
-
-e.g (def ^:dynamic *transactions* {})
-
-if-some [ tx (*transactions (.-db relvar)) ] proxy transaction variable instead
-
-this can also help with nested transactions, throwing a nice error if opening a write tx inside a read tx
+Throw an error if opening a write tx inside a read tx. read nesting, write nesting might be fine.
 
 ---
 

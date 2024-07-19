@@ -478,8 +478,11 @@
       (.flip buf))))
 
 (defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym]
-  (let [tid (.getLong valbuf)]
-    (if (= t-map tid)
+  (let [tid (.getLong valbuf)
+        buf-tid (.getLong buf (.position buf))]
+    (cond
+      (= buf-tid t-nil) nil
+      (= t-map tid)
       (let [len (.getInt valbuf)
             key-size (.getInt valbuf)
             _val-size (.getInt valbuf)
@@ -506,7 +509,9 @@
                                   (.limit valbuf))]
                         (.position valbuf start)
                         (.limit valbuf end)
-                        (.compareTo buf valbuf))
+                        (let [val-tid (.getLong valbuf (.position valbuf))]
+                          (when-not (= t-nil val-tid)
+                            (Long/valueOf (.compareTo buf valbuf)))))
                       ;; miss, kw is already read - move to next key
                       (recur (inc i)))
                     ;; not a kw, move backwards, skip
@@ -514,4 +519,5 @@
                         ;; skip key
                         (decode valbuf)
                         (recur (inc i))))))))))
+      :else
       nil)))

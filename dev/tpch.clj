@@ -43,21 +43,6 @@
           end (System/nanoTime)]
       (println (format "%s - %s records, %.2fms" tname (c/rel-count (tname db)) (* 1e-6 (- end start)))))))
 
-(comment
-
-  (io/delete-file "tmp/tpch-05.cinq" true)
-  (io/delete-file "tmp/tpch-1.cinq" true)
-
-  (def sf05 (lmdb/database "tmp/tpch-05.cinq"))
-  (.close sf05)
-  (load-dataset sf05 0.05)
-
-  (def sf1 (lmdb/database "tmp/tpch-1.cinq"))
-  (.close sf1)
-  (load-dataset sf1 1.0)
-
-  )
-
 (defn q1 [{:keys [lineitem]}]
   (c/q [l lineitem
         :when (<= l:shipdate #inst "1998-09-02")
@@ -569,3 +554,25 @@
 
 (defn run-all [db]
   (mapv (fn [q] (q db)) all-queries))
+
+
+(comment
+
+  (io/delete-file "tmp/tpch-05.cinq" true)
+  (io/delete-file "tmp/tpch-1.cinq" true)
+
+  (def sf05 (lmdb/database "tmp/tpch-05.cinq"))
+  (.close sf05)
+  (load-dataset sf05 0.05)
+
+  (def sf1 (lmdb/database "tmp/tpch-1.cinq"))
+  (.close sf1)
+  (load-dataset sf1 1.0)
+
+  (def db sf05)
+  (def db sf1)
+
+  (time (mapv c/rel-count (run-all db)))
+  (require 'criterium.core)
+  (criterium.core/quick-bench (run-all db))
+  )
