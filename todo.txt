@@ -1,13 +1,5 @@
 ---
 
-lmdb root variable scan does not use bufcmp-ksv, only tx variables do
-
----
-
-lmdb create-relvar can throw map-resized
-
----
-
 Index max/min top-k
 
 ---
