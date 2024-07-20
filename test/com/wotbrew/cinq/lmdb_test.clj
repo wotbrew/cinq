@@ -196,3 +196,12 @@
     (is (= 42 (c/rel-first (c/q [f foo :when (> f:n 41)] f:n))))
     (is (= 42 (c/rel-first (c/q [f foo :when (<= f:n 42)] f:n))))
     (is (= 42 (c/rel-first (c/q [f foo :when (>= f:n 42)] f:n))))))
+
+(deftest create-relvar-map-resize-test
+  (with-open [db (lmdb/database (File/createTempFile "cinq-test" ".cinq") :map-size (* 128 1024))]
+    (is (= [] (vec (c/create db :foo))))))
+
+(deftest create-index-map-resize-test
+  (with-open [db (lmdb/database (File/createTempFile "cinq-test" ".cinq") :map-size (* 200 1024))]
+    (is (= [] (vec (c/create db :foo))))
+    (is (= [] (vec (c/index (:foo db) :bar))))))

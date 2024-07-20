@@ -12,7 +12,7 @@
            (java.util ArrayList HashMap Map)
            (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function Supplier)
-           (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn))
+           (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn Txn$NotReadyException))
   (:refer-clojure :exclude [replace]))
 
 (set! *warn-on-reflection* true)
@@ -461,7 +461,7 @@
     (.commit txn)
     (codec/clear-adds symbol-table)
     (catch Throwable t
-      (.abort txn)
+      (try (.abort txn) (catch Txn$NotReadyException _))
       (codec/rollback-adds symbol-table)
       (throw t))))
 
@@ -571,7 +571,7 @@
           :overflow-pages (.-overflowPages env-stat)
           :page-size (.-pageSize env-stat)}]))))
 
-(declare create-index with-resizing)
+(declare create-index create-relvar with-resizing)
 
 (def ^:dynamic *read-transactions* {})
 (def ^:dynamic *write-transactions* {})
@@ -624,22 +624,7 @@
                                                        symbol-table
                                                        (long-array 1))]
         (binding [*read-transactions* (assoc *read-transactions* db tx)] (f tx)))))
-  (create-relvar [db k]
-    (when-not (.get varmap k)
-      (locking db
-        (when-not (.get varmap k)
-          (let [^Dbi variable-dbi (.get dbis variables-dbi-name)
-                rsn (with-open [txn (.txnRead env)
-                                cursor (.openCursor variable-dbi txn)]
-                      (inc (last-rsn cursor)))
-                dbi-name (str rsn)
-                dbi (open-dbi env dbi-name)
-                record {:k k, :rsn rsn, :dbi-name dbi-name, :index-ctr 0, :indexes {}}]
-            (with-open [txn (.txnWrite env)]
-              (insert variable-dbi txn (.get key-buffer) val-buffer rsn record symbol-table)
-              (commit txn (.get key-buffer) val-buffer dbis symbol-table))
-            (.put dbis dbi-name dbi)
-            (.put varmap k record)))))
+  (create-relvar [db k] (create-relvar db k)
     (.valAt ^ILookup db k))
   ILookup
   (valAt [db k]
@@ -728,6 +713,31 @@
       (throw (ex-info "Could not create index, relvar does not exist" {:relvar-key relvar-key, :index-key index-key})))
     (let [variable (.valAt db relvar-key)]
       (.valAt ^ILookup variable index-key))))
+
+(defn create-relvar [^LMDBDatabase db k]
+  (let [^Map varmap (.-varmap db)
+        ^Map dbis (.-dbis db)
+        ^Env env (.-env db)
+        ^ThreadLocal key-buffer (.-key-buffer db)
+        ^ByteBuffer val-buffer (.-val-buffer db)
+        symbol-table (.-symbol-table db)]
+    (locking db
+      (->> (fn []
+             (when-not (.get varmap k)
+               (let [^Dbi variable-dbi (.get dbis variables-dbi-name)
+                     rsn (with-open [txn (.txnRead env)
+                                     cursor (.openCursor variable-dbi txn)]
+                           (inc (last-rsn cursor)))
+                     dbi-name (str rsn)
+                     dbi (open-dbi env dbi-name)
+                     record {:k k, :rsn rsn, :dbi-name dbi-name, :index-ctr 0, :indexes {}}]
+                 (with-open [txn (.txnWrite env)]
+                   (insert variable-dbi txn (.get key-buffer) val-buffer rsn record symbol-table)
+                   (commit txn (.get key-buffer) val-buffer dbis symbol-table))
+                 (.put dbis dbi-name dbi)
+                 (.put varmap k record))))
+           (with-resizing db env))))
+  (.valAt ^ILookup db k))
 
 (deftype LMDBVariable
   [^LMDBDatabase db

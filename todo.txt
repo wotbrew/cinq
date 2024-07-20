@@ -113,6 +113,7 @@ Or perhaps emitted/hinted type should be an interface, which can have an adapter
 
 Hardening
 
+- min map size (maybe 128KB?)
 - variable limit (LMDB)
 - symbol limit (warn and degrade?)
 
