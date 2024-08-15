@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
+            [clojure.string :as str]
             [clojure.test :refer :all]
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as tcg]
@@ -205,3 +206,31 @@
   (with-open [db (lmdb/database (File/createTempFile "cinq-test" ".cinq") :map-size (* 200 1024))]
     (is (= [] (vec (c/create db :foo))))
     (is (= [] (vec (c/index (:foo db) :bar))))))
+
+(deftest sorted-scan-test
+  (let [foo (c/create db :foo)
+        idx (c/index (:foo db) :a)]
+    (c/rel-set foo [{:a 3} {:a 4} {:a 2}])
+
+    (is (= [{:a 4} {:a 3} {:a 2}] (vec (c/desc idx))))
+    (is (= [{:a 2} {:a 3} {:a 4}] (vec (c/asc idx))))
+
+    (is (= [{:a 4}] (vec (c/top-k idx 1))))
+    (is (= [{:a 4}, {:a 3}] (vec (c/top-k idx 2))))
+    (is (= [{:a 4}, {:a 3}, {:a 2}] (vec (c/top-k idx 3))))
+    (is (= [{:a 4}, {:a 3}, {:a 2}] (vec (c/top-k idx 4))))
+    (is (= [{:a 2} {:a 3}] (vec (c/bottom-k idx 2))))
+
+    (let [a-str (str/join "" (concat (repeat 512 "a") ["a"]))
+          b-str (str/join "" (concat (repeat 512 "a") ["b"]))
+          c-str (str/join "" (concat (repeat 512 "a") ["c"]))]
+
+      (c/rel-set foo [{:a a-str}
+                      {:a c-str}
+                      {:a b-str}])
+
+      (is (= [{:a a-str}] (vec (c/bottom-k idx 1))))
+      (is (= [{:a a-str} {:a b-str} {:a c-str}] (vec (c/bottom-k idx 3))))
+      (is (= [{:a a-str} {:a b-str} {:a c-str}] (vec (c/asc idx))))
+      (is (= [{:a c-str} {:a b-str} {:a a-str}] (vec (c/desc idx))))
+      (is (= [{:a c-str}] (vec (c/top-k idx 1)))))))

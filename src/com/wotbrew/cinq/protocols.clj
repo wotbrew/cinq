@@ -26,7 +26,8 @@
   (indexed-key [idx])
   (getn [idx key])
   (get1 [idx key not-found])
-  (range-scan [idx test-a a test-b b]))
+  (range-scan [idx test-a a test-b b])
+  (sorted-scan [idx high]))
 
 (defprotocol Indexable
   (index [indexable indexed-key]))

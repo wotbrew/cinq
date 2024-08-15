@@ -342,3 +342,35 @@
 
   )
 
+(defn desc
+  "Scans the index in descending order."
+  [idx]
+  (p/sorted-scan idx true))
+
+(defn asc
+  "Scans the index in ascending order. Scanning the index without specifying an ascending order
+  does not guarantee an ascending sequence if keys are long - this function does."
+  [idx]
+  (p/sorted-scan idx false))
+
+(defn top-k [idx n] (q [x (desc idx) :limit n] x))
+
+(defn bottom-k [idx n] (q [x (asc idx) :limit n] x))
+
+(defn lookup [rel indexed-key key]
+  (if-some [idx (get rel indexed-key)]
+    (getn idx key)
+    (q [{k indexed-key :as r} :when (= k key)] r)))
+
+(defn lookup1
+  ([rel indexed-key key] (lookup1 rel indexed-key key nil))
+  ([rel indexed-key key not-found]
+   (if-some [idx (get rel indexed-key)]
+     (get1 idx key not-found)
+     (rel-first (q [{k indexed-key :as r} :when (= k key)] r) not-found))))
+
+(defn swap
+  [rel indexed-key key f & args]
+  (let [ret (volatile! nil)]
+    (run [r (lookup rel indexed-key key)] (update r (vreset! ret (apply f r args))))
+    @ret))

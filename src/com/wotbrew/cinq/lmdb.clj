@@ -9,7 +9,7 @@
            (com.wotbrew.cinq.protocols Indexable)
            (java.io Closeable)
            (java.nio ByteBuffer)
-           (java.util ArrayList HashMap Map)
+           (java.util Arrays ArrayList Comparator HashMap Map)
            (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function Supplier)
            (org.lmdbjava Cursor Dbi DbiFlags Env Env$MapFullException EnvFlags EnvInfo GetOp PutFlags Txn Txn$NotReadyException))
@@ -70,7 +70,7 @@
     -1))
 
 (defn- proxy-scan-function
-  "Allows the relvar parameter to be overriden, useful for root variables that dispatch to a tx variable
+  "Allows the relvar parameter to be overridden, useful for root variables that dispatch to a tx variable
   to do actual scans."
   [rv f]
   (if (instance? CinqScanFunction f)
@@ -210,6 +210,77 @@
       (reduce [index-entry f init]
         (reduce-scan index-entry f init)))))
 
+(defn get-top-bottom-entry
+  [relvar
+   ^Txn txn
+   ^Dbi dbi
+   ^Dbi rsn-dbi
+   ^ByteBuffer key-buffer
+   ^ByteBuffer rsn-buffer
+   symbol-table
+   indexed-key
+   top]
+  (reify
+    p/Scannable
+    (scan [_ f init]
+      (with-open [cursor (.openCursor dbi txn)]
+        (.clear rsn-buffer)
+        (if-not (if top (.last cursor) (.first cursor))
+          init
+          (let [rsns (ArrayList.)
+                records (ArrayList.)
+                symbol-list (codec/symbol-list symbol-table)]
+            (loop [acc init]
+              (.clear key-buffer)
+              (.put key-buffer ^ByteBuffer (.key cursor))
+              (.add rsns (.getLong ^ByteBuffer (.val cursor)))
+              (let [has-next (if top (.prev cursor) (.next cursor))]
+                (cond
+                  ;; same key
+                  (and has-next (.equals (.flip key-buffer) (.key cursor)))
+                  (recur acc)
+
+                  :else
+                  (do
+                    (with-open [rsn-cursor (.openCursor rsn-dbi txn)]
+                      (dotimes [i (.size rsns)]
+                        (let [rsn (.get rsns i)]
+                          (.clear rsn-buffer)
+                          (.putLong rsn-buffer rsn)
+                          (.get rsn-cursor (.flip rsn-buffer) GetOp/MDB_SET)
+                          (.add records (codec/decode-object (.val rsn-cursor) symbol-list)))))
+
+                    (let [sorted (.toArray records)
+                          _
+                          (Arrays/sort
+                            sorted
+                            (reify Comparator
+                              (compare [_ a b]
+                                (let [ak (get a indexed-key)
+                                      bk (get b indexed-key)]
+                                  (if top
+                                    (compare bk ak)
+                                    (compare ak bk))))))
+                          ret (loop [acc acc
+                                     i 0]
+                                (if (< i (alength sorted))
+                                  (let [o (aget sorted i)
+                                        ret (f acc relvar (.get rsns i) o)]
+                                    (if (instance? Reduced ret)
+                                      ret
+                                      (recur ret (unchecked-inc i))))
+                                  acc))]
+                      (cond
+                        (instance? Reduced ret) @ret
+                        has-next (do
+                                   (.clear rsns)
+                                   (.clear records)
+                                   (recur ret))
+                        :else ret))))))))))
+    IReduceInit
+    (reduce [index-entry f init]
+      (reduce-scan index-entry f init))))
+
 (defn scan-index [^Dbi dbi ^Dbi rsn-dbi ^Txn txn f init symbol-list rv]
   (with-open [cursor (.openCursor dbi txn)
               rsn-cursor (.openCursor rsn-dbi txn)]
@@ -247,8 +318,7 @@
     (getn [i k] (.valAt i k))
     (get1 [i k not-found] (c/rel-first (.valAt i k) not-found))
     (range-scan [_ test-a a test-b b] (get-index-range-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table indexed-key test-a a test-b b keys-changed))
-
-    ))
+    (sorted-scan [_ high] (get-top-bottom-entry relvar txn dbi rsn-dbi key-buffer rsn-buffer symbol-table indexed-key high))))
 
 (def ^:private ^"[Lorg.lmdbjava.PutFlags;" insert-flags
   (make-array PutFlags 0))
@@ -790,6 +860,18 @@
                 (fn [v]
                   (let [^ILookup idx (.valAt ^ILookup v indexed-key)
                         entry (p/range-scan idx test-a a test-b b)]
+                    (p/scan entry (proxy-scan-function r f) init)))))
+            IReduceInit
+            (reduce [index-entry f init]
+              (reduce-scan index-entry f init))))
+        (sorted-scan [_ high]
+          (reify p/Scannable
+            (scan [_ f init]
+              (variable-read
+                db k
+                (fn [v]
+                  (let [^ILookup idx (.valAt ^ILookup v indexed-key)
+                        entry (p/sorted-scan idx high)]
                     (p/scan entry (proxy-scan-function r f) init)))))
             IReduceInit
             (reduce [index-entry f init]

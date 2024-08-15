@@ -1,7 +1,7 @@
 (ns com.wotbrew.cinq.ref-var
   (:require [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.range-test :as range-test])
-  (:import (clojure.lang ILookup IReduceInit)
+  (:import (clojure.lang IFn ILookup IReduceInit)
            (com.wotbrew.cinq.protocols BigCount IncrementalRelvar Indexable Relvar Scannable)))
 
 (defn scan [rv [sm] f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init sm))
@@ -38,64 +38,85 @@
 
 (defn rel-set [[_ indexes] rel] (reduce insert [(sorted-map) (update-vals indexes (constantly (sorted-map)))] rel))
 
-(defn coll-rel [coll]
-  (reify p/Scannable (scan [_ f init] (p/scan coll f init))))
+(defn index-hit [rv ref get-rsns]
+  (reify
+    p/Scannable
+    (scan [_ f init]
+      (let [[sm] @ref]
+        (reduce (fn [acc rsn] (f acc rv rsn (sm rsn))) init (get-rsns))))
+    IReduceInit
+    (reduce [_ f init] (let [[sm] @ref] (reduce (fn [acc rsn] (f acc (sm rsn))) init (get-rsns))))))
+
+(defn get-index [ref rv indexed-key not-found]
+  (let [[_ indexes] @ref]
+    (if (indexes indexed-key)
+      (let [get-sm (fn [] (first @ref))
+            get-index (fn [] (let [[_ indexes] @ref] (get indexes indexed-key)))]
+        (reify
+          p/Scannable
+          (scan [_ f init]
+            (let [sm (get-sm)]
+              (reduce
+                (fn [acc rsns]
+                  (reduce
+                    (fn [acc2 rsn] (f acc2 rv rsn (sm rsn)))
+                    acc
+                    rsns))
+                init
+                (vals (get-index)))))
+          IReduceInit
+          (reduce [_ f init]
+            (let [sm (get-sm)]
+              (reduce
+                (fn [acc rsns]
+                  (reduce
+                    (fn [acc2 rsn] (f acc2 (sm rsn)))
+                    acc
+                    rsns))
+                init
+                (vals (get-index)))))
+          ILookup
+          (valAt [idx key] (.valAt idx key nil))
+          (valAt [idx key _] (index-hit rv ref (fn [] (get (get-index) key))))
+          IFn
+          (invoke [idx key] (.valAt idx key nil))
+          (invoke [idx key _] (.valAt idx key nil))
+          p/Index
+          (indexed-key [idx] indexed-key)
+          (getn [idx key] (.valAt idx key))
+          (get1 [idx key not-found] (if-some [rsns (get (get-index) key)] (get (get-sm) (first rsns)) not-found))
+          (range-scan [idx test-a a test-b b]
+            (index-hit
+              rv
+              ref
+              (fn []
+                (let [index (get-index)
+                      test-a (some-> test-a range-test/clj-test)
+                      test-b (some-> test-b range-test/clj-test)]
+                  (->> (cond
+                         (and test-a test-b)
+                         (subseq index test-a a test-b b)
+
+                         test-a
+                         (subseq index test-a a)
+
+                         test-b
+                         (take-while (fn [[key]] (test-b key b)) index))
+                       (mapcat val))))))
+          (sorted-scan [_ high]
+            (index-hit
+              rv
+              ref
+              (fn []
+                (if high
+                  (mapcat val (reverse (get-index)))
+                  (mapcat val (get-index))))))))
+      not-found)))
 
 (deftype RefVariable [ref]
   ILookup
   (valAt [rv k] (.valAt rv k nil))
-  (valAt [rv indexed-key not-found]
-    (let [[_ indexes] @ref]
-      (if (indexes indexed-key)
-        (let [lookup-rsns (fn [rsns] (let [[sm] @ref] (map sm rsns)))
-              get-sm (fn [] (first @ref))
-              get-index (fn [] (let [[_ indexes] @ref] (get indexes indexed-key)))]
-          (reify
-            p/Scannable
-            (scan [_ f init]
-              (let [sm (get-sm)]
-                (reduce
-                  (fn [acc rsns]
-                    (reduce
-                      (fn [acc2 rsn] (f acc2 rv rsn (sm rsn)))
-                      acc
-                      rsns))
-                  init
-                  (vals (get-index)))))
-            IReduceInit
-            (reduce [_ f init]
-              (let [sm (get-sm)]
-                (reduce
-                  (fn [acc rsns]
-                    (reduce
-                      (fn [acc2 rsn] (f acc2 (sm rsn)))
-                      acc
-                      rsns))
-                  init
-                  (vals (get-index)))))
-            ILookup
-            (valAt [idx key] (.valAt idx key nil))
-            (valAt [idx key _] (coll-rel (lookup-rsns (get (get-index) key))))
-            p/Index
-            (indexed-key [idx] indexed-key)
-            (getn [idx key] (.valAt idx key))
-            (get1 [idx key not-found] (if-some [rsns (get (get-index) key)] (get (get-sm) (first rsns)) not-found))
-            (range-scan [idx test-a a test-b b]
-              (let [index (get-index)
-                    test-a (some-> test-a range-test/clj-test)
-                    test-b (some-> test-b range-test/clj-test)]
-                (->> (cond
-                       (and test-a test-b)
-                       (subseq index test-a a test-b b)
-
-                       test-a
-                       (subseq index test-a a)
-
-                       test-b
-                       (take-while (fn [[key]] (test-b key b)) index))
-                     (mapcat (comp lookup-rsns val))
-                     coll-rel)))))
-        not-found)))
+  (valAt [rv indexed-key not-found] (get-index ref rv indexed-key not-found))
   Indexable
   (index [rv indexed-key]
     (dosync
