@@ -102,7 +102,7 @@
              %)
            _ %)
         rw (r/top-down (r/attempt match))]
-    `(agg nil _# ~query ~@(rw body))))
+    `(agg nil _# ~query ~@(rw body) nil)))
 
 (defmacro sum [expr] (#'throw-only-in-queries #'sum))
 
