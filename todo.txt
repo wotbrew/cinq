@@ -14,14 +14,6 @@ Consider however, the use of the c/update symbol, update is overloaded - and you
 
 ---
 
-use rsn as an auto incr
-
-(c/insert items {:id (c/tempid)})
-
-tempid encodes the rsn value provided on insert
-
----
-
 distinct
 
 (c/q [a as :distinct [a]])
