@@ -193,17 +193,12 @@
         :join [n names (= p:nconst n:nconst)]]
     n:primaryName))
 
-(defn lookup [relvar k v]
-  (if-some [idx (get relvar k)]
-    (get idx v)
-    (throw (ex-info "No index on key" {:k k}))))
-
 (defn film-cast-nlj [{:keys [titles principals names]} title]
-  (c/q [t (lookup titles :primaryTitle title)
+  (c/q [t (c/lookup titles :primaryTitle title)
         :when (= :movie t:titleType)
         :limit 1
-        p (lookup principals :tconst t:tconst)
-        n (lookup names :nconst p:nconst)]
+        p (c/lookup principals :tconst t:tconst)
+        n (c/lookup names :nconst p:nconst)]
     n:primaryName))
 
 (comment
