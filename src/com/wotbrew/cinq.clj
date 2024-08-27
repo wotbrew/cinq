@@ -145,24 +145,6 @@
 (defn incr-counter [^longs ctr]
   (aset ctr 0 (unchecked-inc (aget ctr 0))))
 
-(defmacro update-where [relvar binding pred expr]
-  (let [[bind sym] (ensure-binding-target (first binding))]
-    `(let [ctr# (long-array 1)]
-       (run ~(into [bind] [relvar :when pred]) (when (update ~sym ~expr) (incr-counter ctr#)))
-       (aget ctr# 0))))
-
-(defmacro delete-where [relvar binding pred]
-  (let [[bind sym] (ensure-binding-target (first binding))]
-    `(let [ctr# (long-array 1)]
-       (run ~(into [bind] [relvar :when pred]) (when (delete ~sym) (incr-counter ctr#)))
-       (aget ctr# 0))))
-
-(defmacro update-all [relvar binding expr]
-  (let [[bind sym] (ensure-binding-target (first binding))]
-    `(let [ctr# (long-array 1)]
-       (run [~bind ~relvar] (when (update ~sym ~expr) (incr-counter ctr#)))
-       (aget ctr# 0))))
-
 (declare rel-count)
 
 (extend-protocol p/Scannable
@@ -370,7 +352,39 @@
      (rel-first (q [{k indexed-key :as r} :when (= k key)] r) not-found))))
 
 (defn swap
+  "Updates rows where (= (indexed-key row) key), by applying a function to the existing row.
+
+  Returns the result of the last application of the function. Often keys are unique, so in this case the function
+  returns the new value of the row.
+
+  Works if the key is not indexed, but will scan the relation to find the row.
+
+  e.g
+  (swap customers :id 42 assoc :name \"Bob\")
+  ;; ^ sets a customers name to bob by id."
   [rel indexed-key key f & args]
   (let [ret (volatile! nil)]
     (run [r (lookup rel indexed-key key)] (update r (vreset! ret (apply f r args))))
     @ret))
+
+(defn put
+  "Inserts the row if it does not exist otherwise replaces rows where (= (indexed-key row) key) with the supplied row value."
+  [rel indexed-key key row]
+  (let [ret (volatile! ::no-update)
+        row (assoc row indexed-key key)]
+    (run [r (lookup rel indexed-key key)]
+      (vreset! ret r)
+      (update r row))
+    (if (identical? ::no-update ret)
+      (do (insert rel row)
+          nil)
+      @ret)))
+
+(defn del-key
+  "Deletes rows where (= (indexed-key row) key). Returns the number of rows deleted."
+  [rel indexed-key key]
+  (let [ret (long-array 1)]
+    (run [r (lookup rel indexed-key key)]
+      (aset ret 0 (unchecked-inc (aget ret 0)))
+      (delete r))
+    (aget ret 0)))

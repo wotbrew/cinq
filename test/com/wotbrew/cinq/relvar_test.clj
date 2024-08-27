@@ -20,15 +20,15 @@
 
     (is (= [1 2 3 4 5 5] (vec rv1)))
 
-    (c/delete-where rv1 [x] (= x 42))
+    (c/run [x rv1 :when (= 42 x)] (c/delete x))
 
     (is (= [1 2 3 4 5 5] (vec rv1)))
 
-    (c/delete-where rv1 [x] (= x 5))
+    (c/run [x rv1 :when (= 5 x)] (c/delete x))
 
     (is (= [1 2 3 4] (vec rv1)))
 
-    (c/update-where rv1 [x] (even? x) 42)
+    (c/run [x rv1 :when (even? x)] (c/update x 42))
 
     (is (= {1 1, 42 2, 3 1} (frequencies rv1)))
 

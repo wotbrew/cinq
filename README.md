@@ -111,12 +111,6 @@ So if you have a join say, you can update any joined tuple. This is more powerfu
   (c/update c (assoc c :name "Jill")))
 ```
 
-Use `c/update-where` for straightforward cases:
-
-```clojure 
-(c/update-where (:customers db) [c] (= "Jikl" c:name) (assoc c :name "Jill"))
-```
-
 #### Delete
 
 Like `c/update`, cinq provides a `c/delete` form you can use in `c/run` bodies.
@@ -129,12 +123,6 @@ Like `c/update`, cinq provides a `c/delete` form you can use in `c/run` bodies.
 ```
 
 Yes, you can mix/match update, delete, and any other arbitrary side effect in a single run expression.
-
-See again, `c/delete-where` for straightforward cases.
-
-```clojure 
-(c/delete-where (:customers db) [c] (= "Jill" c:name))
-```
 
 ### Transactions
 

@@ -1,5 +1,19 @@
 ---
 
+Better updates
+
+I am not happy with the zoo of update/delete fns. I like c/run as a base, targeting the relation with a call
+seems very natural.
+
+The shorthand, delete-where and so on are only there for tersity. Probably not worth the confusion.
+Particularly if you have c/swap for indexed updates, c/run will be reserved for large multi-record updates.
+
+Consider however, the use of the c/update symbol, update is overloaded - and you will use clj/update often in swap calls.
+
+(c/row-set) or (c/replace) might be better. replace is a good name, and the shadowing of clj-core is likely not so bad given its infrequently used.
+
+---
+
 use rsn as an auto incr
 
 (c/insert items {:id (c/tempid)})
