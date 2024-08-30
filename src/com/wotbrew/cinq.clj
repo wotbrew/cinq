@@ -399,5 +399,5 @@
   The RSN will be used to source the id, this means the id is only unique for a given relvar, and you will have gaps.
   It also means that (insert relvar record) will return the assigned id."
   [relvar key]
-  (assert (some? key) "nil cannot be used as an auto-id")
+  {:pre [(keyword? key)]}
   (p/set-auto-increment relvar key))
