@@ -4,7 +4,7 @@
            (com.wotbrew.cinq CinqDynamicArrayMap CinqUnsafeDynamicMap)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
-           (java.util ArrayList Date HashMap List Map Set)
+           (java.util ArrayList Date HashMap List Map Set UUID)
            (java.util.concurrent ConcurrentHashMap)))
 
 (set! *warn-on-reflection* true)
@@ -75,6 +75,8 @@
 ;; normally in symbol table - but not always
 (def ^:const t-symbol 10)
 (def ^:const t-keyword 11)
+
+(def ^:const t-uuid 12)
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   (<= 16 (.remaining buffer)))
@@ -261,6 +263,14 @@
     (let [^ByteBuffer buffer buffer]
       (.putLong buffer t-date)
       (.putLong buffer (inst-ms d))
+      nil))
+  UUID
+  (encode-object [uuid buffer _symbol-table _intern-flag]
+    (let [^UUID uuid uuid
+          ^ByteBuffer buffer buffer]
+      (.putLong buffer t-uuid)
+      (.putLong buffer (.getMostSignificantBits uuid))
+      (.putLong buffer (.getLeastSignificantBits uuid))
       nil)))
 
 (defmacro case2 [expr & cases]
@@ -313,6 +323,11 @@
 (defn decode-keyword [^ByteBuffer buffer]
   (keyword (decode-object buffer nil) (decode-object buffer nil)))
 
+(defn decode-uuid [^ByteBuffer buffer]
+  (let [most (.getLong buffer)
+        least (.getLong buffer)]
+    (UUID. most least)))
+
 (defn decode-object [^ByteBuffer buffer ^objects symbol-list]
   (let [tid (.getLong buffer)]
     (case2 tid
@@ -328,6 +343,7 @@
       t-date (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
+      t-uuid (decode-uuid buffer)
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn decode-root-unsafe [^CinqUnsafeDynamicMap mut-record ^ByteBuffer buffer ^objects symbol-list]

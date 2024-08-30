@@ -1,6 +1,7 @@
 (ns com.wotbrew.cinq.nio-codec-test
   (:require [clojure.test :refer :all]
-            [com.wotbrew.cinq.nio-codec :as codec]))
+            [com.wotbrew.cinq.nio-codec :as codec])
+  (:import (clojure.lang Util)))
 
 (def st (codec/empty-symbol-table))
 
@@ -26,3 +27,25 @@
   (is (= 0 (cmp {:b 42} {:a {:b 42}} :a)))
   ;; unordered
   (is (= 0 (cmp (array-map :b 42, :c 43) {:a (array-map :c 43, :b 42)} :a))))
+
+(deftest coding-test
+  (are [test-val]
+    (let [st (codec/empty-symbol-table)
+          tv test-val]
+      (Util/equals tv (codec/decode-object (codec/encode-heap tv st true) (codec/symbol-list st))))
+
+    nil
+    true
+    false
+    42
+    "hello"
+    :hello
+    'hello
+    {}
+    {{42 43} {44 45}}
+    {:hello 42}
+    [1, 2, "hello", nil, [false]]
+    '(1 2 3)
+    #inst "2024-01-04"
+    #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"))
+
