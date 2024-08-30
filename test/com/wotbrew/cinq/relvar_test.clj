@@ -77,7 +77,6 @@
     (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))
     (is (= [42] (vec (c/q [f (get idx 42) :when (< f:id 43)] f:id))))))
 
-
 (deftest sorted-scan-test
   (let [foo (c/relvar)
         idx (c/index foo :a)]
@@ -131,3 +130,21 @@
     (is (= [2 3 4] (vec x)))
     (c/run [x x] (c/update x + 42))
     (is (= [44 45 46] (vec x)))))
+
+(deftest put-test
+  (let [x (c/relvar)]
+    (c/index x :id)
+    (is (nil? (c/put x :id 42 {:n 0})))
+    (is (nil? (c/put x :id 43 {:n 0})))
+    (is (= [{:id 42, :n 0} {:id 43, :n 0}] (vec x)))
+    (is (= {:id 42, :n 0} (c/put x :id 42, {:n 1})))
+    (is (= {{:id 42, :n 1} 1 {:id 43, :n 0} 1} (frequencies x)))
+    (c/insert x {:id 42, :n 2})
+    (is (= {{:id 42, :n 1} 1
+            {:id 42, :n 2} 1
+            {:id 43, :n 0} 1}
+           (frequencies x)))
+    (c/put x :id 42 {:n 3})
+    (is (= {{:id 42, :n 3} 2
+            {:id 43, :n 0} 1}
+           (frequencies x)))))

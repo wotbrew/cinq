@@ -375,7 +375,7 @@
     (run [r (lookup rel indexed-key key)]
       (vreset! ret r)
       (replace r row))
-    (if (identical? ::no-update ret)
+    (if (identical? ::no-update @ret)
       (do (insert rel row)
           nil)
       @ret)))
