@@ -148,3 +148,14 @@
     (is (= {{:id 42, :n 3} 2
             {:id 43, :n 0} 1}
            (frequencies x)))))
+
+(deftest del-key-test
+  (let [x (c/relvar)]
+    (c/index x :id)
+    (is (= 0 (c/del-key x :id 42)))
+    (c/rel-set x [{:id 42} {:id 43}])
+    (is (= 1 (c/del-key x :id 42)))
+    (is (= [{:id 43}] (vec x)))
+    (c/rel-set x [{:id 42} {:id 42} {:id 43}])
+    (is (= 2 (c/del-key x :id 42)))
+    (is (= [{:id 43}] (vec x)))))
