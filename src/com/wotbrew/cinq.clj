@@ -70,7 +70,9 @@
 
 (defmacro delete [target] (throw-only-in-run #'delete))
 
-(defmacro update [target expr] (throw-only-in-run #'update))
+(defmacro replace [target expr] (throw-only-in-run #'replace))
+
+(defmacro update [target f & args] (throw-only-in-run #'update))
 
 (defmacro agg [init init-sym query & body]
   {:pre [(symbol? init-sym)]}
@@ -84,14 +86,23 @@
            (m/and (?f & ?args)
                   (m/guard (symbol? ?f)))
            (condp = (resolve &env ?f)
-             #'update
+             #'replace
              (m/match ?args
                (m/and (?alias ?expr)
                       (m/guard (simple-symbol? ?alias)))
                `(do (p/delete ~(srelvar ?alias) ~(srsn ?alias))
                     (p/insert ~(srelvar ?alias) ~?expr))
                _
-               (throw (ex-info "Invalid update call" {:args ?args})))
+               (throw (ex-info "Invalid cinq/replace call" {:args ?args})))
+
+             #'update
+             (m/match ?args
+               (m/and (?alias ?f & ?args)
+                      (m/guard (simple-symbol? ?alias)))
+               `(do (p/delete ~(srelvar ?alias) ~(srsn ?alias))
+                    (p/insert ~(srelvar ?alias) (~?f ~?alias ~@?args)))
+               _
+               (throw (ex-info "Invalid cinq/update call" {:args ?args})))
 
              #'delete
              (m/match ?args
@@ -306,8 +317,8 @@
       (run [x a
             y b
             :when (= x y)]
-        (update x (inc x))
-        (update y (dec y))))
+        (replace x (inc x))
+        (replace y (dec y))))
     (println "a:" a)
     (println "b:" b))
 
@@ -364,7 +375,7 @@
   ;; ^ sets a customers name to bob by id."
   [rel indexed-key key f & args]
   (let [ret (volatile! nil)]
-    (run [r (lookup rel indexed-key key)] (update r (vreset! ret (apply f r args))))
+    (run [r (lookup rel indexed-key key)] (replace r (vreset! ret (apply f r args))))
     @ret))
 
 (defn put
@@ -374,7 +385,7 @@
         row (assoc row indexed-key key)]
     (run [r (lookup rel indexed-key key)]
       (vreset! ret r)
-      (update r row))
+      (replace r row))
     (if (identical? ::no-update ret)
       (do (insert rel row)
           nil)

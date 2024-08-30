@@ -28,7 +28,7 @@
 
     (is (= [1 2 3 4] (vec rv1)))
 
-    (c/run [x rv1 :when (even? x)] (c/update x 42))
+    (c/run [x rv1 :when (even? x)] (c/replace x 42))
 
     (is (= {1 1, 42 2, 3 1} (frequencies rv1)))
 
@@ -123,3 +123,9 @@
     (is (= [{:id 0} {:id 1}] (vec x)))
     (is (= 2 (c/insert x {:id 42})))
     (is (= [{:id 0} {:id 1} {:id 42}] (vec x)))))
+
+(deftest update-test
+  (let [x (c/relvar)]
+    (c/rel-set x [1 2 3])
+    (c/run [x x] (c/update x inc))
+    (is (= [2 3 4] (vec x)))))

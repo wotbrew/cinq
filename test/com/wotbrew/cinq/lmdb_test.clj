@@ -45,7 +45,7 @@
   (c/insert (:foo db) 3)
   (is (= [2, 4, 3] (vec (:foo db))))
 
-  (c/run [f (:foo db) :when (even? f)] (c/update f (inc f)))
+  (c/run [f (:foo db) :when (even? f)] (c/replace f (inc f)))
   (is (= [3, 3, 5] (vec (:foo db)))))
 
 (deftest tx-test

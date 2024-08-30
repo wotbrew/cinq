@@ -1001,11 +1001,11 @@
   (c/rel-set (:foo db) (range 1e6))
   (c/rel-set (:foo db) nil)
   (c/insert (:foo db) (str (random-uuid)))
-  (c/run [f (:foo db) :when (= 42 f)] (c/update f "The answer"))
+  (c/run [f (:foo db) :when (= 42 f)] (c/replace f "The answer"))
   (c/q [f (:foo db) :when (string? f) :limit 10] f)
   (c/del-key (:foo db) string? true)
   (c/run [f (:foo db) :when (string? f)] (delete f))
-  (c/write [db db] (c/run [f (:foo db) :when (even? f)] (c/update f 42)))
+  (c/write [db db] (c/run [f (:foo db) :when (even? f)] (c/replace f 42)))
   (c/q [f (:foo db) :when (odd? f) :limit 10] f)
 
   (:foo db)

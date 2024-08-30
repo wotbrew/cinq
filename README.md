@@ -99,21 +99,31 @@ Add a row into a relation variable, the row can be anything [encodable](#encodin
 (c/insert (:customers db) [{:name "Jikl"}]) ;; => 2
 ```
 
-#### Update
+#### Replace 
 
-Use `c/update` in a `c/run` body. This lets you target any tuple in a query with an update.
-So if you have a join say, you can update any joined tuple. This is more powerful than a typical update statement in a SQL database.
+Use `c/replace` to swap out a tuple in a `c/run` body. This lets you target any tuple in a query and replace its value.
 
 ```clojure 
 (c/run 
   [c (:customers db) 
    :when (= "Jikl" c:name)]
-  (c/update c (assoc c :name "Jill")))
+  (c/replace c (assoc c :name "Jill")))
+```
+
+#### Update
+
+Use `c/update` to apply a function to a tuple and replace its value with the result. Usable in a `c/run` body.
+
+```clojure 
+(c/run
+  [c (:customers db)
+   :when (= "Jikl" c:name)]
+  (c/update c assoc :name "Jill"))
 ```
 
 #### Delete
 
-Like `c/update`, cinq provides a `c/delete` form you can use in `c/run` bodies.
+Use `c/delete` to delete a targeted tuple. Usable in a `c/run` body.
 
 ```clojure 
 (c/run 
@@ -122,7 +132,7 @@ Like `c/update`, cinq provides a `c/delete` form you can use in `c/run` bodies.
   (c/delete c))
 ```
 
-Yes, you can mix/match update, delete, and any other arbitrary side effect in a single run expression.
+You can mix and match update, delete, replace, and any other arbitrary side effect in a single run expression.
 
 ### Transactions
 
