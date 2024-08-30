@@ -2,7 +2,7 @@
   (:require [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.range-test :as range-test])
   (:import (clojure.lang IFn ILookup IReduceInit)
-           (com.wotbrew.cinq.protocols BigCount IncrementalRelvar Indexable Relvar Scannable)))
+           (com.wotbrew.cinq.protocols AutoIncrementing BigCount IncrementalRelvar Indexable Relvar Scannable)))
 
 (defn scan [rv [sm] f init] (reduce-kv (fn [acc rsn o] (f acc rv rsn o)) init sm))
 
@@ -10,9 +10,12 @@
 
 (def set-conj (fnil conj #{}))
 
-(defn insert [[sm indexes] record]
+(defn assoc-if-absent [m k v] (if (contains? m k) m (assoc m k v)))
+
+(defn insert [[sm indexes auto-key] record]
   (let [last-rsn (last-rsn sm)
         rsn (if last-rsn (inc last-rsn) 0)
+        record (if (some? auto-key) (assoc-if-absent record auto-key rsn) record)
         sm2 (assoc sm rsn record)
         indexes2 (reduce-kv (fn [indexes indexed-key index]
                               (if-some [v (get record indexed-key)]
@@ -20,9 +23,9 @@
                                 indexes))
                             indexes
                             indexes)]
-    [sm2 indexes2]))
+    [sm2 indexes2 auto-key]))
 
-(defn delete [[sm indexes] rsn]
+(defn delete [[sm indexes auto-key] rsn]
   (if-some [record (get sm rsn)]
     (let [sm2 (dissoc sm rsn)
           indexes2 (reduce-kv (fn [indexes indexed-key index]
@@ -33,10 +36,11 @@
                                   indexes))
                               indexes
                               indexes)]
-      [sm2 indexes2])
-    [sm indexes]))
+      [sm2 indexes2 auto-key])
+    [sm indexes auto-key]))
 
-(defn rel-set [[_ indexes] rel] (reduce insert [(sorted-map) (update-vals indexes (constantly (sorted-map)))] rel))
+(defn rel-set [[_ indexes auto-key] rel]
+  (reduce insert [(sorted-map) (update-vals indexes (constantly (sorted-map))) auto-key] rel))
 
 (defn index-hit [rv ref get-rsns]
   (reify
@@ -155,4 +159,9 @@
                    sm)))
         @ret)))
   BigCount
-  (big-count [_] (count @ref)))
+  (big-count [_] (count (first @ref)))
+  AutoIncrementing
+  (set-auto-increment [_ key]
+    (dosync
+      (alter ref (fn [[sm indexes _]] [sm indexes key])))
+    nil))

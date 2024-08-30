@@ -31,3 +31,6 @@
 
 (defprotocol Indexable
   (index [indexable indexed-key]))
+
+(defprotocol AutoIncrementing
+  (set-auto-increment [relvar key]))

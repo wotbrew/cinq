@@ -6,7 +6,7 @@
             [com.wotbrew.cinq.protocols :as p])
   (:import (clojure.lang IFn ILookup IReduceInit Reduced)
            (com.wotbrew.cinq CinqScanFunction CinqUnsafeDynamicMap CinqUtil)
-           (com.wotbrew.cinq.protocols Indexable)
+           (com.wotbrew.cinq.protocols AutoIncrementing Indexable)
            (java.io Closeable)
            (java.nio ByteBuffer)
            (java.util Arrays ArrayList Comparator HashMap Map)
@@ -425,6 +425,8 @@
 (def ^:const symbols-dbi-name "$symbols")
 (def ^:const variables-dbi-name "$variables")
 
+(defn- assoc-if-absent [m k v] (if (contains? m k) m (assoc m k v)))
+
 (deftype LMDBWriteTransactionVariable
   [^Env env
    ^Txn txn
@@ -440,7 +442,8 @@
    ^objects index-dbi-array
    ^objects index-key-array
    ^objects index-cur-array
-   ^longs keys-changed]
+   ^longs keys-changed
+   auto-key]
   ILookup
   (valAt [r k] (.valAt r k nil))
   (valAt [r k not-found]
@@ -465,6 +468,7 @@
       (do (set! (.-next-rsn relvar) (unchecked-inc (last-rsn cursor)))
           (recur record))
       (let [rsn next-rsn
+            record (if auto-key (assoc-if-absent record auto-key rsn) record)
             _ (insert dbi txn key-buffer val-buffer rsn record symbol-table)]
 
         (dotimes [i (alength index-key-array)]
@@ -549,7 +553,7 @@
   ILookup
   (valAt [tx k] (.valAt tx k nil))
   (valAt [_ k not-found]
-    (if-some [{:keys [dbi-name indexes]} (.get varmap k)]
+    (if-some [{:keys [dbi-name indexes auto-key]} (.get varmap k)]
       (->> (reify Function
              (apply [_ _]
                (let [^Dbi dbi (.get dbis dbi-name)
@@ -577,7 +581,8 @@
                                                  index-dbi-array
                                                  index-key-array
                                                  index-cursor-array
-                                                 keys-changed))))
+                                                 keys-changed
+                                                 auto-key))))
            (.computeIfAbsent var-cache k))
       not-found))
   p/Transaction
@@ -809,12 +814,41 @@
            (with-resizing db env))))
   (.valAt ^ILookup db k))
 
+(defn set-auto-increment [^LMDBDatabase db relvar-key new-auto-key]
+  (let [^LMDBDatabase db db
+        ^Map varmap (.-varmap db)
+        ^Env env (.-env db)
+        ^Map dbis (.-dbis db)
+        ^ThreadLocal key-buffer (.-key-buffer db)
+        ^ByteBuffer val-buffer (.-val-buffer db)
+        symbol-table (.-symbol-table db)]
+    (if-some [{:keys [auto-key]} (.get varmap relvar-key)]
+      (when (not= new-auto-key auto-key)
+        (locking db
+          (let [^Dbi variables-dbi (.get dbis variables-dbi-name)
+                {:keys [rsn] :as record} (.get varmap relvar-key)
+                new-record (assoc record :auto-key new-auto-key)
+                ^ByteBuffer key-buffer (.get key-buffer)]
+            (with-resizing
+              db
+              env
+              (fn []
+                (with-open [txn (.txnWrite env)]
+                  (replace variables-dbi txn key-buffer val-buffer rsn new-record symbol-table)
+                  (commit txn key-buffer val-buffer dbis symbol-table))))
+            (.put varmap relvar-key new-record)
+            nil)))
+      (throw (ex-info "Could not assign auto-id, relvar does not exist" {:relvar-key relvar-key, :auto-key new-auto-key})))))
+
 (deftype LMDBVariable
   [^LMDBDatabase db
    k
    ^ThreadLocal key-buffer
    ^ByteBuffer val-buffer
    ^:volatile-mutable indexes]
+  AutoIncrementing
+  (set-auto-increment [_ key]
+    (set-auto-increment db k key))
   Indexable
   (index [_ indexed-key]
     (let [idx (create-index db k indexed-key)]

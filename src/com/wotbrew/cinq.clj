@@ -388,3 +388,16 @@
       (aset ret 0 (unchecked-inc (aget ret 0)))
       (delete r))
     (aget ret 0)))
+
+(defn auto-id
+  "Given a relation variable, sets its auto-incrementing key. If a previous key was set, it will be replaced with the one provided.
+
+  When a relation variable has such a key, inserts will provide it (by assoc) before saving to storage.
+
+  If an :id is supplied then the behaviour will be ignored - be aware collisions are possible this way. This behaviour is subject to change.
+
+  The RSN will be used to source the id, this means the id is only unique for a given relvar, and you will have gaps.
+  It also means that (insert relvar record) will return the assigned id."
+  [relvar key]
+  (assert (some? key) "nil cannot be used as an auto-id")
+  (p/set-auto-increment relvar key))

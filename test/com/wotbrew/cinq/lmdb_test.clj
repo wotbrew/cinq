@@ -234,3 +234,13 @@
       (is (= [{:a a-str} {:a b-str} {:a c-str}] (vec (c/asc idx))))
       (is (= [{:a c-str} {:a b-str} {:a a-str}] (vec (c/desc idx))))
       (is (= [{:a c-str}] (vec (c/top-k idx 1)))))))
+
+(deftest auto-id-test
+  (let [x (c/create db :x)]
+    (is (nil? (c/auto-id x :id)))
+    (is (= 0 (c/insert x {})))
+    (is (= {:id 0} (c/rel-first x)))
+    (is (= 1 (c/insert x {})))
+    (is (= [{:id 0} {:id 1}] (vec x)))
+    (is (= 2 (c/insert x {:id 42})))
+    (is (= [{:id 0} {:id 1} {:id 42}] (vec x)))))

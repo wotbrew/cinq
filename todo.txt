@@ -304,12 +304,6 @@ upserts, insert-ignore etc possible with primary/unique
 
 ---
 
-auto-incr
-
-if named attribute can be set to reflect the rsn automatically e.g (c/auto-increment relvar :customer-id)
-
----
-
 extended destructuring
 
 current limitations
@@ -342,6 +336,3 @@ in the case of native, you can .apply to an lmdb cursor, and specialise the loop
 prim maps for integer joins
 
 joins could get specialised hash multimap for long keys. common case if we have auto-incr, sql data.
-
-
-
