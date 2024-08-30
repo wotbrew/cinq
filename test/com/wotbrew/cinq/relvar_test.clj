@@ -128,4 +128,6 @@
   (let [x (c/relvar)]
     (c/rel-set x [1 2 3])
     (c/run [x x] (c/update x inc))
-    (is (= [2 3 4] (vec x)))))
+    (is (= [2 3 4] (vec x)))
+    (c/run [x x] (c/update x + 42))
+    (is (= [44 45 46] (vec x)))))
