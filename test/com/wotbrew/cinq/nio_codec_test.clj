@@ -38,6 +38,7 @@
     true
     false
     42
+    3.14
     "hello"
     :hello
     'hello
