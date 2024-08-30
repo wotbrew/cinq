@@ -209,7 +209,7 @@
 
 (defn getn
   "Index lookup returning a relation of rows (cinq) eq to the key,
-  same as (get idx k) for non-unique indexes.
+  same as (get idx k).
 
   Like (get idx k), always returns a relation, even on key miss."
   [index k]
