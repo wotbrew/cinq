@@ -145,17 +145,6 @@
 
 (defn insert [relvar row] (p/insert relvar row))
 
-(defn ensure-binding-target [binding]
-  (let [sym (delay (gensym "self"))]
-    (cond
-      (symbol? binding) [binding binding]
-      (map? binding) [(assoc binding @sym :cinq/self) @sym]
-      (sequential? binding) [{binding :cinq/self, @sym :cinq/self} @sym]
-      :else (throw (ex-info "Unsupported binding form" {:binding binding})))))
-
-(defn incr-counter [^longs ctr]
-  (aset ctr 0 (unchecked-inc (aget ctr 0))))
-
 (declare rel-count)
 
 (extend-protocol p/Scannable
