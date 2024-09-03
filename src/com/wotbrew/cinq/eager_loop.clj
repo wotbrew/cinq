@@ -571,7 +571,7 @@
         t (t/tuple-local ra)
         build-side-fn `(fn []
                          (let [~ht (HashMap.)]
-                           ~(emit-loop ra `(do (.putIfAbsent ~ht ~(t/emit-key exprs) ~(t/emit-tuple ra)) nil))
+                           ~(emit-loop ra `(do (.putIfAbsent ~ht ~(t/emit-key (rewrite-expr [ra] exprs)) ~(t/emit-tuple ra)) nil))
                            ~ht))
         left-cols (plan/columns ra)]
     `(let [~ht (~build-side-fn)
