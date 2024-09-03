@@ -67,6 +67,16 @@ spilled sorts
     :order! [c:firstname :desc]]
     c:id)
 
+Assumption that this should be explicit, is that correct?
+
+Consider also non user space implicits, semi/anti join, apply join
+
+Consider also limits, how big can the sort files get? How long can such queries take?
+How do we interrupt them?
+
+If we can fuse grouping, perhaps we could get away without this, if a user can tell what parts of the query
+would be materialized, they could find another way around it.
+
 ---
 
 CinqDynamicBigRecord
