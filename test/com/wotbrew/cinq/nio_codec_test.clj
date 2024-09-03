@@ -48,5 +48,6 @@
     [1, 2, "hello", nil, [false]]
     '(1 2 3)
     #inst "2024-01-04"
-    #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"))
+    #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
+    (zipmap (range 64) (repeat "abcdefghjik"))))
 

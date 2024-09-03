@@ -67,7 +67,7 @@
 (def ^:const t-long 3)
 (def ^:const t-double 4)
 (def ^:const t-string 5)
-(def ^:const t-map 6)
+(def ^:const t-small-map 6)
 (def ^:const t-list 7)
 (def ^:const t-set 8)
 (def ^:const t-date 9)
@@ -77,14 +77,30 @@
 (def ^:const t-keyword 11)
 
 (def ^:const t-uuid 12)
+(def ^:const t-big-map 13)
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   (<= 16 (.remaining buffer)))
 
-(defn encode-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
+(defn encode-big-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
+  (let [len (.size m)]
+    (.putLong buffer t-big-map)
+    (.putInt buffer len)
+    (reduce
+      (fn [_ [k v]]
+        (some-> (or (when-not (buffer-min-remaining? buffer) ::not-enough-space)
+                    (encode-object k buffer symbol-table intern-flag)
+                    (when-not (buffer-min-remaining? buffer) ::not-enough-space)
+                    (encode-object v buffer symbol-table intern-flag))
+                reduced))
+      nil
+      ;; todo what if no sort?
+      (sort-by key m))))
+
+(defn encode-small-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
     ;; todo change type depending on whether all keys symbolic
-    (.putLong buffer t-map)
+    (.putLong buffer t-small-map)
     (.putInt buffer len)
     (if-not (buffer-min-remaining? buffer)
       ::not-enough-space
@@ -96,7 +112,7 @@
             ctr (int-array 1)]
         (if-not (< offset-table-size (.remaining buffer))
           ::not-enough-space
-
+          ;; todo what if no sort
           (let [kvs (sort-by key m)]
             (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
             (or
@@ -231,7 +247,10 @@
               (or (encode-object (namespace s) buffer nil intern-flag)
                   (encode-object (name s) buffer nil intern-flag)))))))
   Map
-  (encode-object [m buffer symbol-table intern-flag] (encode-map m buffer symbol-table intern-flag))
+  (encode-object [m buffer symbol-table intern-flag]
+    (if (< 32 (.size ^Map m))
+      (encode-big-map m buffer symbol-table intern-flag)
+      (encode-small-map m buffer symbol-table intern-flag)))
   List
   (encode-object [l buffer symbol-table intern-flag]
     (let [^List l l
@@ -303,8 +322,17 @@
 (defn decode-list [^ByteBuffer buffer symbol-list]
   (vec (decode-object-array buffer symbol-list)))
 
-(defn decode-map [^ByteBuffer buffer symbol-list]
+(defn decode-small-map [^ByteBuffer buffer symbol-list]
   (CinqDynamicArrayMap/read buffer symbol-list))
+
+(defn decode-big-map [^ByteBuffer buffer symbol-list]
+  (let [len (.getInt buffer)]
+    (loop [tm (transient (hash-map))
+           i 0]
+      (if (< i len)
+        (recur (assoc! tm (decode-object buffer symbol-list) (decode-object buffer symbol-list))
+               (unchecked-inc i))
+        (persistent! tm)))))
 
 (defn decode-set [^ByteBuffer buffer symbol-list]
   (let [len (.getInt buffer)
@@ -338,12 +366,13 @@
       t-double (.getDouble buffer)
       t-string (decode-string buffer)
       t-list (decode-list buffer symbol-list)
-      t-map (decode-map buffer symbol-list)
+      t-small-map (decode-small-map buffer symbol-list)
       t-set (decode-set buffer symbol-list)
       t-date (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
       t-uuid (decode-uuid buffer)
+      t-big-map (decode-big-map buffer symbol-list)
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn decode-root-unsafe [^CinqUnsafeDynamicMap mut-record ^ByteBuffer buffer ^objects symbol-list]
@@ -356,11 +385,13 @@
       t-double (.getDouble buffer)
       t-string (decode-string buffer)
       t-list (decode-list buffer symbol-list)
-      t-map (do (.read mut-record buffer) mut-record)
+      t-small-map (do (.read mut-record buffer) mut-record)
       t-set (decode-set buffer symbol-list)
       t-date (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
+      t-uuid (decode-uuid buffer)
+      t-big-map (decode-big-map buffer symbol-list)
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn empty-symbol-table []
@@ -498,7 +529,7 @@
         buf-tid (.getLong buf (.position buf))]
     (cond
       (= buf-tid t-nil) nil
-      (= t-map tid)
+      (= t-small-map tid)
       (let [len (.getInt valbuf)
             key-size (.getInt valbuf)
             _val-size (.getInt valbuf)
