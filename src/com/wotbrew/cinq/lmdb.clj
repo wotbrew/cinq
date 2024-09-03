@@ -733,7 +733,7 @@
       ret)))
 
 (defn- variable-read [db k f]
-  (if-some [tx (*read-transactions* db)]
+  (if-some [tx (or (*write-transactions* db) (*read-transactions* db))]
     (f (.valAt ^ILookup tx k))
     (p/read-transaction db (fn [tx] (f (.valAt ^ILookup tx k))))))
 
