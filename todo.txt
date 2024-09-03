@@ -333,3 +333,10 @@ analyzer
 
 shadowing columns could cause interesting problems potentially, particularly if we want to use group-by fusion
 investigate whether we need to do anything about this
+
+---
+
+lmdb maxreaders
+
+Should we apply back pressure once maxreaders is reached, easy to demonstrate - spawn 1000 concurrent threads
+some of them will crash.
