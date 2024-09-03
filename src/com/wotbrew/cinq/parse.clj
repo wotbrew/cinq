@@ -239,7 +239,11 @@
 
       :limit
       {:op :limit
-       :n arg})))
+       :n arg}
+
+      :distinct
+      {:op :distinct
+       :exprs (mapv (fn [expr] (rewrite-exprs expr)) arg)})))
 
 (defn parse-tree [q]
   (let [statements (mapv parse-stmt (partition 2 q))]
@@ -287,7 +291,10 @@
          [::plan/order-by (! (:prev tree)) (:clauses tree)]
 
          :limit
-         [::plan/limit (! (:prev tree)) (:n tree) `(long-array 1)]))
+         [::plan/limit (! (:prev tree)) (:n tree) `(long-array 1)]
+
+         :distinct
+         [::plan/distinct (! (:prev tree)) (:exprs tree)]))
      tree)))
 
 (defn parse-projection [selection expr]

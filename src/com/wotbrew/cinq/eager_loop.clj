@@ -566,6 +566,25 @@
                              (let [~@(t/emit-tuple-column-binding left-t left-cols)]
                                ~body)))))))))
 
+(defn emit-distinct [ra exprs body]
+  (let [ht (with-meta (gensym "ht") {:tag `HashMap})
+        t (t/tuple-local ra)
+        build-side-fn `(fn []
+                         (let [~ht (HashMap.)]
+                           ~(emit-loop ra `(do (.putIfAbsent ~ht ~(t/emit-key exprs) ~(t/emit-tuple ra)) nil))
+                           ~ht))
+        left-cols (plan/columns ra)]
+    `(let [~ht (~build-side-fn)
+           ret# (reduce
+                  (fn [_# ~t]
+                    (let [~@(t/emit-tuple-column-binding t left-cols)
+                          r# ~body]
+                      (when (some? r#)
+                        (reduced r#))))
+                  nil
+                  (vals ~ht))]
+       ret#)))
+
 (defn emit-column [al o col i]
   (let [[col-ctor a-ctor prim-conv]
         (condp = (:tag (meta col))
@@ -852,6 +871,9 @@
 
     [::plan/union ?ras]
     (emit-union ?ras body)
+
+    [::plan/distinct ?ra ?exprs]
+    (emit-distinct ?ra ?exprs body)
 
     _
     (do

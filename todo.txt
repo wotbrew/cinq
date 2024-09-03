@@ -1,25 +1,5 @@
 ---
 
-Better updates
-
-I am not happy with the zoo of update/delete fns. I like c/run as a base, targeting the relation with a call
-seems very natural.
-
-The shorthand, delete-where and so on are only there for tersity. Probably not worth the confusion.
-Particularly if you have c/swap for indexed updates, c/run will be reserved for large multi-record updates.
-
-Consider however, the use of the c/update symbol, update is overloaded - and you will use clj/update often in swap calls.
-
-(c/row-set) or (c/replace) might be better. replace is a good name, and the shadowing of clj-core is likely not so bad given its infrequently used.
-
----
-
-distinct
-
-(c/q [a as :distinct [a]])
-
----
-
 Indexes do not use native filters, does this matter?
 
 ---
@@ -336,3 +316,10 @@ in the case of native, you can .apply to an lmdb cursor, and specialise the loop
 prim maps for integer joins
 
 joins could get specialised hash multimap for long keys. common case if we have auto-incr, sql data.
+
+---
+
+analyzer
+
+shadowing columns could cause interesting problems potentially, particularly if we want to use group-by fusion
+investigate whether we need to do anything about this

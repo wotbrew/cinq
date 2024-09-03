@@ -81,6 +81,10 @@
           [bindings smap] (reduce rf [[] inner-smap] ?bindings)]
       [[::let ra bindings] smap])
 
+    [::distinct ?ra ?exprs]
+    (let [[ra smap] (unique-ify* ?ra)]
+      [[::distinct ra (walk/postwalk-replace smap ?exprs)] smap])
+
     _ [ra {}]))
 
 (defn unique-ify [ra]
@@ -225,6 +229,9 @@
     [::cte ?bindings ?ra] (columns ?ra)
 
     [::union ?ras] [union-out-col]
+
+    [::distinct ?ra ?exprs]
+    (columns ?ra)
 
     _ (throw (ex-info "Not sure how to get columns from ra" {:ra ra}))))
 
