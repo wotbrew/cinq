@@ -42,14 +42,6 @@ Like create-index, these functions create and return an index. In the case of fo
 
 ---
 
-Implicit group
-
-(q [f foo] (c/count))
-
-if let/proj/where/join/scan-src/group-expr/order-expr expr expects grouping, add it if is not already present
-
----
-
 Spilling
 
 spilled merge join

@@ -235,6 +235,14 @@
 
     _ (throw (ex-info "Not sure how to get columns from ra" {:ra ra}))))
 
+(defn grouped? [ra]
+  (boolean (some #{%count-sym} (columns ra))))
+
+(def aggregate-keywords
+  #{::count ::max ::min ::avg ::sum})
+
+(defn uses-aggregate? [expr] (boolean (some aggregate-keywords (tree-seq seqable? seq expr))))
+
 (defn dependent-cols* [cmap expr]
   (let [dmap (atom {})]
     ((fn ! [expr]
@@ -1025,8 +1033,23 @@
       r/attempt
       r/top-down))
 
+(def imply-grouping
+  (-> (r/match
+        (m/and [::project ?ra ?bindings]
+               (m/guard (some (fn [[_ expr]] (uses-aggregate? expr)) ?bindings))
+               (m/guard (not (grouped? ?ra))))
+        [::project [::group-by ?ra []] ?bindings]
+
+        (m/and [::let ?ra ?bindings]
+               (m/guard (some (fn [[_ expr]] (uses-aggregate? expr)) ?bindings))
+               (m/guard (not (grouped? ?ra))))
+        [::let [::group-by ?ra []] ?bindings])
+      r/attempt
+      r/top-down))
+
 (defn rewrite [ra]
   (-> ra
+      imply-grouping
       unique-ify-sub-queries
       unique-ify
       rewrite-sub-queries
