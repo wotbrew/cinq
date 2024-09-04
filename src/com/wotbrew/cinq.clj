@@ -127,6 +127,8 @@
   ([] (#'throw-only-in-queries #'count))
   ([expr] (#'throw-only-in-queries #'count)))
 
+(defmacro count-distinct [expr] (#'throw-only-in-queries #'count-distinct))
+
 (defmacro tuple [& kvs] (#'throw-only-in-queries #'tuple))
 
 (defmacro write [binding & body] `(p/write-transaction ~(second binding) (fn [~(first binding)] ~@body)))

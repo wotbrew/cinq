@@ -61,6 +61,10 @@
                (let [deps (possible-dependencies dep-cols ?expr)]
                  (list `col/count-some (vec (interleave deps deps)) ?expr))
 
+               [::plan/count-distinct ?expr]
+               (let [deps (possible-dependencies dep-cols ?expr)]
+                 (list `col/count-distinct-some (vec (interleave deps deps)) ?expr))
+
                [::plan/sum ?expr]
                (let [deps (possible-dependencies dep-cols ?expr)]
                  (list `col/sum (vec (interleave deps deps)) ?expr))

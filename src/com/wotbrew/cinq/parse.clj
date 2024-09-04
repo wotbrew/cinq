@@ -81,6 +81,8 @@
 
 (add-n2n-rewrites
 
+  `inc
+  `dec
   `+
   `*
   `-
@@ -186,6 +188,8 @@
       (into [::plan/avg] ?args)
       'com.wotbrew.cinq/count
       (into [::plan/count] ?args)
+      'com.wotbrew.cinq/count-distinct
+      (into [::plan/count-distinct] ?args)
       `com.wotbrew.cinq/scalar
       [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/q ?args))]
       `com.wotbrew.cinq/exists?

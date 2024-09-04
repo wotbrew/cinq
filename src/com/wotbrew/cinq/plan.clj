@@ -239,7 +239,7 @@
   (boolean (some #{%count-sym} (columns ra))))
 
 (def aggregate-keywords
-  #{::count ::max ::min ::avg ::sum})
+  #{::count ::count-distinct ::max ::min ::avg ::sum})
 
 (defn uses-aggregate? [expr] (boolean (some aggregate-keywords (tree-seq seqable? seq expr))))
 
@@ -772,6 +772,7 @@
     (m/match expr
       [::count] [`0]
       [::count ?expr] [(zero ?expr)]
+      [::count-distinct ?expr] [(zero ?expr)]
       [::sum ?expr] [(zero ?expr)]
       [::avg ?expr] [(zero ?expr) 0]
       [::min ?expr] [nil]
@@ -784,6 +785,7 @@
     (m/match expr
       [::count] [`(unchecked-inc ~acc-sym)]
       [::count ?expr] [`(if ~?expr (unchecked-inc ~acc-sym) ~acc-sym)]
+      [::count-distinct ?expr] (throw (ex-info "Compile error: unexpected count-distinct in aggregate reduction" {}))
       [::sum ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr)]
       [::avg ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr) `(unchecked-inc ~(second acc-syms))]
       [::min ?expr] [`(CinqUtil/minStep ~acc-sym ~?expr)]
@@ -794,28 +796,12 @@
 (defn aggregate-completion [acc-syms expr]
   (let [acc-sym (first acc-syms)]
     (m/match expr
-      [::count] acc-sym
-      [::count ?expr] acc-sym
-      [::sum ?expr] acc-sym
       [::avg ?expr] `[::apply-n2n / ~acc-sym [::apply-n2n max 1 ~(second acc-syms)]]
       _ acc-sym)))
 
 (defn aggregate? [expr]
-  (m/match expr
-    [::sum _]
-    true
-    [::avg _]
-    true
-    [::min _]
-    true
-    [::max _]
-    true
-    [::count _]
-    true
-    [::count]
-    true
-    _
-    false))
+  (and (vector? expr)
+       (contains? aggregate-keywords (nth expr 0 nil))))
 
 (defn hoist-aggregates [group-columns projection-bindings]
   (let [smap (atom {})

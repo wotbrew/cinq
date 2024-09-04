@@ -1,7 +1,8 @@
 (ns com.wotbrew.cinq.column
   (:import (clojure.lang ArrayIter Counted IDeref ILookup Indexed RT)
            (com.wotbrew.cinq CinqUtil)
-           (java.io Writer)))
+           (java.io Writer)
+           (java.util HashSet)))
 
 (definterface IColumn
   (getObject ^Object [^int i])
@@ -189,20 +190,20 @@
 
       :else `(Long/valueOf 0))))
 
-(defn simple-sum? [binding expr]
+(defn column-expr? [binding expr]
   (and (simple-symbol? expr) (= [expr expr] binding)))
 
 (defmacro sum
   ([col] `(sum1 ~col))
   ([binding expr]
-   (if (simple-sum? binding expr)
+   (if (column-expr? binding expr)
      `(sum1 ~(first binding))
      `(broadcast-reduce ~binding ~(sum-default binding expr) ~`CinqUtil/sumStep ~expr))))
 
 (defmacro avg
   ([col] `(let [col# ~col] (if (< 0 (count col#)) (/ (sum col#) (count col#)) 0.0)))
   ([binding expr]
-   (if (simple-sum? binding expr)
+   (if (column-expr? binding expr)
      `(avg ~(first binding))
      ;; finding broadcast returns is an inference problem
      `(avg (broadcast ~binding ~expr)))))
@@ -228,9 +229,33 @@
             (recur (unchecked-inc ret) (unchecked-inc i))))
         ret))))
 
+(defn count-distinct-some1 [^IColumn col]
+  (let [size (count col)
+        hs (HashSet.)]
+    (loop [ret 0
+           i 0]
+      (if (< i size)
+        (let [o (.getObject col i)]
+          (if (or (nil? o) (.contains hs o))
+            (recur ret (unchecked-inc i))
+            (do (.add hs o)
+                (recur (unchecked-inc ret) (unchecked-inc i)))))
+        ret))))
+
 (defmacro count-some
   ([col] `(count-some1 ~col))
-  ([binding expr] `(sum ~binding (if (nil? ~expr) 0 1))))
+  ([binding expr]
+   (if (column-expr? binding expr)
+     `(count-some ~expr)
+     `(sum ~binding (if (nil? ~expr) 0 1)))))
+
+(defmacro count-distinct-some
+  ([col] `(count-distinct-some1 ~col))
+  ([binding expr]
+   (if (column-expr? binding expr)
+     `(count-distinct-some ~expr)
+     `(let [s# (HashSet.)]
+        (sum ~binding (let [r# ~expr] (if (or (nil? r#) (.contains s# r#)) 0 (do (.add s# r#) 1))))))))
 
 (comment
 
