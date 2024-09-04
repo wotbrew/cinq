@@ -12,5 +12,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install dependencies
       run: lein deps
+    - name: Compile java
+      run: lein javac
     - name: Run tests
       run: lein test

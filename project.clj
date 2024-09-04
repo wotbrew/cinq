@@ -11,6 +11,8 @@
                                   [org.clojure/test.check "1.1.1"]
                                   [djblue/portal "0.56.0"]]
                    :source-paths ["dev"]}}
+  :javac-options ["-target" "1.8" "-source" "1.8"]
+  :java-source-paths ["src"]
   :jvm-opts ^:replace ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                        "--add-exports" "java.base/sun.nio.ch=ALL-UNNAMED"]
   :repl-options {:init-ns cinq.core})
