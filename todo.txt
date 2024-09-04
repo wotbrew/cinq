@@ -340,3 +340,9 @@ More aggregates:
 count-distinct
 all/any/not-any?
 pg: bool_or bool_and
+
+---
+
+sets and map native filter eq
+
+at the moment codec assumes it can sort keys so that buffer comparison can work. We should support maps (and later sets) where this is not possible.
