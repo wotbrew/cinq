@@ -150,7 +150,12 @@
 
 (defmacro broadcast-reduce [binding init op expr]
   (if (empty? binding)
-    `(->Column (object-array 0) nil)
+    `((fn bc-reduce-fn# []
+        (loop [ret# ~init
+               i# 0]
+          (if (< i# ~'%count)
+            (recur (~op ret# ~expr) (unchecked-inc i#))
+            ret#))))
     (let [binding (broadcast-binding binding)
           col-sym (first binding)
           i-sym (gensym "i")]
