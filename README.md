@@ -1,5 +1,7 @@
 # cinq
 
+![tests](https://github.com/wotbrew/cinq/actions/workflows/tests.yml/badge.svg)
+
 `status: in development`
 
 (C)lojure (In)tegrated (Q)uery extends Clojure on the JVM to relational programming.
