@@ -182,10 +182,6 @@
         filter-bindings (concat filter-only filter-bind)
         condition-bindings (concat cond-only cond-bind)
 
-        ;; temporary
-        #_#_condition-used (concat filter-bindings condition-used)
-        #_#_filter-bindings []
-
         lambda `(reify
                   IFn
                   ~(if (seq filter-bindings)
