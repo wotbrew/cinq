@@ -337,7 +337,6 @@ some of them will crash.
 
 More aggregates:
 
-count-distinct
 all/any/not-any?
 pg: bool_or bool_and
 
