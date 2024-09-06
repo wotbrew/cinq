@@ -1,5 +1,18 @@
 ---
 
+one pass aggregation resurrection
+
+Currently, we are stuck with creating arrays for columns under group by and then broadcast-reduce'ing them. group-project fusion died a while ago, time to bring it back.
+
+ideas, pass mutable aggregate variables as the unused agg# arg to scan. Give it a well known name e.g '%agg could be mutable object array
+ * same but use capture in a closure (e.g pass outer let binding for the run-scan-rsn et al, bang on it in the loop body)
+ * use an object-array for first cut
+ * mutable scan function fields might also work
+
+I suspect without changing the scan abstraction we cannot have local mutable variables here (e.g bound in a loop recur), this probably does not matter given the cost of a processing 'step' in a typical query.
+
+---
+
 Indexes do not use native filters, does this matter?
 
 ---
@@ -250,6 +263,16 @@ Add a rsn scan interface method to indexes to do some int-intersection
 ---
 
 Composite indexes
+
+option varargs:
+how to get the index you cannot do (:foo db).
+
+option, vec:
+(c/create-index foo [:a :b :c])
+;; partial lookup
+(c/getn (foo [:a :b :c]) :a 42 :b 43)
+
+equality would allow you to do partial lookup, range, asc, top-n would have to only work on the prefix attribute
 
 - lists / vectors should be ok?
 - what does index-key look like
