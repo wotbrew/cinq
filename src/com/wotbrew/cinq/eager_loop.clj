@@ -673,7 +673,6 @@
          ~body))))
 
 (defn emit-group-project [ra bindings agg-bindings new-projection body]
-  ;; TODO broken
   (if (empty? bindings)
     (emit-group-project-all ra agg-bindings new-projection body)
     ;; group bindings
