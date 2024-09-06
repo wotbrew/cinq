@@ -186,7 +186,9 @@
   (range index < 3) all values below 3.
 
   (range index < 3 > 1) all values below 3, but above one.
-  (range index > 3 <= 100) all values between 3-100 incl."
+  (range index > 3 <= 100) all values between 3-100 incl.
+
+  For LMDB indexes, there is no guarantee that entries will be sorted within the filter (due to limitations on key sizes)."
   ([index test a]
    (condp identical? test
      > (p/range-scan index range-test/gt a nil nil)
@@ -341,15 +343,15 @@
 
 (defn bottom-k [idx n] (q [x (asc idx) :limit n] x))
 
-(defn lookup [rel indexed-key key]
-  (if-some [idx (get rel indexed-key)]
+(defn lookup [relvar indexed-key key]
+  (if-some [idx (get relvar indexed-key)]
     (getn idx key)
     (q [{k indexed-key :as r} :when (= k key)] r)))
 
 (defn lookup1
-  ([rel indexed-key key] (lookup1 rel indexed-key key nil))
-  ([rel indexed-key key not-found]
-   (if-some [idx (get rel indexed-key)]
+  ([relvar indexed-key key] (lookup1 relvar indexed-key key nil))
+  ([relvar indexed-key key not-found]
+   (if-some [idx (get relvar indexed-key)]
      (get1 idx key not-found)
      (rel-first (q [{k indexed-key :as r} :when (= k key)] r) not-found))))
 
@@ -359,34 +361,38 @@
   Returns the result of the last application of the function. Often keys are unique, so in this case the function
   returns the new value of the row.
 
-  Works if the key is not indexed, but will scan the relation to find the row.
+  Works if the key is not indexed, but if so will scan the relation to find the matches.
 
   e.g
   (swap customers :id 42 assoc :name \"Bob\")
   ;; ^ sets a customers name to bob by id."
-  [rel indexed-key key f & args]
+  [relvar indexed-key key f & args]
   (let [ret (volatile! nil)]
-    (run [r (lookup rel indexed-key key)] (replace r (vreset! ret (apply f r args))))
+    (run [r (lookup relvar indexed-key key)] (replace r (vreset! ret (apply f r args))))
     @ret))
 
 (defn put
-  "Inserts the row if it does not exist otherwise replaces rows where (= (indexed-key row) key) with the supplied row value."
-  [rel indexed-key key row]
+  "Inserts the row if it does not exist otherwise replaces rows where (= (indexed-key row) key) with the supplied row value.
+
+  Works if the key is not indexed, but if so will scan the relation to find matches."
+  [relvar indexed-key key row]
   (let [ret (volatile! ::no-update)
         row (assoc row indexed-key key)]
-    (run [r (lookup rel indexed-key key)]
+    (run [r (lookup relvar indexed-key key)]
       (vreset! ret r)
       (replace r row))
     (if (identical? ::no-update @ret)
-      (do (insert rel row)
+      (do (insert relvar row)
           nil)
       @ret)))
 
 (defn del-key
-  "Deletes rows where (= (indexed-key row) key). Returns the number of rows deleted."
-  [rel indexed-key key]
+  "Deletes rows where (= (indexed-key row) key). Returns the number of rows deleted.
+
+  Works if the key is not indexed, but if so will scan the relation to find matches."
+  [relvar indexed-key key]
   (let [ret (long-array 1)]
-    (run [r (lookup rel indexed-key key)]
+    (run [r (lookup relvar indexed-key key)]
       (aset ret 0 (unchecked-inc (aget ret 0)))
       (delete r))
     (aget ret 0)))
@@ -394,12 +400,12 @@
 (defn auto-id
   "Given a relation variable, sets its auto-incrementing key. If a previous key was set, it will be replaced with the one provided.
 
-  When a relation variable has such a key, inserts will provide it (by assoc) before saving to storage.
+  Inserts then will act as follows `(insert (auto-id r :id) {})` will insert `{:id rsn}` where the (r)ow-(s)equence-(n)umber is assigned using the internal row counter of the database.
+  For a fresh relation, the first insert would therefore return 0.
 
-  If an :id is supplied then the behaviour will be ignored - be aware collisions are possible this way. This behaviour is subject to change.
+  Note that because (insert) returns by definition the assigned rsn, insert will always return the value assigned to the auto-id if one was set.
 
-  The RSN will be used to source the id, this means the id is only unique for a given relvar, and you will have gaps.
-  It also means that (insert relvar record) will return the assigned id."
+  If a value is supplied on insert for the auto-id key, then the behaviour will be ignored - be aware collisions are possible this way. This behaviour is subject to change."
   [relvar key]
   {:pre [(keyword? key)]}
   (p/set-auto-increment relvar key))
