@@ -7,7 +7,7 @@
             [com.wotbrew.cinq.protocols :as p]
             [com.wotbrew.cinq.tuple :as t]
             [meander.epsilon :as m])
-  (:import (clojure.lang IFn IReduceInit)
+  (:import (clojure.lang IFn IReduceInit RT)
            (com.wotbrew.cinq CinqMultimap CinqScanFunction CinqScanFunction$NativeFilter CinqUtil)
            (com.wotbrew.cinq.protocols Scannable)
            (java.util ArrayList Comparator HashMap)
@@ -641,84 +641,81 @@
          nil
          ht#))))
 
+(defn- assign-agg-binding-indexes [agg-bindings]
+  (let [acc-index (volatile! -1)]
+    (for [v agg-bindings]
+      (update v 1 (partial mapv #(into [(vswap! acc-index inc)] %))))))
+
+(defn emit-group-project-all [ra agg-bindings new-projection body]
+  (let [arr (gensym "arr")
+        agg-bindings (assign-agg-binding-indexes agg-bindings)
+        acc-count (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings))
+        acc-bindings (for [[_ agg] agg-bindings
+                           [i sym _] agg
+                           form [sym `(aget ~arr ~i)]]
+                       form)]
+    `(let [~arr (object-array ~acc-count)]
+       ~@(for [[_ agg] agg-bindings
+               [i _ init _] agg]
+           `(aset ~arr ~i (RT/box ~init)))
+       ~(emit-loop ra `(let [~@acc-bindings]
+                         ~@(for [[_ agg] agg-bindings
+                                 [i _ _ expr] agg]
+                             `(aset ~arr ~i (RT/box ~(rewrite-expr [ra] expr))))
+                         nil))
+       (let [~@acc-bindings
+             ~@(for [[sym _ completion] agg-bindings
+                     form [sym (rewrite-expr [] completion)]]
+                 form)
+             ~@(for [[sym expr] new-projection
+                     form [sym (rewrite-expr [] expr)]]
+                 form)]
+         ~body))))
+
 (defn emit-group-project [ra bindings agg-bindings new-projection body]
   ;; TODO broken
   (if (empty? bindings)
-    ;; group all
-    (let [t (t/tuple-local ra)]
-      ;; a better form might be (emit-iter-loop ra variables loop-variables loop-body loop-finished)
-      ;; would allow a totally eager pass without the emit-iterator here
-      ;; could emit specialised loops for Vector etc as IReduce is often the fastest thing to do even with the virtual calls
-      `(let [iter# ~(emit-iterator ra)]
-         (loop [~@(for [[_ agg] agg-bindings
-                        [acc init] agg
-                        form [acc (rewrite-expr [] init)]]
-                    form)]
-           (if (.hasNext iter#)
-             (let [~t (.next iter#)
-                   ~@(t/emit-tuple-column-binding t
-                                                  (plan/columns ra)
-                                                  (rewrite-expr [ra]
-                                                                (->> (mapcat second agg-bindings)
-                                                                     (map (fn [[_acc _init expr]] expr))
-                                                                     vec)))]
-               (recur ~@(for [[_ agg] agg-bindings
-                              [_ _ expr] agg]
-                          (rewrite-expr [ra] expr))))
-             (let [~@(for [[sym _ completion] agg-bindings
+    (emit-group-project-all ra agg-bindings new-projection body)
+    ;; group bindings
+    (let [k (t/key-local (mapv second bindings))
+          arr (with-meta (gensym "arr") {:tag 'objects})
+          ht (gensym "ht")
+          agg-bindings (assign-agg-binding-indexes agg-bindings)
+          acc-count (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings))
+          acc-bindings (for [[_ agg] agg-bindings
+                             [i sym _] agg
+                             form [sym `(aget ~arr ~i)]]
+                         form)]
+      `(let [~ht (HashMap.)]
+         ~(emit-loop
+            ra
+            `(let [~k ~(t/emit-key (rewrite-expr [ra] (map second bindings)))
+                   f# (reify BiFunction
+                        (apply [_# _# arr#]
+                          (let [~arr (or arr# (doto (object-array ~acc-count)
+                                                ~@(for [[_ agg] agg-bindings
+                                                        [i _ init] agg]
+                                                    `(aset ~i (RT/box ~(rewrite-expr [] init))))))
+                                ~@acc-bindings]
+                            ~@(for [[_ agg] agg-bindings
+                                    [i _ _ expr] agg]
+                              `(aset ~arr ~i (RT/box ~(rewrite-expr [ra] expr))))
+                            ~arr)))]
+               (.compute ~ht ~k f#)
+               nil))
+         (reduce
+           (fn [_# [~k ~arr]]
+             (let [~@(t/emit-key-bindings k (map first bindings))
+                   ~@acc-bindings
+                   ~@(for [[sym _ completion] agg-bindings
                            form [sym (rewrite-expr [] completion)]]
                        form)
-                   ~@(mapcat (fn [[sym expr]] [sym (rewrite-expr [] expr)]) new-projection)]
-               ~body)))))
-
-    ;; group bindings
-    (let [o (t/tuple-local ra)
-          cols (plan/columns ra)
-          k (t/key-local (mapv second bindings))
-          al (with-meta (gensym "al") {:tag `ArrayList})]
-      `(let [rs# ~(emit-list ra)
-             ht# (HashMap.)]
-         ;; agg
-         (run!
-           (fn [~o]
-             (let [~@(t/emit-tuple-column-binding o cols (mapv second bindings))
-                   ~k ~(t/emit-key (rewrite-expr [ra] (map second bindings)))
-                   f# (reify BiFunction
-                        (apply [_# _# ~(with-meta al {})]
-                          (let [~al (or ~al (ArrayList.))]
-                            (.add ~al ~o)
-                            ~al)))]
-               (.compute ht# ~k f#)))
-           rs#)
-         ;; emit results
-         (run!
-           (fn [[~k ~al]]
-             (let [~@(t/emit-key-bindings k (map first bindings))]
-               (loop [i# 0
-                      ~@(for [[_ agg] agg-bindings
-                              [acc init] agg
-                              form [acc (rewrite-expr [] init)]]
-                          form)]
-                 (if (< i# (.size ~al))
-                   (let [~o (.get ~al i#)
-                         ~@(t/emit-tuple-column-binding o
-                                                        (plan/columns ra)
-                                                        (rewrite-expr [ra]
-                                                                      (->> (mapcat second agg-bindings)
-                                                                           (map (fn [[_acc _init expr]] expr))
-                                                                           vec)))]
-                     (recur (unchecked-inc i#)
-                            ~@(for [[_ agg] agg-bindings
-                                    [_ _ expr] agg]
-                                (rewrite-expr [ra] expr))))
-                   (let [~@(for [[sym _ completion] agg-bindings
-                                 form [sym (rewrite-expr [] completion)]]
-                             form)
-                         ~@(mapcat (fn [[sym expr]] [sym (rewrite-expr [] expr)]) new-projection)]
-                     ~body)))))
-           ht#)))
-
-    ))
+                   ~@(for [[sym expr] new-projection
+                           form [sym (rewrite-expr [] expr)]]
+                       form)]
+               (some-> ~body reduced)))
+           nil
+           ~ht)))))
 
 (defn emit-order-by [ra order-clauses body]
   (let [o (t/tuple-local ra)
