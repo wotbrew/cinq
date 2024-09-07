@@ -8,7 +8,7 @@
   (:import (clojure.lang IRecord)
            (com.wotbrew.cinq CinqUtil)
            (com.wotbrew.cinq.column Column DoubleColumn LongColumn)
-           (java.lang.reflect Field)))
+           (java.lang.reflect Field)(java.util HashSet)))
 
 (declare arity column-map columns)
 
@@ -181,8 +181,8 @@
     [::project ?ra ?bindings]
     (mapv first ?bindings)
 
-    [::group-project ?ra ?bindings ?aggregates ?projection]
-    (mapv first ?projection)
+    [::group-let ?ra ?bindings ?aggregates ?projection]
+    (conj (into (mapv first ?bindings) (mapv first ?projection)) %count-sym)
 
     [::apply :left-join ?left ?right]
     (into (columns ?left) (mapv optional-tag (columns ?right)))
@@ -717,7 +717,7 @@
 ;; can permit faster aggregation where grouped columns do not need to be materialized and multiple aggregates
 ;; can be computed in one loop
 ;; where columns do not leak out of the projection
-(def ^:dynamic *group-project-fusion* false)
+(def ^:dynamic *group-let-fusion* true)
 
 (defn infer-type [cols expr]
   (let [col-types (zipmap cols (map (comp :tag meta) cols))
@@ -772,7 +772,7 @@
     (m/match expr
       [::count] [`0]
       [::count ?expr] [(zero ?expr)]
-      [::count-distinct ?expr] [(zero ?expr)]
+      [::count-distinct ?expr] [(zero ?expr) `(HashSet.)]
       [::sum ?expr] [(zero ?expr)]
       [::avg ?expr] [(zero ?expr) 0]
       [::min ?expr] [nil]
@@ -785,12 +785,18 @@
     (m/match expr
       [::count] [`(unchecked-inc ~acc-sym)]
       [::count ?expr] [`(if ~?expr (unchecked-inc ~acc-sym) ~acc-sym)]
-      [::count-distinct ?expr] (throw (ex-info "Compile error: unexpected count-distinct in aggregate reduction" {}))
+      [::count-distinct ?expr]
+      (let [[count-sym hashset-sym] acc-syms
+            hashset-sym (with-meta hashset-sym {:tag `HashSet})]
+        [`(let [e# ~?expr]
+            (cond (nil? e#) ~count-sym
+                  (.add ~hashset-sym e#) (unchecked-inc ~count-sym)
+                  :else ~count-sym))
+         hashset-sym])
       [::sum ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr)]
       [::avg ?expr] [`(CinqUtil/sumStep ~acc-sym ~?expr) `(unchecked-inc ~(second acc-syms))]
       [::min ?expr] [`(CinqUtil/minStep ~acc-sym ~?expr)]
       [::max ?expr] [`(CinqUtil/maxStep ~acc-sym ~?expr)]
-      ;; todo min/max
       _ (throw (ex-info "Unknown aggregate" {:expr expr})))))
 
 (defn aggregate-completion [acc-syms expr]
@@ -801,7 +807,8 @@
 
 (defn aggregate? [expr]
   (and (vector? expr)
-       (contains? aggregate-keywords (nth expr 0 nil))))
+       (contains? aggregate-keywords (nth expr 0 nil))
+       (not= [::count] expr)))
 
 (defn hoist-aggregates [group-columns projection-bindings]
   (let [smap (atom {})
@@ -815,6 +822,18 @@
     (when no-leakage
       [aggregates new-projections])))
 
+(def project-let
+  (r/match
+   [::project ?ra ?projection]
+    (let [new-sym (memoize *gensym*)]
+      [::project
+       [::let ?ra (mapv (fn [[sym expr]] [(new-sym sym) expr]) ?projection)]
+       (mapv
+         (fn [[sym]] [sym (new-sym sym)])
+         ?projection)])))
+
+(def rewrite-project-let (r/bottom-up (r/attempt #'project-let)))
+
 (def fuse
   (r/match
     [::where ?ra true]
@@ -823,11 +842,17 @@
     [::where [::where ?ra ?pred-a] ?pred-b]
     [::where ?ra (conjoin-predicates ?pred-a ?pred-b)]
 
+    [::let [::let ?ra ?a] ?b]
+    [::let ?ra (into ?a ?b)]
+
+    [::let [::order-by ?ra ?clauses] ?bindings]
+    [::order-by [::let ?ra ?bindings] ?clauses]
+
     ;; it might be better to have something like ::group-let and an ana pass
     ;; this only works in a tiny subset of occasions
     ;; to determine whether group columns leak
-    (m/and [::project [::group-by ?ra ?bindings] ?projection]
-           (m/guard *group-project-fusion*))
+    (m/and [::let [::group-by ?ra ?bindings] ?projection]
+           (m/guard *group-let-fusion*))
     (let [;; filter out shadowed group columns
           group-columns (filterv (complement (set (map first ?bindings))) (columns ?ra))
           [agg-bindings new-projection :as no-leakage] (hoist-aggregates group-columns ?projection)
@@ -837,8 +862,8 @@
                                    exprs (aggregate-reduction acc-syms agg)]]
                          [sym (mapv vector acc-syms inits exprs) (aggregate-completion acc-syms agg)])]
       (if no-leakage
-        [::group-project ?ra ?bindings (vec agg-bindings) new-projection]
-        [::project [::group-by ?ra ?bindings] ?projection]))))
+        [::group-let ?ra ?bindings (vec agg-bindings) new-projection]
+        [::let [::group-by ?ra ?bindings] ?projection]))))
 
 (def rewrite-logical
   (-> #'rewrites
@@ -1044,6 +1069,7 @@
       rewrite-logical
       push-lookups-sub-queries
       push-lookups
+      rewrite-project-let
       rewrite-fuse
       rewrite-join-collect
       rewrite-join-order
@@ -1182,7 +1208,7 @@
                             ?bindings))]
 
     ;; todo group-project
-    #_#_[::group-project ?ra ?bindings ?aggregates ?projection]
+    #_#_[::group-let ?ra ?bindings ?aggregates ?projection]
             nil
 
     [::apply ?mode ?left ?right]

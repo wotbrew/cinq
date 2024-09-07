@@ -646,10 +646,11 @@
     (for [v agg-bindings]
       (update v 1 (partial mapv #(into [(vswap! acc-index inc)] %))))))
 
-(defn emit-group-project-all [ra agg-bindings new-projection body]
+(defn emit-group-let-all [ra agg-bindings new-projection body]
   (let [arr (gensym "arr")
         agg-bindings (assign-agg-binding-indexes agg-bindings)
-        acc-count (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings))
+        acc-count (inc (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings)))
+        cnt-index (dec acc-count)
         acc-bindings (for [[_ agg] agg-bindings
                            [i sym _] agg
                            form [sym `(aget ~arr ~i)]]
@@ -658,12 +659,15 @@
        ~@(for [[_ agg] agg-bindings
                [i _ init _] agg]
            `(aset ~arr ~i (RT/box ~init)))
+       (aset ~arr ~cnt-index (RT/box 0))
        ~(emit-loop ra `(let [~@acc-bindings]
                          ~@(for [[_ agg] agg-bindings
                                  [i _ _ expr] agg]
                              `(aset ~arr ~i (RT/box ~(rewrite-expr [ra] expr))))
+                         (aset ~arr ~cnt-index (unchecked-inc (aget ~arr ~cnt-index)))
                          nil))
        (let [~@acc-bindings
+             ~plan/%count-sym (aget ~arr ~cnt-index)
              ~@(for [[sym _ completion] agg-bindings
                      form [sym (rewrite-expr [] completion)]]
                  form)
@@ -672,15 +676,16 @@
                  form)]
          ~body))))
 
-(defn emit-group-project [ra bindings agg-bindings new-projection body]
+(defn emit-group-let [ra bindings agg-bindings new-projection body]
   (if (empty? bindings)
-    (emit-group-project-all ra agg-bindings new-projection body)
+    (emit-group-let-all ra agg-bindings new-projection body)
     ;; group bindings
     (let [k (t/key-local (mapv second bindings))
           arr (with-meta (gensym "arr") {:tag 'objects})
           ht (gensym "ht")
           agg-bindings (assign-agg-binding-indexes agg-bindings)
-          acc-count (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings))
+          acc-count (inc (reduce + 0 (map (fn [[_ agg]] (count agg)) agg-bindings)))
+          cnt-index (dec acc-count)
           acc-bindings (for [[_ agg] agg-bindings
                              [i sym _] agg
                              form [sym `(aget ~arr ~i)]]
@@ -694,11 +699,13 @@
                           (let [~arr (or arr# (doto (object-array ~acc-count)
                                                 ~@(for [[_ agg] agg-bindings
                                                         [i _ init] agg]
-                                                    `(aset ~i (RT/box ~(rewrite-expr [] init))))))
+                                                    `(aset ~i (RT/box ~(rewrite-expr [] init))))
+                                                (aset ~cnt-index (RT/box 0))))
                                 ~@acc-bindings]
                             ~@(for [[_ agg] agg-bindings
                                     [i _ _ expr] agg]
                               `(aset ~arr ~i (RT/box ~(rewrite-expr [ra] expr))))
+                            (aset ~arr ~cnt-index (unchecked-inc (aget ~arr ~cnt-index)))
                             ~arr)))]
                (.compute ~ht ~k f#)
                nil))
@@ -706,6 +713,7 @@
            (fn [_# [~k ~arr]]
              (let [~@(t/emit-key-bindings k (map first bindings))
                    ~@acc-bindings
+                   ~plan/%count-sym (aget ~arr ~cnt-index)
                    ~@(for [[sym _ completion] agg-bindings
                            form [sym (rewrite-expr [] completion)]]
                        form)
@@ -846,8 +854,8 @@
       (emit-group-all ?ra body)
       (emit-group-by ?ra ?bindings body))
 
-    [::plan/group-project ?ra ?bindings ?aggs ?new-projection]
-    (emit-group-project ?ra ?bindings ?aggs ?new-projection body)
+    [::plan/group-let ?ra ?bindings ?aggs ?new-projection]
+    (emit-group-let ?ra ?bindings ?aggs ?new-projection body)
 
     [::plan/order-by ?ra ?order-clauses]
     (emit-order-by ?ra ?order-clauses body)

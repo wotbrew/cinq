@@ -27,8 +27,13 @@
               l2__2:orderkey)]
            [:without
             #{l1__3:orderkey}]
+           [:let
+            [[col__1__5
+              l1__3]]]
+           [:without
+            #{l1__3}]
            [:project
-            {col__1 l1__3}]]
+            {col__1 col__1__5}]]
          (c/plan (c/q [l1 lineitem
                        :when (c/exists? [l2 lineitem :when (= l1:orderkey l2:orderkey)])]
                    l1)))))
