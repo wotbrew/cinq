@@ -10,9 +10,14 @@ the current impl binds an object-array with a slot for each acc variable and ban
 
 one pass summarization only
 
+we have two different aggregation engines. Hard to maintain. Realising arrays only works for a subset of cases. Consider
+only supporting the eager one pass aggregation
+
 e.g sql style, symbol refs to columns outside of an aggregate can return a (undefined) sample.
 
 array_agg style function could be used if you want groups
+
+in order to do this, I think we will need to be certain the planner rewrites for group-let work in every case.
 
 ---
 
