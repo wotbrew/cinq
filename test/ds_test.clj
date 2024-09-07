@@ -21,37 +21,37 @@
 (def people20k (vec (shuffle (take 20000 people))))
 
 (defn q1 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         ;; we want to get this straight from the buf!
         :when (= "Ivan" p:name)]
-       p:id))
+         p:id))
 
 (defn qpred1 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         :when (> p:salary 50000)]
-       p:id))
+         p:id))
 
 (defn q2 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         :when (= "Ivan" p:name)]
-    (c/tuple :id p:id :age p:age)))
+         (c/tuple :id p:id :age p:age)))
 
 (defn q3 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         :when (and (= "Ivan" p:name) (= :male p:sex))]
-    (c/tuple :id p:id :last-name p:last-name)))
+         (c/tuple :id p:id :last-name p:last-name)))
 
 (defn q4 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         :when (and (= "Ivan" p:name) (= :male p:sex))]
-    (c/tuple :id p:id :last-name p:last-name, :age p:age)))
+         (c/tuple :id p:id :last-name p:last-name, :age p:age)))
 
 (defn q5 [{:keys [people]}]
-  (c/q [p people
+  (c/rel [p people
         p1 people
         :when (and (= "Ivan" p:name)
                    (= p:age p1:age))]
-    (c/tuple :id p1:id :last-name p1:last-name, :age p1:age)))
+         (c/tuple :id p1:id :last-name p1:last-name, :age p1:age)))
 
 (comment
 

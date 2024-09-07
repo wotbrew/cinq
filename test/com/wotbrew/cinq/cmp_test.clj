@@ -2,7 +2,7 @@
   (:require [clojure.test :refer :all]
             [com.wotbrew.cinq :as c]))
 
-(defmacro prj [expr] `(c/rel-first (c/q [x# [{}]] ~expr)))
+(defmacro prj [expr] `(c/rel-first (c/rel [x# [{}]] ~expr)))
 
 (deftest expr-test
   (are [expr result]

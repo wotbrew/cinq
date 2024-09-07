@@ -60,8 +60,8 @@
 (defn parse-id [s] (parse-long (subs s 2)))
 
 (def names-tsv
-  (c/q [{:keys [nconst primaryName birthYear deathYear primaryProfession knownForTitles]} names-tsv*]
-    {:nconst (parse-id nconst)
+  (c/rel [{:keys [nconst primaryName birthYear deathYear primaryProfession knownForTitles]} names-tsv*]
+         {:nconst (parse-id nconst)
      :primaryName primaryName
      :birthYear (apply-or-null parse-long birthYear)
      :deathYear (apply-or-null parse-long deathYear)
@@ -69,8 +69,8 @@
      :knownForTitles (apply-csv parse-id knownForTitles)}))
 
 (def akas-tsv
-  (c/q [{:keys [titleId ordering title region language types attributes isOriginalTitle]} akas-tsv*]
-    {:titleId (parse-id titleId)
+  (c/rel [{:keys [titleId ordering title region language types attributes isOriginalTitle]} akas-tsv*]
+         {:titleId (parse-id titleId)
      :ordering (apply-or-null parse-long ordering)
      :title title
      :region (apply-or-null keyword region)
@@ -80,8 +80,8 @@
      :isOriginalTitle (= "1" isOriginalTitle)}))
 
 (def titles-tsv
-  (c/q [{:keys [tconst titleType primaryTitle originalTitle isAdult startYear endYear runtimeMinutes genres]} titles-tsv*]
-    {:tconst (parse-id tconst)
+  (c/rel [{:keys [tconst titleType primaryTitle originalTitle isAdult startYear endYear runtimeMinutes genres]} titles-tsv*]
+         {:tconst (parse-id tconst)
      :titleType (apply-or-null keyword titleType)
      :primaryTitle primaryTitle
      :originalTitle originalTitle
@@ -92,21 +92,21 @@
      :genres (apply-csv keyword genres)}))
 
 (def crew-tsv
-  (c/q [{:keys [tconst directors writers]} crew-tsv*]
-    {:tconst (parse-id tconst)
+  (c/rel [{:keys [tconst directors writers]} crew-tsv*]
+         {:tconst (parse-id tconst)
      :directors (apply-csv parse-id directors)
      :writers (apply-csv parse-id writers)}))
 
 (def episodes-tsv
-  (c/q [{:keys [tconst parentTconst seasonNumber episodeNumber]} episodes-tsv*]
-    {:tconst (parse-id tconst)
+  (c/rel [{:keys [tconst parentTconst seasonNumber episodeNumber]} episodes-tsv*]
+         {:tconst (parse-id tconst)
      :parentTconst (parse-id parentTconst)
      :seasonNumber (apply-or-null parse-long seasonNumber)
      :episodeNumber (apply-or-null parse-long episodeNumber)}))
 
 (def principals-tsv
-  (c/q [{:keys [tconst ordering nconst category job characters]} principals-tsv*]
-    {:tconst (parse-id tconst)
+  (c/rel [{:keys [tconst ordering nconst category job characters]} principals-tsv*]
+         {:tconst (parse-id tconst)
      :ordering (apply-or-null parse-long ordering)
      :nconst (parse-id nconst)
      ;; are these csv?
@@ -115,8 +115,8 @@
      :characters (apply-or-null str characters)}))
 
 (def ratings-tsv
-  (c/q [{:keys [tconst averageRating numVotes]} ratings-tsv*]
-    {:tconst (parse-id tconst)
+  (c/rel [{:keys [tconst averageRating numVotes]} ratings-tsv*]
+         {:tconst (parse-id tconst)
      :averageRating (apply-or-null parse-double averageRating)
      :numVotes (apply-or-null parse-long numVotes)}))
 
@@ -186,20 +186,20 @@
   )
 
 (defn film-cast [{:keys [titles principals names]} title]
-  (c/q [t titles
+  (c/rel [t titles
         :when (and (= :movie t:titleType) (= title t:primaryTitle))
         :limit 1
         :join [p principals (= p:tconst t:tconst)]
         :join [n names (= p:nconst n:nconst)]]
-    n:primaryName))
+         n:primaryName))
 
 (defn film-cast-nlj [{:keys [titles principals names]} title]
-  (c/q [t (c/lookup titles :primaryTitle title)
+  (c/rel [t (c/lookup titles :primaryTitle title)
         :when (= :movie t:titleType)
         :limit 1
         p (c/lookup principals :tconst t:tconst)
         n (c/lookup names :nconst p:nconst)]
-    n:primaryName))
+         n:primaryName))
 
 (comment
 
@@ -210,7 +210,7 @@
   (require 'clj-async-profiler.core)
   (clj-async-profiler.core/serve-ui "127.0.0.1" 5001)
 
-  (c/q [t titles-tsv
+  (c/rel [t titles-tsv
         :when (and (= :movie t:titleType)
                    (= "Alien" t:primaryTitle))
         :limit 1
@@ -218,7 +218,7 @@
         :when (= p:tconst t:tconst)
         n names-tsv
         :when (= p:nconst n:nconst)]
-    n:primaryName)
+         n:primaryName)
 
   (time (vec (film-cast tsv-db "Alien")))
   (time (vec (film-cast lmdb "Alien")))
@@ -231,19 +231,19 @@
     (vec (film-cast-nlj lmdb "Blade Runner"))
     )
 
-  (set (c/q [t titles] t:titleType))
+  (set (c/rel [t titles] t:titleType))
 
-  (c/q [t titles
+  (c/rel [t titles
         :when (and (= :videoGame t:titleType)
                    (str/starts-with? t:primaryTitle "Star Wars"))]
-    [t:primaryTitle (c/scalar [r ratings :when (= r:tconst t:tconst)] r:averageRating)])
+         [t:primaryTitle (c/scalar [r ratings :when (= r:tconst t:tconst)] r:averageRating)])
 
-  (c/q [t titles
+  (c/rel [t titles
         :when (and (= t:titleType :movie) (< 1990 t:startYear 2001))
         :join [r ratings (= t:tconst r:tconst)]
         :when (and (< 8.0 r:averageRating) (< 10000 r:numVotes))
         :order [r:averageRating :desc]
         :limit 10]
-    t:primaryTitle)
+         t:primaryTitle)
 
   )

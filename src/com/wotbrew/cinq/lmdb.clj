@@ -1002,11 +1002,11 @@
   (c/rel-set (:foo db) nil)
   (c/insert (:foo db) (str (random-uuid)))
   (c/run [f (:foo db) :when (= 42 f)] (c/replace f "The answer"))
-  (c/q [f (:foo db) :when (string? f) :limit 10] f)
+  (c/rel [f (:foo db) :when (string? f) :limit 10] f)
   (c/del-key (:foo db) string? true)
   (c/run [f (:foo db) :when (string? f)] (delete f))
   (c/write [db db] (c/run [f (:foo db) :when (even? f)] (c/replace f 42)))
-  (c/q [f (:foo db) :when (odd? f) :limit 10] f)
+  (c/rel [f (:foo db) :when (odd? f) :limit 10] f)
 
   (:foo db)
 
@@ -1042,8 +1042,8 @@
     )
 
   (require 'criterium.core)
-  (criterium.core/quick-bench (c/q [i (:foo db) :limit 10] i))
-  (criterium.core/quick-bench (c/q [i (:foo db) :limit 10] i))
+  (criterium.core/quick-bench (c/rel [i (:foo db) :limit 10] i))
+  (criterium.core/quick-bench (c/rel [i (:foo db) :limit 10] i))
   (criterium.core/quick-bench (vec (:foo db)))
 
   (def sf005 ((requiring-resolve 'com.wotbrew.cinq.tpch-test/all-tables) 0.05))
@@ -1070,11 +1070,11 @@
   (criterium.core/quick-bench (c/agg nil _ [li (:lineitem sf005)] nil))
 
   (defn q1 [{:keys [lineitem]}]
-    (c/q [l lineitem
+    (c/rel [l lineitem
           :when (<= l:shipdate #inst "1998-09-02")
           :group [returnflag l:returnflag, linestatus l:linestatus]
           :order [returnflag :asc, linestatus :asc]]
-      (c/tuple :l_returnflag returnflag
+           (c/tuple :l_returnflag returnflag
                :l_linestatus linestatus
                :sum_qty (c/sum ^double l:quantity)
                :sum_base_price (c/sum ^double l:extendedprice)
@@ -1086,7 +1086,7 @@
                :count_order (c/count))))
 
   (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
-    (c/q [r region
+    (c/rel [r region
           n nation
           s supplier
           p part
@@ -1115,7 +1115,7 @@
                   n:name :asc
                   s:name :asc
                   p:partkey :asc]]
-      (c/tuple
+           (c/tuple
         :s_acctbal s:acctbal
         :s_name s:name
         :n_name n:name
@@ -1125,9 +1125,9 @@
         :s_phone s:phone
         :s_comment s:comment)))
 
-  (c/q [l (:lineitem db)
+  (c/rel [l (:lineitem db)
         :group [pred-match (<= l:shipdate #inst "1998-09-02")]]
-    [pred-match (c/count)])
+         [pred-match (c/count)])
 
   (clj-async-profiler.core/profile
     (criterium.core/quick-bench

@@ -44,11 +44,11 @@
       (println (format "%s - %s records, %.2fms" tname (c/rel-count (tname db)) (* 1e-6 (- end start)))))))
 
 (defn q1 [{:keys [lineitem]}]
-  (c/q [l lineitem
+  (c/rel [l lineitem
         :when (<= l:shipdate #inst "1998-09-02")
         :group [returnflag l:returnflag, linestatus l:linestatus]
         :order [returnflag :asc, linestatus :asc]]
-    (c/tuple :l_returnflag returnflag
+         (c/tuple :l_returnflag returnflag
              :l_linestatus linestatus
              :sum_qty (c/sum ^double l:quantity)
              :sum_base_price (c/sum ^double l:extendedprice)
@@ -60,7 +60,7 @@
              :count_order (c/count))))
 
 (defn q2 [{:keys [part, supplier, partsupp, nation, region]}]
-  (c/q [r region
+  (c/rel [r region
         n nation
         s supplier
         p part
@@ -89,7 +89,7 @@
                 n:name :asc
                 s:name :asc
                 p:partkey :asc]]
-    (c/tuple
+         (c/tuple
       :s_acctbal s:acctbal
       :s_name s:name
       :n_name n:name
@@ -100,7 +100,7 @@
       :s_comment s:comment)))
 
 (defn q3 [{:keys [customer orders lineitem]}]
-  (c/q [c customer
+  (c/rel [c customer
         o orders
         l lineitem
         :when
@@ -115,14 +115,14 @@
         :let [revenue (c/sum (* l:extendedprice (- 1 l:discount)))]
         :order [revenue :desc, orderdate :asc, orderkey :asc]
         :limit 10]
-    (c/tuple
+         (c/tuple
       :l_orderkey orderkey
       :revenue revenue
       :o_orderdate orderdate
       :o_shippriority shippriority)))
 
 (defn q4 [{:keys [orders, lineitem]}]
-  (c/q [o orders
+  (c/rel [o orders
         :when (and (>= o:orderdate #inst "1993-07-01")
                    (< o:orderdate #inst "1993-10-01")
                    (c/exists? [^Lineitem l lineitem
@@ -130,12 +130,12 @@
                                           (< l:commitdate l:receiptdate))]))
         :group [orderpriority o:orderpriority]
         :order [orderpriority :asc]]
-    (c/tuple
+         (c/tuple
       :o_orderpriority orderpriority
       :order_count (c/count))))
 
 (defn q5 [{:keys [customer, orders, lineitem, supplier, nation, region]}]
-  (c/q [o orders
+  (c/rel [o orders
         c customer
         l lineitem
         s supplier
@@ -153,24 +153,24 @@
         :group [nation-name n:name]
         :let [revenue (c/sum (* l:extendedprice (- 1 l:discount)))]
         :order [revenue :desc]]
-    (c/tuple :n_name nation-name
+         (c/tuple :n_name nation-name
              :revenue revenue)))
 
 (defn q6 [{:keys [lineitem]}]
-  (c/q [l lineitem
+  (c/rel [l lineitem
         :when (and (>= l:shipdate #inst "1994-01-01")
                    (< l:shipdate #inst "1995-01-01")
                    (>= l:discount 0.05)
                    (<= l:discount 0.07)
                    (< l:quantity 24.0))
         :group []]
-    (c/tuple :foo (c/sum (* l:extendedprice l:discount)))))
+         (c/tuple :foo (c/sum (* l:extendedprice l:discount)))))
 
 (defn get-year [^Date date]
   (+ 1900 (.getYear date)))
 
 (defn q7 [{:keys [supplier lineitem orders customer nation]}]
-  (c/q [s supplier
+  (c/rel [s supplier
         l lineitem
         o orders
         c customer
@@ -200,13 +200,13 @@
         :order [supp_nation :asc
                 cust_nation :asc
                 year :asc]]
-    (c/tuple :supp_nation supp_nation
+         (c/tuple :supp_nation supp_nation
              :cust_nation cust_nation
              :l_year year
              :revenue (c/sum volume))))
 
 (defn q8 [{:keys [part supplier region lineitem orders customer nation]}]
-  (c/q [r region
+  (c/rel [r region
         p part
         s supplier
         l lineitem
@@ -231,7 +231,7 @@
               nation n2:name]
         :group [o_year o_year]
         :order [o_year :asc]]
-    (c/tuple
+         (c/tuple
       :o_year o_year
       :mkt_share (double (/ (c/sum
                               (if (= "BRAZIL" nation)
@@ -240,7 +240,7 @@
                             (c/sum volume))))))
 
 (defn q9 [{:keys [part supplier lineitem partsupp orders nation]}]
-  (c/q [p part
+  (c/rel [p part
         l lineitem
         s supplier
         ps partsupp
@@ -258,12 +258,12 @@
         :group [nation n:name
                 year (get-year o:orderdate)]
         :order [nation :asc, year :desc]]
-    (c/tuple :nation nation
+         (c/tuple :nation nation
              :o_year year
              :sum_profit (c/sum amount))))
 
 (defn q10 [{:keys [lineitem customer orders nation]}]
-  (c/q [n nation
+  (c/rel [n nation
         c customer
         o orders
         l lineitem
@@ -285,7 +285,7 @@
         :let [revenue (c/sum (* l:extendedprice (- 1.0 l:discount)))]
         :order [revenue :desc, c_custkey :asc]
         :limit 20]
-    (c/tuple :c_custkey c_custkey
+         (c/tuple :c_custkey c_custkey
              :c_name c_name
              :revenue revenue
              :c_acctbal c_acctbal
@@ -295,7 +295,7 @@
              :c_comment c_comment)))
 
 (defn q11 [{:keys [partsupp supplier nation]}]
-  (c/q [n nation
+  (c/rel [n nation
         s supplier
         ps partsupp
         :when
@@ -314,11 +314,11 @@
                                   :group []]
                          (* 0.0001 (c/sum (* ps:supplycost ps:availqty)))))
         :order [value :desc]]
-    (c/tuple :ps_partkey ps_partkey
+         (c/tuple :ps_partkey ps_partkey
              :value value)))
 
 (defn q12 [{:keys [orders lineitem]}]
-  (c/q [o orders
+  (c/rel [o orders
         l lineitem
         :when (and (= o:orderkey l:orderkey)
                    (contains? #{"MAIL", "SHIP"} l:shipmode)
@@ -328,28 +328,28 @@
                    (< l:receiptdate #inst "1995-01-01"))
         :group [shipmode l:shipmode]
         :order [shipmode :asc]]
-    (c/tuple
+         (c/tuple
       :shipmode shipmode
       :high_line_count (c/sum (case o:orderpriority "1-URGENT" 1 "2-HIGH" 1 0))
       :low_line_count (c/sum (case o:orderpriority "1-URGENT" 0 "2-HIGH" 0 1)))))
 
 (defn q13 [{:keys [customer orders]}]
-  (c/q [c customer
+  (c/rel [c customer
         :left-join [o orders (and (= c:custkey o:custkey)
                                   (not (re-find #"special.*?requests" o:comment)))]
         :group [custkey c:custkey]
         :group [order-count (c/count o:orderkey)]
         :order [(c/count) :desc, order-count :desc]]
-    (c/tuple :c_count order-count, :custdist (c/count))))
+         (c/tuple :c_count order-count, :custdist (c/count))))
 
 (defn q14 [{:keys [lineitem part]}]
-  (c/q [l lineitem
+  (c/rel [l lineitem
         p part
         :when (and (= l:partkey p:partkey)
                    (>= l:shipdate #inst "1995-09-01")
                    (< l:shipdate #inst "1995-10-01"))
         :group []]
-    (c/tuple
+         (c/tuple
       :promo_revenue
       (* 100.0
          (/ (c/sum (if (str/starts-with? p:type "PROMO")
@@ -358,26 +358,26 @@
             (c/sum (* l:extendedprice (- 1.0 l:discount))))))))
 
 (defn q15 [{:keys [lineitem supplier]}]
-  (let [revenue (c/q [l lineitem
+  (let [revenue (c/rel [l lineitem
                       :when (and (>= l:shipdate #inst "1996-01-01")
                                  (< l:shipdate #inst "1996-04-01"))
                       :group [suppkey l:suppkey]
                       :let [total_revenue (c/sum (* l:extendedprice (- 1.0 l:discount)))]]
-                  {:suppkey suppkey
+                       {:suppkey suppkey
                    :total_revenue total_revenue})]
-    (c/q [s supplier
+    (c/rel [s supplier
           r revenue
           :when (and (= s:suppkey r:suppkey)
                      (= r:total_revenue (c/scalar [r revenue :group []] (c/max r:total_revenue))))
           :order [s:suppkey :asc]]
-      (c/tuple :s_suppkey s:suppkey
+           (c/tuple :s_suppkey s:suppkey
                :s_name s:name
                :s_address s:address
                :s_phone s:phone
                :total_revenue r:total_revenue))))
 
 (defn q16 [{:keys [partsupp part supplier]}]
-  (c/q [p part
+  (c/rel [p part
         ps partsupp
         :when (and (= p:partkey ps:partkey)
                    (not= p:brand "Brand#45")
@@ -391,13 +391,13 @@
         :group [brand p:brand, type p:type, size p:size]
         :let [supplier-cnt (Long/valueOf (count (set ps:suppkey)))]
         :order [supplier-cnt :desc, brand :asc, type :asc, size :asc]]
-    (c/tuple :p_brand brand
+         (c/tuple :p_brand brand
              :p_type type
              :p_size size
              :supplier_cnt supplier-cnt)))
 
 (defn q17 [{:keys [lineitem part]}]
-  (c/q [p part
+  (c/rel [p part
         l lineitem
         :when (and (= p:partkey l:partkey)
                    (= p:brand "Brand#23")
@@ -408,15 +408,15 @@
                                  :group []]
                         (* 0.2 (c/avg l2:quantity)))))
         :group []]
-    (c/tuple :avg_yearly (when (pos? %count) (/ (c/sum l:extendedprice) 7.0)))))
+         (c/tuple :avg_yearly (when (pos? %count) (/ (c/sum l:extendedprice) 7.0)))))
 
 (defn q18 [{:keys [customer orders lineitem]}]
   ;; TODO make this a sub query without weirdness
-  (let [orderkeys (set (c/q [l lineitem
+  (let [orderkeys (set (c/rel [l lineitem
                              :group [ok l:orderkey]
                              :when (> (c/sum l:quantity) 300)]
-                         ok))]
-    (c/q [o orders
+                              ok))]
+    (c/rel [o orders
           c customer
           l lineitem
           :when (and (contains? orderkeys o:orderkey)
@@ -429,7 +429,7 @@
                   totalprice o:totalprice]
           :order [totalprice :desc, orderdate :asc, orderkey :asc]
           :limit 100]
-      (c/tuple :c_name name
+           (c/tuple :c_name name
                :c_custkey custkey
                :c_orderkey orderkey
                :c_orderdate orderdate
@@ -437,7 +437,7 @@
                :quantity (c/sum l:quantity)))))
 
 (defn q19 [{:keys [lineitem part]}]
-  (c/q [l lineitem
+  (c/rel [l lineitem
         p part
         :when (and (= l:partkey p:partkey)
                    (= l:shipinstruct "DELIVER IN PERSON")
@@ -458,10 +458,10 @@
                             (<= l:quantity 30)
                             (<= 1 p:size 15))))
         :group []]
-    (c/tuple :revenue (c/sum (* l:extendedprice (- 1.0 l:discount))))))
+         (c/tuple :revenue (c/sum (* l:extendedprice (- 1.0 l:discount))))))
 
 (defn q20 [{:keys [supplier, nation, partsupp, lineitem, part]}]
-  (c/q [n nation
+  (c/rel [n nation
         s supplier
         :when (and (contains? (c/scalar [ps partsupp
                                          :when (and (contains? (c/scalar [p part
@@ -482,10 +482,10 @@
                    (= s:nationkey n:nationkey)
                    (= n:name "CANADA"))
         :order [s:name :asc]]
-    (c/tuple :name s:name, :address s:address)))
+         (c/tuple :name s:name, :address s:address)))
 
 (defn q21 [{:keys [supplier lineitem orders nation]}]
-  (c/q [n nation
+  (c/rel [n nation
         s supplier
         o orders
         l1 lineitem
@@ -508,12 +508,12 @@
         :let [numwait (c/count)]
         :order [numwait :desc]
         :limit 100]
-    (c/tuple
+         (c/tuple
       :name s_name
       :numwait numwait)))
 
 (defn q22 [{:keys [customer orders]}]
-  (c/q [c customer
+  (c/rel [c customer
         :let [cntrycode (subs c:phone 0 2)]
         :when (and (contains? #{"13", "31", "23", "29", "30", "18", "17"} cntrycode)
                    (> c:acctbal (c/scalar [c customer
@@ -524,7 +524,7 @@
                    (not (c/exists? [o orders :when (= o:custkey c:custkey)])))
         :group [cntrycode cntrycode]
         :order [cntrycode :asc]]
-    (c/tuple :cntrycode cntrycode,
+         (c/tuple :cntrycode cntrycode,
              :numcust (c/count),
              :totacctbal (c/sum c:acctbal))))
 

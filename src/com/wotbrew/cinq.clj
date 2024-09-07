@@ -33,12 +33,14 @@
 
 (defmacro plan [rel-expr] (list `quote (plan/stack-view (fix-env &env tree* rel-expr))))
 
-(defmacro q [query body]
+(defmacro rel [query body]
   (binding [parse/*env* &env]
     (-> (parse/parse-query query body)
         optimize-plan
         (plan/prune-cols #{})
         compile-plan)))
+
+(defmacro q [query body] `(vec (rel ~query ~body)))
 
 (defmacro with [bindings rel-expr]
   (binding [parse/*env* &env]
@@ -61,7 +63,7 @@
   ([rel] (reduce (fn [_ x] (reduced x)) nil rel))
   ([rel not-found] (reduce (fn [_ x] (reduced x)) not-found rel)))
 
-(defmacro scalar [query selection] `(rel-first (q ~query ~selection)))
+(defmacro scalar [query selection] `(rel-first (rel ~query ~selection)))
 
 (defmacro exists? [query] `(boolean (scalar ~query true)))
 
@@ -76,7 +78,7 @@
 
 (defmacro agg [init init-sym query & body]
   {:pre [(symbol? init-sym)]}
-  `(clojure.core/reduce (fn [~init-sym f#] (f# ~init-sym)) ~init (q ~query (fn [~init-sym] ~@body))))
+  `(clojure.core/reduce (fn [~init-sym f#] (f# ~init-sym)) ~init (rel ~query (fn [~init-sym] ~@body))))
 
 (defmacro run [query & body]
   (let [srelvar (fn [?alias] (symbol (str ?alias ":cinq") "relvar"))
@@ -339,21 +341,21 @@
   [idx]
   (p/sorted-scan idx false))
 
-(defn top-k [idx n] (q [x (desc idx) :limit n] x))
+(defn top-k [idx n] (rel [x (desc idx) :limit n] x))
 
-(defn bottom-k [idx n] (q [x (asc idx) :limit n] x))
+(defn bottom-k [idx n] (rel [x (asc idx) :limit n] x))
 
 (defn lookup [relvar indexed-key key]
   (if-some [idx (get relvar indexed-key)]
     (getn idx key)
-    (q [{k indexed-key :as r} :when (= k key)] r)))
+    (rel [{k indexed-key :as r} :when (= k key)] r)))
 
 (defn lookup1
   ([relvar indexed-key key] (lookup1 relvar indexed-key key nil))
   ([relvar indexed-key key not-found]
    (if-some [idx (get relvar indexed-key)]
      (get1 idx key not-found)
-     (rel-first (q [{k indexed-key :as r} :when (= k key)] r) not-found))))
+     (rel-first (rel [{k indexed-key :as r} :when (= k key)] r) not-found))))
 
 (defn swap
   "Updates rows where (= (indexed-key row) key), by applying a function to the existing row.

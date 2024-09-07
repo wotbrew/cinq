@@ -4,4 +4,4 @@
 
 (deftest equi-single-re-test
   (is (= [[1 1] [2 2] [3 3]])
-      (vec (c/q [a [1, 2, 3]] [a (c/scalar [b [1, 2, 3] :when (= a b)] b)]))))
+      (vec (c/rel [a [1, 2, 3]] [a (c/scalar [b [1, 2, 3] :when (= a b)] b)]))))

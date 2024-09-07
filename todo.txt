@@ -21,18 +21,6 @@ in order to do this, I think we will need to be certain the planner rewrites for
 
 ---
 
-rel vs results
-
-(c/q) currently returns a rel. This might be an awkward default,
-- rel definitions will likely escape transactions
-- no equality
-
-idea:
-(c/q) returns a vector
-(c/rel) returns a rel
-
----
-
 Indexes do not use native filters, does this matter?
 
 ---

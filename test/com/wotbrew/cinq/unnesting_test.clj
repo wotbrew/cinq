@@ -34,9 +34,9 @@
             #{l1__3}]
            [:project
             {col__1 col__1__5}]]
-         (c/plan (c/q [l1 lineitem
+         (c/plan (c/rel [l1 lineitem
                        :when (c/exists? [l2 lineitem :when (= l1:orderkey l2:orderkey)])]
-                   l1)))))
+                        l1)))))
 
 
 ;; todo mark-join:
@@ -50,17 +50,17 @@
 (defrecord Exam [^long id ^long sid ^long grade])
 
 (defn unnest-q1 [{:keys [students, exams]}]
-  (c/q [^Student s students
+  (c/rel [^Student s students
         :join [^Exam e exams (= s:id e:sid)]
         :when (= e:grade (c/scalar [^Exam e2 exams
                                     :when (= s:id e2:sid)
                                     :group []]
                            (c/min e2:grade)))]
-    e:exam))
+         e:exam))
 
 ;; needs dataset
 (defn unnest-q2 [{:keys [students, exams]}]
-  (c/plan (c/q [^Student s students
+  (c/plan (c/rel [^Student s students
                 ^Exam e exams
                 :when (and (= s:id e:sid)
                            (or (= s:major "CS") (= s:major "Games Eng"))
@@ -69,7 +69,7 @@
                                                             (and (= e2:curriculum s:major)
                                                                  (> s:year e2:date)))]
                                          (+ 1 (c/avg e2:grade)))))]
-            (c/tuple :name s:name, :course e:course))))
+                 (c/tuple :name s:name, :course e:course))))
 
 (def unnest-dataset
   {:students (vec (for [i (range 1000)] (->Student i)))

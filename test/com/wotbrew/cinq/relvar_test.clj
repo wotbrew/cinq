@@ -10,10 +10,10 @@
     (c/rel-set rv1 [1 2 3 4])
     (c/rel-set rv2 [2 4 5 6])
 
-    (is (= [2 4] (vec (c/q [x rv1
+    (is (= [2 4] (vec (c/rel [x rv1
                             y rv2
                             :when (= x y)]
-                        x))))
+                             x))))
 
     (is (= 4 (c/insert rv1 5)))
     (is (= 5 (c/insert rv1 5)))
@@ -73,9 +73,9 @@
 
     (c/run [f (idx 42) :limit 1] (c/delete f))
 
-    (is (= [42] (vec (c/q [f (get idx 42)] f:id))))
-    (is (= [42] (vec (c/q [f (c/range idx > 40) :when (= f:id 42)] f:id))))
-    (is (= [42] (vec (c/q [f (get idx 42) :when (< f:id 43)] f:id))))))
+    (is (= [42] (vec (c/rel [f (get idx 42)] f:id))))
+    (is (= [42] (vec (c/rel [f (c/range idx > 40) :when (= f:id 42)] f:id))))
+    (is (= [42] (vec (c/rel [f (get idx 42) :when (< f:id 43)] f:id))))))
 
 (deftest sorted-scan-test
   (let [foo (c/relvar)

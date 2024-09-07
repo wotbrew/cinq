@@ -66,7 +66,7 @@ This allows `cinq` to work with very large relations.
 ;; Query as if it is a normal collection
 (c/q [c (:customers db) :when (str/starts-with? c:name "A")] c)
 ;; => 
-#cinq/rel [{:name "Alice"}]
+[{:name "Alice"}]
 
 ;; lmdb database come with a few initial relations for statistics and what not
 (:lmdb/variables db)
@@ -148,7 +148,7 @@ Any changes will be committed together across all relvars at the end of the tran
 #### `read`
 
 ```clojure 
-(c/read [tx db] (:customers tx))
+(c/read [tx db] (c/q [c (:customers tx) :when (= 42 c:id)] c))
 ```
 
 #### `write`

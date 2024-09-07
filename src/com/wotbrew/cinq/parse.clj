@@ -191,9 +191,9 @@
       'com.wotbrew.cinq/count-distinct
       (into [::plan/count-distinct] ?args)
       `com.wotbrew.cinq/scalar
-      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/q ?args))]
+      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/rel ?args))]
       `com.wotbrew.cinq/exists?
-      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/q (concat ?args [true])))]
+      [::plan/scalar-sq (parse (list* 'com.wotbrew.cinq/rel (concat ?args [true])))]
 
       (if (and (n2n-rewrites (some-> (resolve *env* ?sym) .toSymbol))
                (seq ?args))
@@ -350,7 +350,7 @@
   (when (and (seq? rel-expr)
              (symbol? (first rel-expr)))
     (condp = (some-> ^clojure.lang.Var (ns-resolve *ns* *env* (first rel-expr)) .toSymbol)
-      'com.wotbrew.cinq/q (parse-query (nth rel-expr 1) (nth rel-expr 2 :cinq/*))
+      'com.wotbrew.cinq/rel (parse-query (nth rel-expr 1) (nth rel-expr 2 :cinq/*))
       'com.wotbrew.cinq/with (parse-cte (nth rel-expr 1) (nth rel-expr 2 :cinq/*))
       'com.wotbrew.cinq/union (parse-union (rest rel-expr))
       nil)))
@@ -364,13 +364,13 @@
 
 (comment
 
-  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]]))
-  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] a))
-  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] {:foo a, :bar (inc a)}))
-  (parse '(com.wotbrew.cinq/q [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
+  (parse '(com.wotbrew.cinq/rel [a [1, 2, 3]]))
+  (parse '(com.wotbrew.cinq/rel [a [1, 2, 3]] a))
+  (parse '(com.wotbrew.cinq/rel [a [1, 2, 3]] {:foo a, :bar (inc a)}))
+  (parse '(com.wotbrew.cinq/rel [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
 
-  (parse '(com.wotbrew.cinq/q [a [1, 2]
+  (parse '(com.wotbrew.cinq/rel [a [1, 2]
                                :when (not (com.wotbrew.cinq/scalar [b [1] :when (= a b)] true))]
-            a))
+                                a))
 
   )
