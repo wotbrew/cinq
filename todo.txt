@@ -8,6 +8,26 @@ the current impl binds an object-array with a slot for each acc variable and ban
 
 ---
 
+one pass summarization only
+
+e.g sql style, symbol refs to columns outside of an aggregate can return a (undefined) sample.
+
+array_agg style function could be used if you want groups
+
+---
+
+rel vs results
+
+(c/q) currently returns a rel. This might be an awkward default,
+- rel definitions will likely escape transactions
+- no equality
+
+idea:
+(c/q) returns a vector
+(c/rel) returns a rel
+
+---
+
 Indexes do not use native filters, does this matter?
 
 ---
