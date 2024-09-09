@@ -370,7 +370,7 @@
   (parse '(com.wotbrew.cinq/rel [a [1, 2, 3]] ($select :foo a, :bar (inc a))))
 
   (parse '(com.wotbrew.cinq/rel [a [1, 2]
-                               :when (not (com.wotbrew.cinq/scalar [b [1] :when (= a b)] true))]
-                                a))
+                                 :when (not (com.wotbrew.cinq/scalar [b [1] :when (= a b)] true))]
+            a))
 
   )

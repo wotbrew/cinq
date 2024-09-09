@@ -11,9 +11,9 @@
     (c/rel-set rv2 [2 4 5 6])
 
     (is (= [2 4] (vec (c/rel [x rv1
-                            y rv2
-                            :when (= x y)]
-                             x))))
+                              y rv2
+                              :when (= x y)]
+                        x))))
 
     (is (= 4 (c/insert rv1 5)))
     (is (= 5 (c/insert rv1 5)))

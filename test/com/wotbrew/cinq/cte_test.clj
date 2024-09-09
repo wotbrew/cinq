@@ -36,9 +36,9 @@
                               ["karen" "lois"]
                               ["lois" "eve"]]
                     ancestor (c/rel [[a b] ancestor
-                                   [c d] ancestor
-                                   :when (= b c)]
-                                    [a d])]
+                                     [c d] ancestor
+                                     :when (= b c)]
+                               [a d])]
              ancestor))
 
          (vec
