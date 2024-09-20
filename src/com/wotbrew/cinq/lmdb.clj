@@ -28,6 +28,7 @@
       (if-not native-filter
         init
         (loop [acc init]
+          (when (Thread/interrupted) (throw (InterruptedException.)))
           (let [rsn (.getLong ^ByteBuffer (.key cursor))
                 val (.val cursor)
                 pos (.position ^ByteBuffer val)]
@@ -48,6 +49,7 @@
   (if-not (.first cursor)
     init
     (loop [acc init]
+      (when (Thread/interrupted) (throw (InterruptedException.)))
       (let [rsn (.getLong ^ByteBuffer (.key cursor))
             o (codec/decode-object (.val cursor) symbol-list)
             ret (f acc rv rsn o)]
@@ -110,6 +112,7 @@
             init
             (with-open [rsn-cursor (.openCursor rsn-dbi txn)]
               (loop [acc init]
+                (when (Thread/interrupted) (throw (InterruptedException.)))
                 (.clear rsn-buffer)
                 (let [rsn (.getLong ^ByteBuffer (.val cursor))
                       _ (.putLong rsn-buffer rsn)
@@ -177,6 +180,7 @@
                 (when end-test (codec/encode-key end key-buffer))
                 (with-open [rsn-cursor (.openCursor rsn-dbi txn)]
                   (loop [acc init]
+                    (when (Thread/interrupted) (throw (InterruptedException.)))
                     (let [rsn (.getLong ^ByteBuffer (.val cursor))
                           _ (.putLong rsn-buffer rsn)
                           _ (.flip rsn-buffer)

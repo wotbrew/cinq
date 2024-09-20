@@ -245,6 +245,7 @@
                         (reify CinqScanFunction$NativeFilter (apply [_# _rsn# _buf#] true))))
 
                   (apply [_# _# ~rv ~rsn o#]
+                    (when (Thread/interrupted) (throw (InterruptedException.)))
                     (let [~o o#]
                       ;; with pred
                       ~((fn emit-next-binding [bindings]
