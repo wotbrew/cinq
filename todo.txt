@@ -352,9 +352,17 @@ there is a lot of virtual call overhead calling .apply per-tuple.
 
 we could permit buffering some number of tuples before calling .apply
 
-- filtering can set bits in a bitmap
-- apply can capture the loop with the reduced checks
+- apply can capture the loop with the reduced checks (instance Reduced)
 - apply can take an array and a len parameter
+- we can perform interrupt checks more efficiently at chunk boundaries
+
+drawbacks:
+
+- slightly more code gen
+- sometimes exiting a :limit or (first) loop early could save significant time if selectivity is low.
+    * could this be mitigated by the heaving a breakpoint wherein you break the chunk before it is full if you have
+      scanned past some number of items, e.g for chunk 32, if scan past buffer is 32 * 1024, break.
+      i.e if you are overscanning, the overhead of boxing intermediates into small arrays is not going to be significant
 
 in the case of native, you can .apply to an lmdb cursor, and specialise the loop, including binary filters.
 
