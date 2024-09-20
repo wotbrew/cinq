@@ -1,41 +1,140 @@
 # cinq
 
 ![tests](https://github.com/wotbrew/cinq/actions/workflows/tests.yml/badge.svg)
+[![Clojars Project](https://img.shields.io/clojars/v/com.wotbrew/cinq.svg?include_prereleases)](https://clojars.org/com.wotbrew/cinq)
 
-`status: in development`
+(C)lojure (In)tegrated (Q)uery extends Clojure on the JVM to direct and immediate relational programming against both collections and durable LMDB backed variables.
 
-(C)lojure (In)tegrated (Q)uery extends Clojure on the JVM to relational programming.
+- **Embedded Query**
+  - Supports (outer) joins, sorts, aggregations and recursive common table expressions (CTEs).
+- **Single-file Databases**  
+  - ACID transactions
+  - Indexes
+- **Clojure integrated**
+  - Use Clojure expressions, functions within queries and transactions
+  - Queries inherit the local clojure environment (no parameter placeholders, feels like a `for` loop).
+  - Relations are first-class, printable, support reduce so you can use them with core collection functions
+  
+> **note** cinq is highly experimental at this stage and will receive breaking API changes. SNAPSHOT only, use at your own risk.
 
-- Work with larger than memory relations
-- Single-file databases with full ACID transactions
-- Integrated with Clojure, reified relations, query clojure things, use clojure expressions directly, write transactions in clojure.
+```clojure 
+;; project.clj
+[com.wotbrew/cinq "0.1.0-SNAPSHOT"]
+;; deps.edn
+com.wotbrew/cinq {:mvn/version "0.1.0-SNAPSHOT"}
+```
+
+## Getting started (LMDB)
+
+Eventually, LMDB support will be externalized into a seperate library, but for now its an optional namespace you can include. 
+
+Add `lmdb-java` to your dependencies: 
+
+```clojure
+[org.lmdbjava/lmdbjava "0.9.0"]
+org.lmdbjava/lmdbjava {:mvn/version "0.9.0"}
+```
+
+Ensure the following JVM options are set, as `lmdb-java` uses `sun.misc.Unsafe`. 
+
+```
+--add-opens java.base/java.nio=ALL-UNNAMED
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED
+```
+
+Require `cinq`, `lmdb` support is currently provided as another namespace in the `cinq` jar.
+```clojure 
+(require '[com.wotbrew.cinq :as c])
+(require '[com.wotbrew.cinq.lmdb :as lmdb])
+```
+
+Create a new database
+
+```clojure
+(def db (lmdb/database "mydb.cinq"))
+```
+
+Create a new relational variable (think table in SQL).
+
+```clojure
+(def employees (c/create db :employees))
+```
+
+Set the variables initial value
+
+```clojure
+(c/rel-set employees [{:id 1, :name "Alice", :department "Engineering"}
+                      {:id 2, :name "Bob", :department "HR"}])
+```
+
+Perform a query
+
+```clojure 
+(c/q [e employees
+      :when (= "Engineering" (:department e))]
+  e)
+;; =>
+[{:id 1, :name "Alice", :department "Engineering"}]
+```
+
+Modify the database
+
+```clojure 
+(c/insert employees {:id 3, :name "Charlie", :department "Marketing"})
+```
+
+### Next steps
+
+- See `c/write` for serialized exclusive write transactions
+- See `c/read` for consistent snapshot read transactions
+- See `c/index` to create indexes
+  - `c/lookup`, `c/range`, `c/top-k`, `c/bottom-k`, `c/asc`, `c/desc` to use them.
+- See `c/run` for issuing effects in a query, such as deletes or updates
+- See `c/delete`, `c/replace`, `c/update` for further CRUD
 
 ## Query
 
-With `cinq` the programmer writes queries in the style of a clojure `for` loop.
-
-In the below example `lineitem` might be a collection (say in a vector) or a relation variable, containing a larger-than-memory relation, sourced from a database. 
+With `cinq` the programmer writes queries in the style of a clojure `for` loop. A common way to query will be to use the `q` macro.
 
 ```clojure 
-(q [l lineitem
-    :when (<= l:shipdate #inst "1998-09-02")
-    :group [returnflag l:returnflag, linestatus l:linestatus]
-    :order [returnflag :asc, linestatus :asc]]
-  {:l_returnflag returnflag
-   :l_linestatus linestatus
-   :sum_qty (c/sum l:quantity)
-   :sum_base_price (c/sum l:extendedprice)
-   :sum_disc_price (c/sum (* l:extendedprice (- 1.0 l:discount)))
-   :sum_charge (c/sum (* l:extendedprice (- 1.0 l:discount) (+ 1.0 l:tax)))
-   :avg_qty (c/avg l:quantity)
-   :avg_price (c/avg l:extendedprice)
-   :avg_disc (c/avg l:discount)
-   :count_order (c/count)})
+(require '[com.wotbrew.cinq :as c])
+
+(def orders 
+  [{:customer-id 0, :gross 3.0, :discount 0.0}
+   {:customer-id 1, :gross 40.0, :discount 1.00}])
+
+(def customers 
+  [{:id 0, :country-code "GB"}
+   {:id 1, :country-code "GB"}])
+
+(c/q [c customers 
+      o orders 
+      :when (= (:customer-id o) (:id c))
+      :group [country (:country-code c)]]
+  {:country-code country 
+   :revenue (c/sum (- (:gross o) (:discount o)))})
+;; =>
+[{:country-code "GB"
+  :revenue 42.0}]
 ```
 
-These queries go through extensive optimisation at compile time to emit very efficient code. 
+You can use this macro anywhere in your code. It looks at the query, runs it through a relational optimiser (at compile time), and emits an eager loop that will materialize the result-set as a vector.
 
-The optional `a:foo`, `a:ns/foo` are quick lookups that desugar to `(:foo a)`, `(:ns/foo a)` this avoid noise when you have a lot of joins. I like it, but its optional, feel free to destructure/use kw lookups instead. Both still get optimised away (to e.g register/offset/field lookups) if they can be.
+### Differences with `clojure.core/for`
+
+- eager, not lazy (`q` returns a vector, there is a Reducable verson `rel` for more control of this)
+- supports different keyword operators, alongside `:let` and `:when` such as: `:join`, `:left-join`, `:group`, `:order`, `:limit`
+- query is optimised ahead of codegen, predicate push-down, de-nesting sub queries, join optimisation
+- emitted loop is likely entirely fused with minimal megamorphic dispatch 
+- when intermediate tuples need to be materialized (such as for joins or certain grouping operations) custom struct types are compiled with appropriate scalar field hints.
+- `nil` has different equality behaviour, for certain rewrites to possible, nil cannot be equal to nil, so within a cinq query `(= nil anything)` will aways return false. (You can still use `nil?`). You may later be able to configure this behaviour.
+
+### Differences with a 'normal database query'
+
+- query is not quoted, it inherits locals and parameters from the Clojure environment.
+- planner performs 'generally good' optimisations only, the user is responsible for join order and index selection.
+- code is planned and compiled just once, new plans are not generated over time.
+- there is no difference between querying collections and querying database tables for the user of this library.
 
 ## Database
 
@@ -162,26 +261,14 @@ Supports most clojure data. No meta. Not everything.
 
 Working right now:
 
-- nil, bool, ints, longs, doubles, floats.
+- nil, booleans, ints, longs, doubles, floats.
 - keyword, symbol, string
-- maps, sets, vectors (or seq/lists, they both get encoded as vectors)
-- java.util.Date
+- maps, sets, vectors
+- java.util.Date, java.util.UUID
 
 Collections must not be mutated as you are writing them otherwise you can corrupt your database. I plan to put in guards against this (throw an exception).
 
 Anything else is TBD
-
-## How does it deal with `x`? 
-
-See [todo.txt](todo.txt) for some thoughts
-
-## Usage
-
-Not yet.
-
-## Plans that may or may not happen 
-
-- relic2 (incremental view maintenance)
 
 ## License
 
