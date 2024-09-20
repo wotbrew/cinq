@@ -2,13 +2,15 @@
 
 With q returning a vector, what of union & rel.
 
-* these are currently top level macro, should they be special nested forms?
+* these are currently top level macro (returning rel), should they be special nested forms?
 * logically they apply to the src position in relational bindings
    ** (c/q [a (c/union b c d)] a)
    ** (c/q [a (c/with [b c, b d] b)] a)
         *** is this too noisy?
         *** could add an arity for with, makes adding opts harder? (c/rel [b c, b d] [a b] a)
             also, what about apply cte, using column variables in the cte definitions
+
+what about q-with, q-union? alternatives let-q, with-q, union-q
 
 ---
 
