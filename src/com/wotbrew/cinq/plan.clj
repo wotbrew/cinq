@@ -1207,9 +1207,12 @@
                                 [(vary-meta col assoc :not-used (= true pred)) k pred]))
                             ?bindings))]
 
-    ;; todo group-project
-    #_#_[::group-let ?ra ?bindings ?aggregates ?projection]
-            nil
+    [::group-let ?ra ?bindings ?aggregates ?projection]
+    [::group-let (prune-cols* ?ra [(map second ?bindings)
+                                   ;; todo be more specific to enable more pruning
+                                   ?aggregates]
+                              req-cols)
+     ?bindings ?aggregates ?projection]
 
     [::apply ?mode ?left ?right]
     [::apply ?mode (prune-cols* ?left ?right req-cols) (prune-cols* ?right nil req-cols)]
