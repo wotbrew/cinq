@@ -575,5 +575,7 @@
 
   (time (mapv c/rel-count (run-all db)))
   (require 'criterium.core)
-  (criterium.core/quick-bench (mapv c/rel-count (run-all db)))
+  (clj-async-profiler.core/profile
+    {:features :all}
+    (criterium.core/quick-bench (mapv c/rel-count (run-all db))))
   )

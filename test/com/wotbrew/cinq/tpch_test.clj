@@ -880,6 +880,7 @@
   ;; 0.05 graal eager-loop 196ms / 188ms group fusion
   ;; 1.0 graal eager-loop 3841ms
   (clj-async-profiler.core/profile
+    {:features :all}
     (criterium.core/quick-bench
       (run-tpch)
       )
