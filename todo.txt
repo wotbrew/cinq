@@ -1,5 +1,16 @@
 ---
 
+buffer equality, comparison
+
+Our current buffer comparison code used for native filters only works for a subset of cases. Consider
+NaN equality rules.
+
+ - type specific (unordered, NaN)
+ - we might be able to avoid this by encoding in a clever way, sort unordered, collapse NaN values and change equality rules
+ - any encoding hacks need to support ordering when used in comparisons
+
+---
+
 With q returning a vector, what of union & rel.
 
 * these are currently top level macro (returning rel), should they be special nested forms?
@@ -398,3 +409,12 @@ pg: bool_or bool_and
 sets and map native filter eq
 
 at the moment codec assumes it can sort keys so that buffer comparison can work. We should support maps (and later sets) where this is not possible.
+
+---
+
+rel seqable
+
+We could implement Seqable
+
+- lazy seqable is going to be tricky
+- seq would not to 'generally' re-evaluate the entire relation every time it is called
