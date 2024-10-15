@@ -38,7 +38,11 @@
     true
     false
     42
+    -42
     3.14
+    -3.14
+    Double/POSITIVE_INFINITY
+    Double/NEGATIVE_INFINITY
     "hello"
     :hello
     'hello
@@ -51,3 +55,8 @@
     #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
     (zipmap (range 64) (repeat "abcdefghjik"))))
 
+(defn rt [x]
+  (codec/decode-object (codec/encode-heap x nil nil) nil))
+
+(deftest nan-test
+  (is (Double/isNaN (rt Double/NaN))))

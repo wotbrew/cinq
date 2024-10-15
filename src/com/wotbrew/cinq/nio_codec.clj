@@ -65,7 +65,9 @@
 (def ^:const t-true 1)
 (def ^:const t-false 2)
 (def ^:const t-long 3)
+(def ^:const t-long-neg -3)
 (def ^:const t-double 4)
+(def ^:const t-nan -4)
 (def ^:const t-string 5)
 (def ^:const t-small-map 6)
 (def ^:const t-list 7)
@@ -81,6 +83,17 @@
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   (<= 16 (.remaining buffer)))
+
+(defn- encode-double-lex ^long [^double d]
+  (let [d (if (= d -0.0) 0.0 d)]
+    (if (neg? d)
+      (bit-not (Double/doubleToLongBits d))
+      (bit-flip (Double/doubleToLongBits d) 63))))
+
+(defn- decode-double-lex ^double [^long n]
+  (if (bit-test n 63)
+    (Double/longBitsToDouble (bit-flip n 63))
+    (Double/longBitsToDouble (bit-not n))))
 
 (defn encode-big-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
@@ -170,38 +183,30 @@
   Long
   (encode-object [n buffer symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-long)
+      (.putLong buffer (if (neg? n) t-long-neg t-long))
       (.putLong buffer n)
       nil))
   Integer
   (encode-object [n buffer symbol-table intern-flag]
-    (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-long)
-      (.putLong buffer n)
-      nil))
+    (encode-object (long n) buffer symbol-table intern-flag))
   Short
   (encode-object [n buffer symbol-table intern-flag]
-    (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-long)
-      (.putLong buffer n)
-      true))
+    (encode-object (long n) buffer symbol-table intern-flag))
   Byte
   (encode-object [n buffer symbol-table intern-flag]
-    (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-long)
-      (.putLong buffer n)
-      nil))
+    (encode-object (long n) buffer symbol-table intern-flag))
   Double
   (encode-object [n buffer symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-double)
-      (.putDouble buffer n))
+      (if (Double/isNaN n)
+        (do (.putLong buffer t-nan)
+            (.putLong buffer (Double/doubleToRawLongBits n)))
+        (do (.putLong buffer t-double)
+            (.putLong buffer (encode-double-lex n)))))
     nil)
   Float
   (encode-object [n buffer symbol-table intern-flag]
-    (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-double)
-      (.putDouble buffer n))
+    (encode-object (double n) buffer symbol-table intern-flag)
     nil)
   String
   (encode-object [s buffer symbol-table intern-flag]
@@ -362,8 +367,10 @@
       t-nil nil
       t-true true
       t-false false
+      t-long-neg (.getLong buffer)
       t-long (.getLong buffer)
-      t-double (.getDouble buffer)
+      t-double (decode-double-lex (.getLong buffer))
+      t-nan (Double/longBitsToDouble (.getLong buffer))
       t-string (decode-string buffer)
       t-list (decode-list buffer symbol-list)
       t-small-map (decode-small-map buffer symbol-list)
