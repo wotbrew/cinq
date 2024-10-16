@@ -199,8 +199,7 @@
   (encode-object [n buffer symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer]
       (if (Double/isNaN n)
-        (do (.putLong buffer t-nan)
-            (.putLong buffer (Double/doubleToRawLongBits n)))
+        (.putLong buffer t-nan)
         (do (.putLong buffer t-double)
             (.putLong buffer (encode-double-lex n)))))
     nil)
@@ -370,7 +369,7 @@
       t-long-neg (.getLong buffer)
       t-long (.getLong buffer)
       t-double (decode-double-lex (.getLong buffer))
-      t-nan (Double/longBitsToDouble (.getLong buffer))
+      t-nan Double/NaN
       t-string (decode-string buffer)
       t-list (decode-list buffer symbol-list)
       t-small-map (decode-small-map buffer symbol-list)
