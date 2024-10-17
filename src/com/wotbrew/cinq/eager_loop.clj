@@ -211,6 +211,7 @@
                            keysym (memoize gensym)
                            valbuf (gensym "valbuf")
                            symbol-table (gensym "symbol-table")
+                           symbol-list (gensym "symbol-list")
                            retexpr (fn [i expr]
                                      (if (= 0 i)
                                        expr
@@ -218,7 +219,8 @@
                                             ~expr)))]
                        `(nativeFilter
                           [_# ~symbol-table]
-                          (let [~@(for [[sym :as binding] filter-bindings
+                          (let [~symbol-list (codec/symbol-list ~symbol-table)
+                                ~@(for [[sym :as binding] filter-bindings
                                         :let [{:keys [k test]} (native-pred-expr binding bound-syms)]
                                         form [(bufsym sym) `(codec/encode-heap ~test ~symbol-table false)
                                               (keysym sym) `(codec/intern-symbol ~symbol-table ~k false)]]
@@ -231,7 +233,7 @@
                                   (let [~valbuf (.slice buf#)]
                                     (and ~@(for [[i [sym :as binding]] (map-indexed vector filter-bindings)
                                                  :let [{:keys [cmp]} (native-pred-expr binding bound-syms)
-                                                       bufcmp-expr `(codec/bufcmp-ksv ~(bufsym sym) ~valbuf ~(keysym sym))]]
+                                                       bufcmp-expr `(codec/bufcmp-ksv ~(bufsym sym) ~valbuf ~(keysym sym) ~symbol-list)]]
                                              (retexpr
                                                i
                                                (case cmp

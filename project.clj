@@ -9,6 +9,7 @@
                                   [org.lmdbjava/lmdbjava "0.9.0"]
                                   [org.clojure/data.csv "1.1.0"]
                                   [org.clojure/test.check "1.1.1"]
+                                  [com.gfredericks/test.chuck "0.2.14"]
                                   [djblue/portal "0.56.0"]]
                    :source-paths ["dev"]}}
   :javac-options ["-target" "1.8" "-source" "1.8"]

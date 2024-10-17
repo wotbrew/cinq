@@ -9,7 +9,7 @@
   (let [index-buffer (codec/encode-heap index-val st true)
         key-int (codec/intern-symbol st key true)
         test-buffer (codec/encode-heap test-val st false)]
-    (codec/bufcmp-ksv test-buffer index-buffer key-int)))
+    (codec/bufcmp-ksv test-buffer index-buffer key-int (codec/symbol-list st))))
 
 (deftest bufcmp-ksv-test
   (is (= nil (cmp nil nil :a)))

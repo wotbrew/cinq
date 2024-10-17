@@ -9,6 +9,20 @@
 
 (set! *warn-on-reflection* true)
 
+(defmacro case2 [expr & cases]
+  (if (even? (count cases))
+    `(case ~expr
+       ~@(for [[test expr] (partition 2 cases)
+               test (if (seq? test) test [test])
+               form [(if (symbol? test) (eval test) test) expr]]
+           form))
+    `(case ~expr
+       ~@(for [[test expr] (partition 2 cases)
+               test (if (seq? test) test [test])
+               form [(if (symbol? test) (eval test) test) expr]]
+           form)
+       ~(last cases))))
+
 (defprotocol Encode
   (encode-object [o buffer symbol-table intern-flag]
     "Return nil if object was placed in the buffer. Return an error keyword (e.g ::not-enough-space) if not.
@@ -99,16 +113,15 @@
   (let [len (.size m)]
     (.putLong buffer t-big-map)
     (.putInt buffer len)
-    (reduce
-      (fn [_ [k v]]
+    (reduce-kv
+      (fn [_ k v]
         (some-> (or (when-not (buffer-min-remaining? buffer) ::not-enough-space)
                     (encode-object k buffer symbol-table intern-flag)
                     (when-not (buffer-min-remaining? buffer) ::not-enough-space)
                     (encode-object v buffer symbol-table intern-flag))
                 reduced))
       nil
-      ;; todo what if no sort?
-      (sort-by key m))))
+      m)))
 
 (defn encode-small-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
@@ -125,8 +138,7 @@
             ctr (int-array 1)]
         (if-not (< offset-table-size (.remaining buffer))
           ::not-enough-space
-          ;; todo what if no sort
-          (let [kvs (sort-by key m)]
+          (let [kvs m]
             (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
             (or
               ;; two loops provide the best encoding
@@ -295,18 +307,6 @@
       (.putLong buffer (.getMostSignificantBits uuid))
       (.putLong buffer (.getLeastSignificantBits uuid))
       nil)))
-
-(defmacro case2 [expr & cases]
-  (if (even? (count cases))
-    `(case ~expr
-       ~@(for [[test expr] (partition 2 cases)
-               form [(if (symbol? test) (eval test) test) expr]]
-           form))
-    `(case ~expr
-       ~@(for [[test expr] (partition 2 cases)
-               form [(if (symbol? test) (eval test) test) expr]]
-           form)
-       ~(last cases))))
 
 (declare decode-object)
 
@@ -530,7 +530,32 @@
         nil)
       (.flip buf))))
 
-(defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym]
+(defn- compare-nums [buf valbuf symbol-list]
+  (let [a (decode-object buf symbol-list)
+        b (decode-object valbuf symbol-list)]
+    (compare a b)))
+
+;; very slow for now, will look to speed up for maps sharing key orderings
+(defn- compare-maps [buf valbuf symbol-list]
+  (let [a (decode-object buf symbol-list)
+        b (decode-object valbuf symbol-list)]
+    (when (= a b)
+      0)))
+
+(defn- compare-bufs [^long tid ^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
+  (let [val-tid (.getLong valbuf (.position valbuf))]
+    (when-not (= t-nil val-tid)
+      (let [bin-ret (Long/valueOf (.compareTo buf valbuf))]
+        (if (= 0 bin-ret)
+          0
+          (case2 tid
+            (t-big-map t-small-map) (compare-maps buf valbuf symbol-list)
+            (t-long t-double) (compare-nums buf valbuf symbol-list)
+            (if (= tid val-tid)
+              bin-ret
+              (Long/compare tid val-tid))))))))
+
+(defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym symbol-list]
   (let [tid (.getLong valbuf)
         buf-tid (.getLong buf (.position buf))]
     (cond
@@ -562,9 +587,7 @@
                                   (.limit valbuf))]
                         (.position valbuf start)
                         (.limit valbuf end)
-                        (let [val-tid (.getLong valbuf (.position valbuf))]
-                          (when-not (= t-nil val-tid)
-                            (Long/valueOf (.compareTo buf valbuf)))))
+                        (compare-bufs buf-tid buf valbuf symbol-list))
                       ;; miss, kw is already read - move to next key
                       (recur (inc i)))
                     ;; not a kw, move backwards, skip
