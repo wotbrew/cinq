@@ -550,7 +550,7 @@
           0
           (case2 tid
             (t-big-map t-small-map) (compare-maps buf valbuf symbol-list)
-            (t-long t-double) (compare-nums buf valbuf symbol-list)
+            (t-long-neg t-long t-double) (compare-nums buf valbuf symbol-list)
             (if (= tid val-tid)
               bin-ret
               (Long/compare tid val-tid))))))))

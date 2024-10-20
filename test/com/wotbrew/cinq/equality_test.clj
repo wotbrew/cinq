@@ -25,11 +25,11 @@
 
 (def lmdb (delay (lmdb/database (File/createTempFile "equality" ".cinq"))))
 
-(def ^:dynamic *from-count* nil)
+(def ^:dynamic *src-count* nil)
 
 (defn- via-lmdb [coll]
-  (let [a (c/create @lmdb (keyword (str "test" *from-count*)))]
-    (when *from-count* (set! *from-count* (inc *from-count*)))
+  (let [a (c/create @lmdb (keyword (str "test" *src-count*)))]
+    (when *src-count* (set! *src-count* (inc *src-count*)))
     (c/rel-set a coll)
     a))
 
@@ -42,7 +42,7 @@
     :lmdb (via-lmdb coll)))
 
 (defn each-fixture [f]
-  (binding [*from-count* 0]
+  (binding [*src-count* 0]
     (doseq [mode [:coll :relvar :lmdb]]
       (binding [*mode* mode]
         (f)))))
