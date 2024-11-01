@@ -223,13 +223,15 @@
   (encode-object [s buffer symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer
           barr (.getBytes ^String s StandardCharsets/UTF_8)]
-      (if (< (.remaining buffer) (+ 8 4 (alength barr)))
-        ::not-enough-space
-        (do
-          (.putLong buffer t-string)
-          (.putInt buffer (alength barr))
-          (.put buffer barr)
-          nil))))
+      (do
+        (.putLong buffer t-string)
+        (.putInt buffer (alength barr))
+        (if (< (.remaining buffer) (alength barr))
+          (do
+            (.put buffer barr 0 (min (alength barr) (.remaining buffer)))
+            ::not-enough-space)
+          (do (.put buffer barr)
+              nil)))))
   Keyword
   (encode-object [s buffer symbol-table intern-flag]
     (if symbol-table
@@ -436,89 +438,17 @@
 (defn list-adds [^SymbolTable symbol-table]
   (.-adds symbol-table))
 
-(defprotocol EncodeKey
-  (-encode-key [o buffer] "Return true if lossy, requiring object comparison.
-  Guaranteed at least 8 bytes .remaining on entry."))
-
-(extend-protocol EncodeKey
-  nil
-  (-encode-key [_ buffer]
-    (.put ^ByteBuffer buffer (unchecked-byte 0))
-    false)
-  Boolean
-  (-encode-key [b buffer]
-    (if b
-      (.put ^ByteBuffer buffer (unchecked-byte 2))
-      (.put ^ByteBuffer buffer (unchecked-byte 3)))
-    false)
-  ;; not sure these need marking as lossy
-  Byte
-  (-encode-key [l buffer]
-    (.putDouble ^ByteBuffer buffer (unchecked-double l))
-    true)
-  Short
-  (-encode-key [l buffer]
-    (.putDouble ^ByteBuffer buffer (unchecked-double l))
-    true)
-  Integer
-  (-encode-key [l buffer]
-    (.putDouble ^ByteBuffer buffer (unchecked-double l))
-    true)
-
-  ;; store as lossy double for now
-  Long
-  (-encode-key [l buffer]
-    (.putDouble ^ByteBuffer buffer (unchecked-double l))
-    true)
-
-  Float
-  (-encode-key [d buffer]
-    (.putDouble ^ByteBuffer buffer (unchecked-double d))
-    false)
-  Double
-  (-encode-key [d buffer]
-    (.putDouble ^ByteBuffer buffer d)
-    false)
-
-  String
-  (-encode-key [s buffer]
-    (let [^ByteBuffer buffer buffer
-          barr (.getBytes ^String s StandardCharsets/UTF_8)]
-      (.put buffer barr 0 (min (alength barr) (.remaining buffer)))
-      (< (.remaining buffer) (alength barr))))
-
-  Named
-  (-encode-key [s buffer]
-    (or (-encode-key (namespace s) buffer)
-        (when (.hasRemaining ^ByteBuffer buffer)
-          (-encode-key (name s) buffer))))
-
-  #_#_List
-          (-encode-key [l buffer]
-                       (reduce (fn [lossy x]
-                                 (if (<= 16 (.remaining ^ByteBuffer buffer))
-                                   (if (-encode-key x buffer)
-                                     lossy
-                                     (do
-                                       ;; some kind of delimiter encoding
-                                       ;; e.g [a, b] is < [ab]
-                                       (.put buffer (unchecked-byte -127))
-                                       lossy))
-                                   (reduced true)))
-                               false
-                               l))
-  Date
-  (-encode-key [d buffer]
-    (-encode-key (inst-ms d) buffer)))
+(def ^:const max-key-size 511)
 
 (defn encode-key [o ^ByteBuffer buf]
-  (let [old-limit (.limit buf)
-        _ (.limit buf (unchecked-dec-int old-limit))
-        lossy (-encode-key o buf)]
-    (.limit buf old-limit)
-    (if lossy
-      (.put buf (unchecked-byte 1))
-      (.put buf (unchecked-byte 0)))))
+  ;; TODO discard result, do we need to handle any errors here?
+  (encode-object o buf nil false)
+  (let [pos (.position buf)
+        at-limit (<= max-key-size pos)]
+    (when at-limit
+      (.position buf (unchecked-dec max-key-size))
+      (.put buf (unchecked-byte 0xFF)))
+    nil))
 
 (defn encode-heap ^ByteBuffer [o symbol-table intern-flag]
   (loop [buf (ByteBuffer/allocate 64)]
