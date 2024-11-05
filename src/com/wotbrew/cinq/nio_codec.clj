@@ -440,15 +440,23 @@
 
 (def ^:const max-key-size 511)
 
-(defn encode-key [o ^ByteBuffer buf]
-  ;; TODO discard result, do we need to handle any errors here?
-  (encode-object o buf nil false)
+(defn mark-if-key-truncated [^ByteBuffer buf]
   (let [pos (.position buf)
         at-limit (<= max-key-size pos)]
     (when at-limit
       (.position buf (unchecked-dec max-key-size))
-      (.put buf (unchecked-byte 0xFF)))
-    nil))
+      (.put buf (unchecked-byte 0xFF))
+      (.limit buf (.position buf)))
+    at-limit))
+
+(defn truncated? [^ByteBuffer buf]
+  (and (= max-key-size (.limit buf))
+       (= (unchecked-byte 0xFF) (.get buf (int (unchecked-dec max-key-size))))))
+
+(defn encode-key [o ^ByteBuffer buf]
+  ;; TODO discard result, do we need to handle any errors here?
+  (encode-object o buf nil false)
+  (mark-if-key-truncated buf))
 
 (defn encode-heap ^ByteBuffer [o symbol-table intern-flag]
   (loop [buf (ByteBuffer/allocate 64)]
