@@ -58,6 +58,10 @@
     (.putInt val-buffer (+ 4 len-pos) val-len))
   (.flip val-buffer))
 
+(defn- ensure-collision [^ByteBuffer buffer symbol-list]
+  (let [collision (codec/decode-object buffer symbol-list)]
+    (when-not (identical? ::collision collision) (throw (ex-info "Unexpected collision prefix" {:prefix collision})))))
+
 (defn- collision-append
   [^ByteBuffer cursor-val-buffer
    ^ByteBuffer val-buffer
@@ -66,8 +70,7 @@
    val]
   (.clear val-buffer)
   (let [symbol-list (codec/symbol-list symbol-table)
-        collision (codec/decode-object cursor-val-buffer symbol-list)
-        _ (when-not (identical? ::collision collision) (throw (ex-info "Unexpected collision prefix" {:prefix collision})))
+        _ (ensure-collision cursor-val-buffer symbol-list)
         n-pairs (.getInt cursor-val-buffer)
 
         _ (.clear val-buffer)
@@ -125,10 +128,45 @@
     (.flip val-buffer)
     (.position val-buffer (.limit swap-buffer))))
 
-(defn- collision-delete []
-
-  ;; return number of remaining entries
-  )
+(defn- collision-delete [^ByteBuffer cursor-buffer ^ByteBuffer val-buffer symbol-table key]
+  (let [symbol-list (codec/symbol-list symbol-table)
+        _ (ensure-collision cursor-buffer symbol-list)
+        olimit (.limit cursor-buffer)
+        n-pairs (.getInt cursor-buffer)
+        _ (.clear val-buffer)
+        _ (throw-on-err (codec/encode-object key val-buffer nil false))
+        swap-buffer (.flip (.duplicate val-buffer))
+        _ (throw-on-err (codec/encode-object ::collision val-buffer symbol-table true))
+        new-n-pairs-pos (.position val-buffer)
+        _ (.position val-buffer (+ 4 (.position val-buffer)))]
+    (loop [i 0]
+      (if (= i n-pairs)
+        (do
+            (.flip val-buffer)
+            (.position val-buffer (.limit swap-buffer))
+            ::not-found)
+        (let [key-len (.getInt cursor-buffer)
+              val-len (.getInt cursor-buffer)
+              _ (.limit cursor-buffer (+ (.position cursor-buffer) key-len))
+              eq (= cursor-buffer swap-buffer)
+              _ (.limit cursor-buffer olimit)]
+          (if eq
+            (if (= 1 n-pairs)
+              ::found-clear
+              (do (.position cursor-buffer (+ (.position cursor-buffer) key-len val-len))
+                  (ensure-remaining val-buffer (.remaining cursor-buffer))
+                  (.put val-buffer cursor-buffer)
+                  (.putInt val-buffer new-n-pairs-pos (dec n-pairs))
+                  (.flip val-buffer)
+                  (.position val-buffer (.limit swap-buffer))
+                  ::found))
+            (do (ensure-remaining val-buffer 32)
+                (.putInt val-buffer key-len)
+                (.putInt val-buffer val-len)
+                (.limit cursor-buffer (+ (.position cursor-buffer) key-len val-len))
+                (.put val-buffer cursor-buffer)
+                (.limit cursor-buffer olimit)
+                (recur (unchecked-inc i)))))))))
 
 (defn put [^Cursor cursor
            ^ByteBuffer key-buffer
@@ -159,16 +197,10 @@
       (not (.get cursor (.flip key-buffer) GetOp/MDB_SET_KEY)) ::no-record
 
       truncated
-      ;; todo delete behaviour
-      (do
-        (loop []
-          (let [^ByteBuffer v (.val cursor)
-                k (codec/decode-object v (codec/symbol-list symbol-table))]
-            (if (= k key)
-              (.delete cursor insert-flags)
-              (when (and (.next cursor) (= key-buffer (.key cursor)))
-                (recur)))))
-        nil)
+      (case (collision-delete (.val cursor) val-buffer symbol-table key)
+        ::not-found ::no-record
+        ::found (.put cursor (.key cursor) val-buffer insert-flags)
+        ::found-clear (.delete cursor insert-flags))
 
       :else
       (do
@@ -181,8 +213,7 @@
   (if (codec/truncated? (.key cursor))
     (let [index (codec/decode-object (.key cursor) symbol-list)
           ^ByteBuffer val-buf (.val cursor)
-          collision (codec/decode-object val-buf symbol-list)
-          _ (when-not (identical? ::collision collision) (throw (ex-info "Unexpected collision prefix" {:prefix collision})))
+          _ (ensure-collision val-buf symbol-list)
           n-pairs (.getInt val-buf)
           al (ArrayList.)]
       (dotimes [_ n-pairs]

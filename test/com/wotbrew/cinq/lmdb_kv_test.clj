@@ -59,7 +59,7 @@
 
 (deftest long-string-test
   (with-tmp-cursor
-    (fn [{:keys [mat put]}]
+    (fn [{:keys [mat put del]}]
       (let [prefix (apply str (repeat 512 "a"))
             s #(str prefix %)]
         (put (s "a") 0)
@@ -69,4 +69,6 @@
         (put (s "b") 1)
         (is (= [[(s "a") 0] [(s "b") 1] [(s "c") 2]] (mat)))
         (put "" -1)
-        (is (= [["" -1] [(s "a") 0] [(s "b") 1] [(s "c") 2]]))))))
+        (is (= [["" -1] [(s "a") 0] [(s "b") 1] [(s "c") 2]]))
+        (del (s "a"))
+        (is (= [["" -1] [(s "b") 1] [(s "c") 2]] (mat)))))))
