@@ -1,7 +1,8 @@
 (ns com.wotbrew.cinq.nio-codec-test
   (:require [clojure.test :refer :all]
             [com.wotbrew.cinq.nio-codec :as codec])
-  (:import (clojure.lang Util)))
+  (:import (clojure.lang Util)
+           (java.nio ByteBuffer)))
 
 (def st (codec/empty-symbol-table))
 
@@ -32,7 +33,9 @@
   (are [test-val]
     (let [st (codec/empty-symbol-table)
           tv test-val]
-      (Util/equals tv (codec/decode-object (codec/encode-heap tv st true) (codec/symbol-list st))))
+      (and
+        (Util/equals tv (codec/decode-object (codec/encode-heap tv nil false) (codec/symbol-list st)))
+        (Util/equals tv (codec/decode-object (codec/encode-heap tv st true) (codec/symbol-list st)))))
 
     nil
     true
@@ -45,7 +48,9 @@
     Double/NEGATIVE_INFINITY
     "hello"
     :hello
+    :a/hello
     'hello
+    'a/hello
     {}
     {{42 43} {44 45}}
     {:hello 42}
@@ -53,10 +58,47 @@
     '(1 2 3)
     #inst "2024-01-04"
     #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
-    (zipmap (range 64) (repeat "abcdefghjik"))))
+    ;; bigmap
+    (zipmap (range 64) (repeat "abcdefghjik"))
+
+    ))
 
 (defn rt [x]
   (codec/decode-object (codec/encode-heap x nil nil) nil))
 
 (deftest nan-test
   (is (Double/isNaN (rt Double/NaN))))
+
+(defn size-correct? [^ByteBuffer buf]
+  (= (.remaining buf) (codec/next-object-size buf)))
+
+(deftest size-test
+  (are [x]
+    (and (size-correct? (codec/encode-heap x nil nil))
+         (size-correct? (codec/encode-heap x (codec/empty-symbol-table) true)))
+
+    nil
+    true
+    false
+    42
+    -42
+    3.14
+    -3.14
+    Double/POSITIVE_INFINITY
+    Double/NEGATIVE_INFINITY
+    "hello"
+    :hello
+    :a/hello
+    'hello
+    'a/hello
+    {}
+    {{42 43} {44 45}}
+    {:hello 42}
+    [1, 2, "hello", nil, [false]]
+    '(1 2 3)
+
+    #inst "2024-01-04"
+    #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
+    (zipmap (range 64) (repeat "abcdefghjik"))
+
+    ))

@@ -86,7 +86,7 @@
 (def ^:const t-small-map 6)
 (def ^:const t-list 7)
 (def ^:const t-set 8)
-(def ^:const t-date 9)
+(def ^:const t-instant 9)
 
 ;; normally in symbol table - but not always
 (def ^:const t-symbol 10)
@@ -96,7 +96,8 @@
 (def ^:const t-big-map 13)
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
-  (<= 16 (.remaining buffer)))
+  ;; 16 min for type + payload, 4 min for byte count dynamic types
+  (<= 24 (.remaining buffer)))
 
 (defn- encode-double-lex ^long [^double d]
   (let [d (if (= d -0.0) 0.0 d)]
@@ -109,77 +110,89 @@
     (Double/longBitsToDouble (bit-flip n 63))
     (Double/longBitsToDouble (bit-not n))))
 
+(defmacro record-byte-size-after-write [buffer-sym & body]
+  (assert (symbol? buffer-sym))
+  `(let [ipos# (.position ~buffer-sym)
+         start-pos# (unchecked-add-int ipos# 4)]
+     (.position ~buffer-sym start-pos#)
+     (let [ret# (do ~@body)
+           size# (unchecked-subtract-int (.position ~buffer-sym) start-pos#)]
+       (.putInt ~buffer-sym ipos# size#)
+       ret#)))
+
 (defn encode-big-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
     (.putLong buffer t-big-map)
-    (.putInt buffer len)
-    (reduce-kv
-      (fn [_ k v]
-        (some-> (or (when-not (buffer-min-remaining? buffer) ::not-enough-space)
-                    (encode-object k buffer symbol-table intern-flag)
-                    (when-not (buffer-min-remaining? buffer) ::not-enough-space)
-                    (encode-object v buffer symbol-table intern-flag))
-                reduced))
-      nil
-      m)))
+    (record-byte-size-after-write buffer
+      (.putInt buffer len)
+      (reduce-kv
+        (fn [_ k v]
+          (some-> (or (when-not (buffer-min-remaining? buffer) ::not-enough-space)
+                      (encode-object k buffer symbol-table intern-flag)
+                      (when-not (buffer-min-remaining? buffer) ::not-enough-space)
+                      (encode-object v buffer symbol-table intern-flag))
+                  reduced))
+        nil
+        m))))
 
 (defn encode-small-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
     ;; todo change type depending on whether all keys symbolic
     (.putLong buffer t-small-map)
-    (.putInt buffer len)
-    (if-not (buffer-min-remaining? buffer)
-      ::not-enough-space
-      (let [keys-size-pos (.position buffer)
-            vals-size-pos (unchecked-add-int keys-size-pos 4)
-            offset-table-pos (unchecked-add-int vals-size-pos 4)
-            _ (.position buffer offset-table-pos)
-            offset-table-size (* len 4)
-            ctr (int-array 1)]
-        (if-not (< offset-table-size (.remaining buffer))
-          ::not-enough-space
-          (let [kvs m]
-            (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
-            (or
-              ;; two loops provide the best encoding
-              (reduce
-                (fn [_ [k]]
-                  (let [i (aget ctr 0)]
-                    (if-not (< i len)
-                      (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
-                      (do (aset ctr 0 (unchecked-inc i))
-                          ;; put key
-                          (if-not (buffer-min-remaining? buffer)
-                            ::not-enough-space
-                            (some-> (encode-object k buffer symbol-table intern-flag) reduced))))))
-                nil
-                kvs)
-              (let [begin-vals-pos (.position buffer)
-                    keys-size (unchecked-subtract-int begin-vals-pos (unchecked-add-int offset-table-pos offset-table-size))]
-                (.putInt buffer keys-size-pos keys-size)
-                (or
-                  (let [start-pos (.position buffer)]
-                    (aset ctr 0 0)
-                    (reduce
-                      (fn [_ [_ v]]
-                        (let [i (aget ctr 0)]
-                          (if-not (< i len)
-                            (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
-                            (do (aset ctr 0 (unchecked-inc i))
-                                ;; put offset from start
-                                (.putInt buffer
-                                         (unchecked-add-int offset-table-pos (unchecked-multiply-int i 4))
-                                         (unchecked-subtract (.position buffer) start-pos))
-                                ;; put val
-                                (if-not (buffer-min-remaining? buffer)
-                                  ::not-enough-space
-                                  (some-> (encode-object v buffer symbol-table intern-flag) reduced))))))
-                      nil
-                      kvs))
-                  (let [end-vals-pos (.position buffer)
-                        vals-size (unchecked-subtract-int end-vals-pos begin-vals-pos)]
-                    (.putInt buffer vals-size-pos vals-size)
-                    nil))))))))))
+    (record-byte-size-after-write buffer
+      (.putInt buffer len)
+      (if-not (buffer-min-remaining? buffer)
+        ::not-enough-space
+        (let [keys-size-pos (.position buffer)
+              vals-size-pos (unchecked-add-int keys-size-pos 4)
+              offset-table-pos (unchecked-add-int vals-size-pos 4)
+              _ (.position buffer offset-table-pos)
+              offset-table-size (* len 4)
+              ctr (int-array 1)]
+          (if-not (< offset-table-size (.remaining buffer))
+            ::not-enough-space
+            (let [kvs m]
+              (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
+              (or
+                ;; two loops provide the best encoding
+                (reduce
+                  (fn [_ [k]]
+                    (let [i (aget ctr 0)]
+                      (if-not (< i len)
+                        (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                        (do (aset ctr 0 (unchecked-inc i))
+                            ;; put key
+                            (if-not (buffer-min-remaining? buffer)
+                              ::not-enough-space
+                              (some-> (encode-object k buffer symbol-table intern-flag) reduced))))))
+                  nil
+                  kvs)
+                (let [begin-vals-pos (.position buffer)
+                      keys-size (unchecked-subtract-int begin-vals-pos (unchecked-add-int offset-table-pos offset-table-size))]
+                  (.putInt buffer keys-size-pos keys-size)
+                  (or
+                    (let [start-pos (.position buffer)]
+                      (aset ctr 0 0)
+                      (reduce
+                        (fn [_ [_ v]]
+                          (let [i (aget ctr 0)]
+                            (if-not (< i len)
+                              (throw (ex-info "Possible map mutation during encode, exception thrown to avoid corruption" {}))
+                              (do (aset ctr 0 (unchecked-inc i))
+                                  ;; put offset from start
+                                  (.putInt buffer
+                                           (unchecked-add-int offset-table-pos (unchecked-multiply-int i 4))
+                                           (unchecked-subtract (.position buffer) start-pos))
+                                  ;; put val
+                                  (if-not (buffer-min-remaining? buffer)
+                                    ::not-enough-space
+                                    (some-> (encode-object v buffer symbol-table intern-flag) reduced))))))
+                        nil
+                        kvs))
+                    (let [end-vals-pos (.position buffer)
+                          vals-size (unchecked-subtract-int end-vals-pos begin-vals-pos)]
+                      (.putInt buffer vals-size-pos vals-size)
+                      nil)))))))))))
 
 (extend-protocol Encode
   nil
@@ -266,8 +279,7 @@
                   (encode-object (name s) buffer nil intern-flag)))))))
   Map
   (encode-object [m buffer symbol-table intern-flag]
-    (encode-small-map m buffer symbol-table intern-flag)
-    #_(if (< 32 (.size ^Map m))
+    (if (< 32 (.size ^Map m))
       (encode-big-map m buffer symbol-table intern-flag)
       (encode-small-map m buffer symbol-table intern-flag)))
   List
@@ -275,14 +287,15 @@
     (let [^List l l
           ^ByteBuffer buffer buffer]
       (.putLong buffer t-list)
-      (.putInt buffer (.size l))
-      (reduce
-        (fn [_ x]
-          (if-not (buffer-min-remaining? buffer)
-            (reduced ::not-enough-space)
-            (some-> (encode-object x buffer symbol-table intern-flag) reduced)))
-        nil
-        l)))
+      (record-byte-size-after-write buffer
+        (.putInt buffer (.size l))
+        (reduce
+          (fn [_ x]
+            (if-not (buffer-min-remaining? buffer)
+              (reduced ::not-enough-space)
+              (some-> (encode-object x buffer symbol-table intern-flag) reduced)))
+          nil
+          l))))
   Set
   (encode-object [s buffer symbol-table intern-flag]
     (let [^Set s s
@@ -299,7 +312,7 @@
   Date
   (encode-object [d buffer _symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer]
-      (.putLong buffer t-date)
+      (.putLong buffer t-instant)
       (.putLong buffer (inst-ms d))
       nil))
   UUID
@@ -320,6 +333,7 @@
     (String. arr StandardCharsets/UTF_8)))
 
 (defn decode-object-array [^ByteBuffer buffer symbol-list]
+  (.position buffer (unchecked-add-int (.position buffer) 4))
   (let [len (.getInt buffer)
         items (object-array len)]
     (dotimes [i len]
@@ -330,9 +344,11 @@
   (vec (decode-object-array buffer symbol-list)))
 
 (defn decode-small-map [^ByteBuffer buffer symbol-list]
+  (.position buffer (unchecked-add-int (.position buffer) 4))
   (CinqDynamicArrayMap/read buffer symbol-list))
 
 (defn decode-big-map [^ByteBuffer buffer symbol-list]
+  (.position buffer (unchecked-add-int (.position buffer) 4))
   (let [len (.getInt buffer)]
     (loop [tm (transient (hash-map))
            i 0]
@@ -377,7 +393,7 @@
       t-list (decode-list buffer symbol-list)
       t-small-map (decode-small-map buffer symbol-list)
       t-set (decode-set buffer symbol-list)
-      t-date (decode-date buffer)
+      t-instant (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
       t-uuid (decode-uuid buffer)
@@ -396,7 +412,7 @@
       t-list (decode-list buffer symbol-list)
       t-small-map (do (.read mut-record buffer) mut-record)
       t-set (decode-set buffer symbol-list)
-      t-date (decode-date buffer)
+      t-instant (decode-date buffer)
       t-symbol (decode-symbol buffer)
       t-keyword (decode-keyword buffer)
       t-uuid (decode-uuid buffer)
@@ -539,3 +555,39 @@
                         (recur (inc i))))))))))
       :else
       nil)))
+
+(defn next-object-size
+  "Return the size of the next object in the buffer, does not advance the position."
+  ^long [^ByteBuffer buf]
+  (case2 (.getLong buf (.position buf))
+    t-nil 8
+    t-true 8
+    t-false 8
+    t-long-neg 16
+    t-long 16
+    t-double 16
+    t-nan 8
+    t-string (+ 8 4 (.getInt buf (+ (.position buf) 8)))
+
+    (t-keyword t-symbol)
+    (let [opos (.position buf)
+          _ (.position buf (+ opos 8))
+          ns-size (next-object-size buf)
+          _ (.position buf (+ opos 8 ns-size))
+          name-size (next-object-size buf)]
+      (.position buf opos)
+      (+ 8 ns-size name-size))
+
+    (t-list t-small-map t-big-map)
+    (let [content-size (.getInt buf (+ (.position buf) 8))]
+      (+ 8 4 content-size))
+
+    t-instant 16
+    t-uuid 24
+
+    ;; assume symbolic
+    8
+    ))
+
+(defn skip-object [^ByteBuffer buf]
+  (.position buf (+ (.position buf) (next-object-size buf))))
