@@ -1,93 +1,54 @@
 (ns com.wotbrew.cinq.npred
+  "Native predicate tools, used for scans to apply as many predicates to memory as possible before decoding."
   (:require [com.wotbrew.cinq.nio-codec :as codec])
-  (:import (java.nio ByteBuffer)))
+  (:import (com.wotbrew.cinq CinqUtil)
+           (java.nio ByteBuffer)))
 
-(declare eval-bc-next)
+;; reference-impl
+;; return lambda given symbol table.
+;; virtual dispatch, but might still be ok given other overheads
+;; ideas:
+;; byte code interpreter
+;; eval
 
-(defn eval-bc-eq [^ByteBuffer prog ^ByteBuffer val symbol-list]
-  (let [olimit (.limit prog)
-        object-size (.getInt prog)]
-    (.limit prog (+ (.position prog) object-size))
-    (let [prog-tid (.getLong prog (.position prog))
-          _ (.mark prog)
-          ret (codec/compare-bufs* prog-tid prog val symbol-list)]
-      (.limit prog olimit)
-      (.reset prog)
-      (.position prog (+ (.position prog) object-size))
-      (= 0 ret))))
+(defn lambda
+  "Given an expression vector e.g [:= 42]
+  Returns a predicate function that will take a ByteBuffer argument and test the expression against it.
 
-(defn- focus-key [^ByteBuffer key-buffer ^ByteBuffer val-buffer]
-  (let [_ (.mark val-buffer)
-        tid (.getLong val-buffer)
-        ret
-        (cond
-          (= codec/t-nil tid) false
-          (= codec/t-small-map tid)
-          (let [len (.getInt val-buffer)
-                key-size (.getInt val-buffer)
-                _val-size (.getInt val-buffer)
-                offset-pos (.position val-buffer)
-                offset-table-size (unchecked-multiply-int len 4)
-                key-start-pos (unchecked-add-int offset-pos offset-table-size)
-                val-start-pos (unchecked-add-int key-start-pos key-size)]
-            (if (= 0 len)
-              false
-              (do
-                (.position val-buffer (+ (.position val-buffer) (* len 4)))
-                (loop []
-                  ;; todo much easier if dynamic objects include their size after their t.
-                  ;; (codec/decode-size)
-                  ;; (codec/skip-object)
-                  )
-
-                )))
-          ;; todo t-big-map
-          :else false)]
-    (.reset val-buffer)
-    ret))
-
-(defn eval-bc-key [^ByteBuffer prog heap ^ByteBuffer val symbol-list]
-  (let [prog-limit (.limit prog)
-        key-len (.getInt prog)
-        _ (.limit prog key-len)]
-    (let [o-pos (.position val)
-          o-limit (.limit val)
-          key-found (focus-key prog val)
-          _ (.position prog (+ (.position prog) key-len))
-          _ (.limit prog prog-limit)
-          ret (and key-found (eval-bc-next prog heap val symbol-list))]
-      (.position val o-pos)
-      (.limit val o-limit)
-      ret)))
-
-(defn eval-bc-or [^ByteBuffer prog ^objects heap ^ByteBuffer val symbol-list]
-  (let [n (.getInt prog)]
-    (loop [i 0]
-      (if (= n i)
-        false
-        (if (eval-bc-next prog heap val symbol-list)
-          true
-          (recur (unchecked-inc i)))))))
-
-(defn eval-bc-and [^ByteBuffer prog ^objects heap ^ByteBuffer val symbol-list]
-  (let [n (.getInt prog)]
-    (loop [i 0]
-      (if (= n i)
-        true
-        (if (eval-bc-next prog heap val symbol-list)
-          (recur (unchecked-inc i))
-          false)))))
-
-(defn eval-bc-next [^ByteBuffer prog ^objects heap ^ByteBuffer val symbol-list]
-  (case (.get prog)
-    0 (not (eval-bc-next prog heap val symbol-list))
-    1 (eval-bc-and prog heap val symbol-list)
-    2 (eval-bc-or prog heap val symbol-list)
-    3 (eval-bc-eq prog val symbol-list)
-    #_#_ 4 (e-pred-lt prog val)
-    #_#_ 5 (e-pred-lte prog val)
-    #_#_ 6 (e-pred-gt prog val)
-    #_#_ 7 (e-pred-gte prog val)
-    #_#_ 8 (e-pred-in prog heap val)
-    #_#_ 9 (eval-bc-key prog heap val)
-    ))
+  Operators:
+  [:= value] buf will be tested for equality (nil rules apply)
+  [:< value] (:<, :<=, :>, :>=). Compares the value against the buf e.g for < : (< val buf).
+  [:and & expr] conjunction
+  [:or & expr] disjunction
+  [:get key expr] returns a predicate that will test the value at the key, short-circuits if key cannot be found
+    * e.g [:get :customer/name [:= \"Bob\"]] will test if the value at :customer/name is equal to Bob."
+  [expr symbol-table]
+  (let [[op & args] expr
+        symbol-list (codec/symbol-list symbol-table)]
+    (case (nth expr 0)
+      :not (complement (lambda (first args) symbol-table))
+      :=
+      (let [[x] args
+            buf (codec/encode-heap x symbol-table false)]
+        #(let [result (codec/compare-bufs buf % symbol-list)]
+           (when result (= 0 result))))
+      (:< :<= :> :>=)
+      (let [[x] args
+            buf (codec/encode-heap x symbol-table false)]
+        (case op
+          :< #(CinqUtil/lt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+          :<= #(CinqUtil/lte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+          :> #(CinqUtil/gt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+          :>= #(CinqUtil/gte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))))
+      :and (apply every-pred (map #(lambda % symbol-table) args))
+      :or (apply some-fn (map #(lambda % symbol-table) args))
+      :get
+      (let [[k expr] args
+            key-buf (codec/encode-heap k symbol-table false)
+            p (lambda expr symbol-table)]
+        (fn [^ByteBuffer buf]
+          (.mark buf)
+          (let [match (codec/focus buf key-buf symbol-list)
+                res (and match (p buf))]
+            (.reset buf)
+            res))))))

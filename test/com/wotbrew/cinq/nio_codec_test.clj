@@ -99,6 +99,24 @@
 
     #inst "2024-01-04"
     #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
-    (zipmap (range 64) (repeat "abcdefghjik"))
+    (zipmap (range 64) (repeat "abcdefghjik"))))
 
+(deftest focus-test
+  (are [map key expected-result expected-val]
+    (let [buf (codec/encode-heap map nil false)
+          k (codec/encode-heap key nil false)
+          focus-result (codec/focus buf k (object-array 0))]
+      (and (= expected-result focus-result)
+           (or (false? focus-result) (= expected-val (codec/decode-object buf nil)))))
+
+    nil :a false nil
+    {} :a false nil
+    {:a nil} :b false nil
+    {:a nil} :a true nil
+    {:a 41, :b 42, :c 43} :b true 42
+    ;; for now (consistency with cinq/eq)
+    {nil 42} nil false nil
+
+    ;; like ILookup we should 'work' with other types.
+    "hello" :a false nil
     ))

@@ -176,6 +176,7 @@
            index
            key
            val]
+  (when (nil? key) (throw (ex-info "Key cannot be nil" {:val val})))
   (if (encode-key key-buffer val-buffer symbol-table index key)
     (if (.get cursor (.flip key-buffer) GetOp/MDB_SET)
       (collision-append (.val cursor) val-buffer symbol-table key val)
@@ -192,17 +193,15 @@
            symbol-table
            index
            key]
+  (when (nil? key) (throw (ex-info "Key cannot be nil" {:val val})))
   (let [truncated (encode-key key-buffer val-buffer symbol-table index key)]
-
     (cond
       (not (.get cursor (.flip key-buffer) GetOp/MDB_SET_KEY)) ::no-record
-
       truncated
       (case (collision-delete (.val cursor) val-buffer symbol-table key)
         ::not-found ::no-record
         ::found (.put cursor (.key cursor) val-buffer insert-flags)
         ::found-clear (.delete cursor insert-flags))
-
       :else
       (do
         (.delete cursor insert-flags)
@@ -232,45 +231,6 @@
             (if (reduced? ret)
               ret
               (recur ret (unchecked-dec i)))))))))
-
-
-(defn native-pred [filter symbol-table]
-  (let [[op & args] filter
-        symbol-list (codec/symbol-list symbol-table)]
-    (case (nth filter 0)
-      :=
-      (do (assert (= 1 (count args)))
-          (let [[x] args
-                buf (codec/encode-heap x symbol-table false)]
-            #(= 0 (codec/compare-bufs buf % symbol-list))))
-      (:< :<= :> :>=)
-      (do (assert (= 1 (count args)))
-          (let [[x] args
-                buf (codec/encode-heap x symbol-table false)]
-            (case op
-              :< #(CinqUtil/lt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
-              :<= #(CinqUtil/lte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
-              :> #(CinqUtil/gt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
-              :>= #(CinqUtil/gte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0)))))
-      :and (apply every-pred (map #(native-pred % symbol-table) args))
-      :or (apply some-fn (map #(native-pred % symbol-table) args)))))
-
-;; each of these can take key theta or val theta
-;; lookup e.g a = 42
-;; prefix (composite) e.g a = 42, free b
-;; prefix-range (composite) a = 42, b < 32
-;; range e.g a = 42
-
-;; [:= 42]
-;; [:in [42, 43, 44]]
-
-;; key filtering based on buf-cmp-ksv
-;; can support any native filter by instead of comparing, return a bounded buffer for the val at key.
-;; [:get :a [:= 42]]
-;; [:get :a [:< 43]]
-;; [:get :a [:> 42]]
-
-;; buffer filter vtables (hit over and over during scan, but then, so is (f))
 
 (defn scan-all [^Cursor cursor symbol-table f init fwd]
   (let [symbol-list (codec/symbol-list symbol-table)]

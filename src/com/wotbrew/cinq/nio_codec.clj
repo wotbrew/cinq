@@ -254,7 +254,7 @@
           (do
             (.putLong buffer n)
             nil)
-          ::symbol-miss))
+          (recur s buffer nil intern-flag)))
       (let [^ByteBuffer buffer buffer]
         (if (< (.remaining buffer) (+ 16 8))
           ::not-enough-space
@@ -270,7 +270,7 @@
           (do
             (.putLong buffer n)
             nil)
-          ::symbol-miss))
+          (recur s buffer nil intern-flag)))
       (let [^ByteBuffer buffer buffer]
         (if (< (.remaining buffer) (+ 16 8))
           ::not-enough-space
@@ -332,8 +332,12 @@
     (.get buffer arr)
     (String. arr StandardCharsets/UTF_8)))
 
+(defmacro skip-len [buffer]
+  (assert (symbol? buffer))
+  `(.position ~buffer (unchecked-add-int (.position ~buffer) 4)))
+
 (defn decode-object-array [^ByteBuffer buffer symbol-list]
-  (.position buffer (unchecked-add-int (.position buffer) 4))
+  (skip-len buffer)
   (let [len (.getInt buffer)
         items (object-array len)]
     (dotimes [i len]
@@ -344,11 +348,11 @@
   (vec (decode-object-array buffer symbol-list)))
 
 (defn decode-small-map [^ByteBuffer buffer symbol-list]
-  (.position buffer (unchecked-add-int (.position buffer) 4))
+  (skip-len buffer)
   (CinqDynamicArrayMap/read buffer symbol-list))
 
 (defn decode-big-map [^ByteBuffer buffer symbol-list]
-  (.position buffer (unchecked-add-int (.position buffer) 4))
+  (skip-len buffer)
   (let [len (.getInt buffer)]
     (loop [tm (transient (hash-map))
            i 0]
@@ -475,37 +479,47 @@
   (encode-object o buf nil false)
   (mark-if-key-truncated buf))
 
-(defn encode-heap ^ByteBuffer [o symbol-table intern-flag]
+(defn encode-heap ^ByteBuffer
+  [o symbol-table intern-flag]
   (loop [buf (ByteBuffer/allocate 64)]
     (if-some [err (encode-object o buf symbol-table intern-flag)]
       (case err
         ::not-enough-space
-        (recur (ByteBuffer/allocate (* 2 (.capacity buf))))
-        ::symbol-miss
-        nil)
+        (recur (ByteBuffer/allocate (* 2 (.capacity buf)))))
       (.flip buf))))
 
-(defn- compare-nums [buf valbuf symbol-list]
-  (let [a (decode-object buf symbol-list)
+(defn- compare-mixed-type-nums [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
+  (let [a-pos (.position buf)
+        a (decode-object buf symbol-list)
+        b-pos (.position valbuf)
         b (decode-object valbuf symbol-list)]
+    (.position buf a-pos)
+    (.position valbuf b-pos)
     (compare a b)))
 
 ;; very slow for now, will look to speed up for maps sharing key orderings
-(defn- compare-maps [buf valbuf symbol-list]
-  (let [a (decode-object buf symbol-list)
+(defn- compare-maps [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
+  (let [a-pos (.position buf)
+        a (decode-object buf symbol-list)
+        b-pos (.position valbuf)
         b (decode-object valbuf symbol-list)]
+    (.position buf a-pos)
+    (.position valbuf b-pos)
     (when (= a b)
       0)))
 
 (defn- compare-bufs* [^long tid ^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
   (let [val-tid (.getLong valbuf (.position valbuf))]
     (when-not (= t-nil val-tid)
-      (let [bin-ret (Long/valueOf (.compareTo buf valbuf))]
+      (let [bin-ret (.compareTo buf valbuf)]
         (if (= 0 bin-ret)
           0
           (case2 tid
             (t-big-map t-small-map) (compare-maps buf valbuf symbol-list)
-            (t-long-neg t-long t-double) (compare-nums buf valbuf symbol-list)
+            (t-long-neg t-long t-double)
+            (if (= val-tid tid)
+              bin-ret
+              (compare-mixed-type-nums buf valbuf symbol-list))
             (if (= tid val-tid)
               bin-ret
               (Long/compare tid val-tid))))))))
@@ -519,7 +533,8 @@
     (cond
       (= buf-tid t-nil) nil
       (= t-small-map tid)
-      (let [len (.getInt valbuf)
+      (let [_ (skip-len valbuf)
+            len (.getInt valbuf)
             key-size (.getInt valbuf)
             _val-size (.getInt valbuf)
             offset-pos (.position valbuf)
@@ -589,5 +604,47 @@
     8
     ))
 
-(defn skip-object [^ByteBuffer buf]
+(defn skip-object
+  "Positions the buffer immediately after the next object, assumes such a position is valid."
+  [^ByteBuffer buf]
   (.position buf (+ (.position buf) (next-object-size buf))))
+
+(defn focus
+  "Position the buffer .position, .limit at the value object for the given key. Return true if found, false if not."
+  [^ByteBuffer buf ^ByteBuffer key symbol-list]
+  (let [tid (.getLong buf)]
+    (cond
+      (= t-small-map tid)
+      (let [_ (skip-len buf)
+            len (.getInt buf)
+            key-size (.getInt buf)
+            _val-size (.getInt buf)
+            offset-pos (.position buf)
+            olimit (.limit buf)
+            offset-table-size (unchecked-multiply-int len 4)
+            key-start-pos (unchecked-add-int offset-pos offset-table-size)
+            val-start-pos (unchecked-add-int key-start-pos key-size)]
+        (if (= 0 len)
+          false
+          (do
+            (.position buf (+ (.position buf) (* len 4)))
+            (loop [i 0]
+              (if (= i len)
+                false
+                (let [next-size (next-object-size buf)
+                      _ (.limit buf (+ (.position buf) next-size))
+                      comp-res (compare-bufs key buf symbol-list)
+                      _ (.limit buf olimit)]
+                  (if (= 0 comp-res)
+                    ;;hit
+                    (let [start (unchecked-add-int val-start-pos (.getInt buf (+ offset-pos (* i 4))))
+                          end (if (< (inc i) len)
+                                (unchecked-add-int val-start-pos (.getInt buf (+ offset-pos (* (inc i) 4))))
+                                (.limit buf))]
+                      (.position buf start)
+                      (.limit buf end)
+                      true)
+                    (do
+                      (skip-object buf)
+                      (recur (unchecked-inc i))))))))))
+      :else false)))
