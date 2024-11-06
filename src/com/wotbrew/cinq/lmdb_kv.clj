@@ -1,6 +1,7 @@
 (ns com.wotbrew.cinq.lmdb-kv
   (:require [com.wotbrew.cinq.nio-codec :as codec])
-  (:import (java.nio ByteBuffer)
+  (:import (com.wotbrew.cinq CinqUtil)
+           (java.nio ByteBuffer)
            (java.util ArrayList)
            (org.lmdbjava Cursor GetOp PutFlags)))
 
@@ -21,7 +22,7 @@
 (defn- encode-key [^ByteBuffer key-buffer ^ByteBuffer val-buffer symbol-table index key]
   (.clear val-buffer)
   (.clear key-buffer)
-  (throw-on-err (codec/encode-object index val-buffer symbol-table true))
+  (codec/encode-object index val-buffer symbol-table true)  ; has to be symbolic, guaranteed fit
   (throw-on-err (codec/encode-object key val-buffer nil false))
   (.flip val-buffer)
   (.limit val-buffer (min (.limit val-buffer) (.capacity key-buffer)))
@@ -32,6 +33,10 @@
 (defn- ensure-remaining [^ByteBuffer buffer ^long n]
   (when (< (.remaining buffer) n) (throw-on-err ::codec/not-enough-space)))
 
+(defn- ensure-collision [^ByteBuffer buffer symbol-list]
+  (let [collision (codec/decode-object buffer symbol-list)]
+    (when-not (identical? :cinq/collision collision) (throw (ex-info "Unexpected collision prefix" {:prefix collision})))))
+
 (defn- collision-new
   [^ByteBuffer val-buffer
    symbol-table
@@ -39,7 +44,7 @@
    val]
   (.clear val-buffer)
   ;; version prefix
-  (throw-on-err (codec/encode-object ::collision val-buffer symbol-table true))
+  (codec/encode-object :cinq/collision val-buffer symbol-table true)
 
   (let [min-len (+ 4 8 32)]
     (ensure-remaining val-buffer min-len))
@@ -58,10 +63,6 @@
     (.putInt val-buffer (+ 4 len-pos) val-len))
   (.flip val-buffer))
 
-(defn- ensure-collision [^ByteBuffer buffer symbol-list]
-  (let [collision (codec/decode-object buffer symbol-list)]
-    (when-not (identical? ::collision collision) (throw (ex-info "Unexpected collision prefix" {:prefix collision})))))
-
 (defn- collision-append
   [^ByteBuffer cursor-val-buffer
    ^ByteBuffer val-buffer
@@ -77,7 +78,7 @@
         _ (codec/encode-object key val-buffer symbol-table true)
         swap-buffer (.flip (.duplicate val-buffer))
 
-        _ (throw-on-err (codec/encode-object ::collision val-buffer symbol-table true))
+        _ (throw-on-err (codec/encode-object :cinq/collision val-buffer symbol-table true))
         _ (ensure-remaining val-buffer (+ 32 12))
         _ (.putInt val-buffer (inc n-pairs))
 
@@ -136,15 +137,15 @@
         _ (.clear val-buffer)
         _ (throw-on-err (codec/encode-object key val-buffer nil false))
         swap-buffer (.flip (.duplicate val-buffer))
-        _ (throw-on-err (codec/encode-object ::collision val-buffer symbol-table true))
+        _ (throw-on-err (codec/encode-object :cinq/collision val-buffer symbol-table true))
         new-n-pairs-pos (.position val-buffer)
         _ (.position val-buffer (+ 4 (.position val-buffer)))]
     (loop [i 0]
       (if (= i n-pairs)
         (do
-            (.flip val-buffer)
-            (.position val-buffer (.limit swap-buffer))
-            ::not-found)
+          (.flip val-buffer)
+          (.position val-buffer (.limit swap-buffer))
+          ::not-found)
         (let [key-len (.getInt cursor-buffer)
               val-len (.getInt cursor-buffer)
               _ (.limit cursor-buffer (+ (.position cursor-buffer) key-len))
@@ -207,32 +208,99 @@
         (.delete cursor insert-flags)
         nil))))
 
-(defrecord Entry [index key val])
-
-(defn- materialize-entries [^Cursor cursor symbol-list]
-  (if (codec/truncated? (.key cursor))
-    (let [index (codec/decode-object (.key cursor) symbol-list)
-          ^ByteBuffer val-buf (.val cursor)
-          _ (ensure-collision val-buf symbol-list)
-          n-pairs (.getInt val-buf)
-          al (ArrayList.)]
-      (dotimes [_ n-pairs]
+(defn- walk-collision [^ByteBuffer val-buf symbol-list n-pairs index f init fwd]
+  (if fwd
+    (loop [acc init
+           i 0]
+      (if (= i n-pairs)
+        acc
         (let [_ (.position val-buf (+ 8 (.position val-buf)))
               key (codec/decode-object val-buf symbol-list)
-              val (codec/decode-object val-buf symbol-list)]
-          (.add al (->Entry index key val))))
-      al)
-    (let [index (codec/decode-object (.key cursor) symbol-list)
-          key (codec/decode-object (.key cursor) symbol-list)
-          val (codec/decode-object (.val cursor) symbol-list)]
-      [(->Entry index key val)])))
+              val (codec/decode-object val-buf symbol-list)
+              ret (f acc index key val)]
+          (if (reduced? ret)
+            ret
+            (recur ret (unchecked-inc i))))))
+    ;; todo, tune this if it matters - slow path is probably ok
+    (let [d (walk-collision val-buf symbol-list n-pairs index (fn [acc i k v] (conj acc [i k v])) [] true)]
+      (loop [acc init
+             i (count d)]
+        (if (= i 0)
+          acc
+          (let [[index key val] (nth d i)
+                ret (f acc index key val)]
+            (if (reduced? ret)
+              ret
+              (recur ret (unchecked-dec i)))))))))
+
+
+(defn native-pred [filter symbol-table]
+  (let [[op & args] filter
+        symbol-list (codec/symbol-list symbol-table)]
+    (case (nth filter 0)
+      :=
+      (do (assert (= 1 (count args)))
+          (let [[x] args
+                buf (codec/encode-heap x symbol-table false)]
+            #(= 0 (codec/compare-bufs buf % symbol-list))))
+      (:< :<= :> :>=)
+      (do (assert (= 1 (count args)))
+          (let [[x] args
+                buf (codec/encode-heap x symbol-table false)]
+            (case op
+              :< #(CinqUtil/lt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+              :<= #(CinqUtil/lte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+              :> #(CinqUtil/gt (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0))
+              :>= #(CinqUtil/gte (codec/compare-bufs buf ^ByteBuffer % symbol-list) (long 0)))))
+      :and (apply every-pred (map #(native-pred % symbol-table) args))
+      :or (apply some-fn (map #(native-pred % symbol-table) args)))))
+
+;; each of these can take key theta or val theta
+;; lookup e.g a = 42
+;; prefix (composite) e.g a = 42, free b
+;; prefix-range (composite) a = 42, b < 32
+;; range e.g a = 42
+
+;; [:= 42]
+;; [:in [42, 43, 44]]
+
+;; key filtering based on buf-cmp-ksv
+;; can support any native filter by instead of comparing, return a bounded buffer for the val at key.
+;; [:get :a [:= 42]]
+;; [:get :a [:< 43]]
+;; [:get :a [:> 42]]
+
+;; buffer filter vtables (hit over and over during scan, but then, so is (f))
+
+(defn scan-all [^Cursor cursor symbol-table f init fwd]
+  (let [symbol-list (codec/symbol-list symbol-table)]
+    (loop [acc init
+           hit (if fwd (.first cursor) (.last cursor))]
+      (if-not hit
+        acc
+        (if (codec/truncated? (.key cursor))
+          (let [index (codec/decode-object (.key cursor) symbol-list)
+                ^ByteBuffer val-buf (.val cursor)
+                _ (ensure-collision val-buf symbol-list)
+                n-pairs (.getInt val-buf)
+                ret (walk-collision val-buf symbol-list n-pairs index f init fwd)]
+            (if (reduced? ret)
+              @ret
+              (recur ret (.next cursor))))
+          (let [index (codec/decode-object (.key cursor) symbol-list)
+                key (codec/decode-object (.key cursor) symbol-list)
+                val (codec/decode-object (.val cursor) symbol-list)
+                ret (f acc index key val)]
+            (if (reduced? ret)
+              ret
+              (recur ret (if fwd (.next cursor) (.prev cursor))))))))))
+
+(defrecord Entry [index key val])
 
 (defn materialize-all [^Cursor cursor symbol-table]
-  (let [sl (codec/symbol-list symbol-table)]
-    (if (.first cursor)
-      (let [al (ArrayList.)]
-        (.addAll al (materialize-entries cursor sl))
-        (while (.next cursor)
-          (.addAll al (materialize-entries cursor sl)))
-        (vec al))
-      [])))
+  (persistent!
+    (scan-all cursor
+              symbol-table
+              (fn [acc index key val] (conj! acc (->Entry index key val)))
+              (transient [])
+              true)))

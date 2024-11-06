@@ -266,7 +266,8 @@
                   (encode-object (name s) buffer nil intern-flag)))))))
   Map
   (encode-object [m buffer symbol-table intern-flag]
-    (if (< 32 (.size ^Map m))
+    (encode-small-map m buffer symbol-table intern-flag)
+    #_(if (< 32 (.size ^Map m))
       (encode-big-map m buffer symbol-table intern-flag)
       (encode-small-map m buffer symbol-table intern-flag)))
   List
@@ -480,7 +481,7 @@
     (when (= a b)
       0)))
 
-(defn- compare-bufs [^long tid ^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
+(defn- compare-bufs* [^long tid ^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
   (let [val-tid (.getLong valbuf (.position valbuf))]
     (when-not (= t-nil val-tid)
       (let [bin-ret (Long/valueOf (.compareTo buf valbuf))]
@@ -492,6 +493,9 @@
             (if (= tid val-tid)
               bin-ret
               (Long/compare tid val-tid))))))))
+
+(defn compare-bufs [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
+  (compare-bufs* (.getLong buf (.position buf)) buf valbuf symbol-list))
 
 (defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym symbol-list]
   (let [tid (.getLong valbuf)
@@ -525,7 +529,7 @@
                                   (.limit valbuf))]
                         (.position valbuf start)
                         (.limit valbuf end)
-                        (compare-bufs buf-tid buf valbuf symbol-list))
+                        (compare-bufs* buf-tid buf valbuf symbol-list))
                       ;; miss, kw is already read - move to next key
                       (recur (inc i)))
                     ;; not a kw, move backwards, skip
