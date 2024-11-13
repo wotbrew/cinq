@@ -21,7 +21,7 @@
     [:= nil] nil nil
     [:= 42] nil nil
 
-    ;; todo :not and nil behaviour?
+    ;; todo :not and nil behaviour? (not nil) == nil?!
 
     [:= 42] 42 true
     [:= 42] 43 false

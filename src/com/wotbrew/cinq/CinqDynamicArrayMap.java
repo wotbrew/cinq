@@ -109,10 +109,10 @@ public class CinqDynamicArrayMap extends APersistentMap {
         Object v = vals[i];
         if (v != null) return v;
         int offset = offsets[i];
-        int pos = buffer.position();
-        buffer.position(offset);
-        v = decodeInstance.invoke(buffer, symbolList);
-        buffer.position(pos);
+        // if we do not tmp this, this function is not thread safe
+        ByteBuffer tmpBuffer = this.buffer.duplicate();
+        tmpBuffer.position(offset);
+        v = decodeInstance.invoke(tmpBuffer, symbolList);
         vals[i] = v;
         return v;
     }
@@ -148,32 +148,7 @@ public class CinqDynamicArrayMap extends APersistentMap {
     }
 
     private IMapEntry getMapEntry(Object val, Object key) {
-        return new IMapEntry() {
-            @Override
-            public Object key() {
-                return key;
-            }
-
-            @Override
-            public Object val() {
-                return val;
-            }
-
-            @Override
-            public Object getKey() {
-                return key;
-            }
-
-            @Override
-            public Object getValue() {
-                return val;
-            }
-
-            @Override
-            public Object setValue(Object value) {
-                throw new RuntimeException("Not supported (setValue)");
-            }
-        };
+        return MapEntry.create(key, val);
     }
 
     @Override
@@ -275,7 +250,7 @@ public class CinqDynamicArrayMap extends APersistentMap {
         public Object next() {
             try {
                 Object o = m.entryAtIndex(i);
-                i++;
+                this.i++;
                 return o;
             } catch (IndexOutOfBoundsException e) {
                 throw new NoSuchElementException();

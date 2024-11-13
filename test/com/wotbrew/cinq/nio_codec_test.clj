@@ -1,5 +1,9 @@
 (ns com.wotbrew.cinq.nio-codec-test
   (:require [clojure.test :refer :all]
+            [clojure.test.check.generators :as gen]
+            [clojure.walk :as walk]
+            [com.gfredericks.test.chuck :as chuck]
+            [com.gfredericks.test.chuck.clojure-test :refer [checking]]
             [com.wotbrew.cinq.nio-codec :as codec])
   (:import (clojure.lang Util)
            (java.nio ByteBuffer)))
@@ -59,9 +63,7 @@
     #inst "2024-01-04"
     #uuid"7e2a70b7-4c20-43ff-951b-c9b5ab77167b"
     ;; bigmap
-    (zipmap (range 64) (repeat "abcdefghjik"))
-
-    ))
+    (zipmap (range 64) (repeat "abcdefghjik"))))
 
 (defn rt [x]
   (codec/decode-object (codec/encode-heap x nil nil) nil))
@@ -120,3 +122,73 @@
     ;; like ILookup we should 'work' with other types.
     "hello" :a false nil
     ))
+
+(def primitive-gen
+  (gen/one-of [gen/small-integer
+               ;; TODO re-enable NaN when we scan binary instead
+               (gen/double* {:NaN? false})
+               gen/string
+               gen/keyword
+               gen/symbol]))
+
+(def val-gen
+  (gen/recursive-gen
+    (fn [inner]
+      (gen/one-of [(gen/vector inner)
+                   (gen/map inner inner)]))
+    primitive-gen))
+
+(deftest equality-rule-test
+  (checking "all objects that are clojure equal are buf equal 1" (chuck/times 100)
+    [x val-gen]
+    (is (= (codec/encode-heap x nil false)
+           (codec/encode-heap x nil false))))
+  (checking "all objects that are clojure equal are buf equal 2" (chuck/times 100)
+    [x val-gen
+     y val-gen]
+    (if (= x y)
+      (is (= (codec/encode-heap x nil false)
+             (codec/encode-heap y nil false)))
+      (is (not= (codec/encode-heap x nil false) (codec/encode-heap y nil false)))))
+  (checking "rt equal to original type" (chuck/times 500)
+    [x val-gen]
+    (is (= x (rt x)))))
+
+(deftest crazy-map-eq-test
+  (let [m  {-1 0
+           -10 0
+           -11 0
+           -12 0
+           -13 0
+           -14 0
+           -15 0
+           -16 0
+           -17 0
+           -18 0
+           -19 0
+           -2 0
+           -3 0
+           -4 0
+           -5 0
+           -6 0
+           -7 0
+           -8 0
+           -9 0
+           0 0
+           1 0
+           1.0 0
+           10 0
+           2 0
+           3 0
+           4 0
+           5 0
+           6 0
+           7 0
+           8 0
+           9 0
+           [] 0
+           {0 0} 0}
+        m2 (rt m)]
+    (= m2 m)
+    (is (= (rt m) m))
+    (is (= m (rt m)))))

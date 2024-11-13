@@ -4,7 +4,7 @@
            (com.wotbrew.cinq CinqDynamicArrayMap CinqUnsafeDynamicMap)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
-           (java.util ArrayList Date HashMap List Map Set UUID)
+           (java.util ArrayList Arrays Comparator Date HashMap List Map Set UUID)
            (java.util.concurrent ConcurrentHashMap)))
 
 (set! *warn-on-reflection* true)
@@ -78,22 +78,22 @@
 (def ^:const t-nil 0)
 (def ^:const t-true 1)
 (def ^:const t-false 2)
-(def ^:const t-long 3)
-(def ^:const t-long-neg -3)
-(def ^:const t-double 4)
-(def ^:const t-nan -4)
-(def ^:const t-string 5)
-(def ^:const t-small-map 6)
-(def ^:const t-list 7)
-(def ^:const t-set 8)
-(def ^:const t-instant 9)
+(def ^:const t-long-neg 3)
+(def ^:const t-long 4)
+(def ^:const t-double 5)
+(def ^:const t-nan 6)
+(def ^:const t-string 7)
+(def ^:const t-small-map 8)
+(def ^:const t-list 9)
+(def ^:const t-set 10)
+(def ^:const t-instant 11)
 
 ;; normally in symbol table - but not always
-(def ^:const t-symbol 10)
-(def ^:const t-keyword 11)
+(def ^:const t-symbol 12)
+(def ^:const t-keyword 13)
 
-(def ^:const t-uuid 12)
-(def ^:const t-big-map 13)
+(def ^:const t-uuid 14)
+(def ^:const t-big-map 15)
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   ;; 16 min for type + payload, 4 min for byte count dynamic types
@@ -194,6 +194,65 @@
                       (.putInt buffer vals-size-pos vals-size)
                       nil)))))))))))
 
+(defn encode-map [^Map map ^ByteBuffer buffer symbol-table intern-flag]
+  ;; sort keys (interned rep)
+  ;; * NaN sorting is screwed
+  ;; if not sortable in memory, render out to buffer and sort memory
+  ;; maybe best to pre-write the keys so we can sort as mem
+  ;; symbolic keys can get a short-cut (as it'll be sorted the same as in-memory longs)
+
+  ;; count
+  ;; key, val-pos *
+  ;; val *
+  (let [opos (.position buffer)
+        key-array (object-array (keys map))
+        key-bufs (object-array (alength key-array))
+        val-slots (int-array (alength key-array))]
+    (or (loop [i 0]
+          (when-not (= i (alength key-array))
+            (let [k (aget key-array i)
+                  pos (.position buffer)
+                  encode-ret (encode-object k buffer symbol-table intern-flag)
+                  new-pos (.position buffer)]
+              (or encode-ret
+                  (do (aset key-bufs i (doto (.duplicate buffer) (.position pos) (.limit new-pos)))
+                      (recur (unchecked-inc i)))))))
+
+
+        )
+
+    )
+
+
+  (let [key-array (object-array (keys map))
+        val-slots (int-array (alength key-array))
+        sorted (try (Arrays/sort key-array) true (catch Throwable _ false))]
+    (.putInt buffer (alength key-array))
+    (cond
+      (not (buffer-min-remaining? buffer)) ::not-enough-space
+      sorted
+      (or (loop [i 0]
+            (if (= i (alength key-array))
+              nil
+              (let [k (aget key-array i)]
+                (or (encode-object k buffer symbol-table intern-flag)
+                    (when-not (buffer-min-remaining? buffer) ::not-enough-space)
+                    (do
+                      (aset val-slots i (.position buffer))
+                      (.position buffer (unchecked-add (.position buffer) 4))
+                      (recur (unchecked-inc i)))))))
+          (loop [i 0]
+            (if (= i (alength key-array))
+              nil
+              (let [k (aget key-array i)
+                    v (.get map k)]
+                (.putInt buffer (aget val-slots i) (.position buffer))
+                (or
+                  (encode-object v buffer symbol-table intern-flag)
+                  (recur (unchecked-inc i)))))))
+      :else
+      (throw (Exception. "Not implemented")))))
+
 (extend-protocol Encode
   nil
   (encode-object [_ buffer symbol-table intern-flag]
@@ -256,7 +315,7 @@
             nil)
           (recur s buffer nil intern-flag)))
       (let [^ByteBuffer buffer buffer]
-        (if (< (.remaining buffer) (+ 16 8))
+        (if (< (.remaining buffer) (+ 32 8))
           ::not-enough-space
           (do (.putLong buffer t-keyword)
               (or (encode-object (namespace s) buffer nil intern-flag)
@@ -272,7 +331,7 @@
             nil)
           (recur s buffer nil intern-flag)))
       (let [^ByteBuffer buffer buffer]
-        (if (< (.remaining buffer) (+ 16 8))
+        (if (< (.remaining buffer) (+ 32 8))
           ::not-enough-space
           (do (.putLong buffer t-symbol)
               (or (encode-object (namespace s) buffer nil intern-flag)
@@ -508,10 +567,22 @@
     (when (= a b)
       0)))
 
+(defn compare-lex-bufs ^long [^ByteBuffer buf1 ^ByteBuffer buf2]
+  (let [mis (.mismatch buf1 buf2)]
+    (if (= -1 mis)
+      (compare (.remaining buf1) (.remaining buf2))
+      (let [pos0 (unchecked-add (.position buf1) mis)
+            pos1 (unchecked-add (.position buf2) mis)]
+        (Byte/compareUnsigned (.get buf1 pos0) (.get buf2 pos1))))))
+
+(def ^Comparator lex-comparator
+  (reify Comparator
+    (compare [_ a b] (compare-lex-bufs a b))))
+
 (defn- compare-bufs* [^long tid ^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
   (let [val-tid (.getLong valbuf (.position valbuf))]
     (when-not (= t-nil val-tid)
-      (let [bin-ret (.compareTo buf valbuf)]
+      (let [bin-ret (compare-lex-bufs buf valbuf)]
         (if (= 0 bin-ret)
           0
           (case2 tid
@@ -603,6 +674,16 @@
     ;; assume symbolic
     8
     ))
+
+(defn next-pair-size
+  "Returns the size of the next 2 objects (for pairs)"
+  ^long [^ByteBuffer buf]
+  (let [pos (.position buf)
+        size1 (next-object-size buf)
+        _ (.position buf (+ pos size1))
+        size2 (next-object-size buf)
+        _ (.position buf pos)]
+    (+ size1 size2)))
 
 (defn skip-object
   "Positions the buffer immediately after the next object, assumes such a position is valid."

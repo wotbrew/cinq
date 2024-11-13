@@ -70,7 +70,7 @@
     (prj (>= ##NaN 1.0)) false))
 
 (def inherit-prim
-  (gen/one-of [gen/small-integer
+  (gen/one-of [gen/large-integer
                gen/double
                gen/string
                gen/keyword
