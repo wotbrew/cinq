@@ -6,10 +6,9 @@
             [com.gfredericks.test.chuck.clojure-test :refer [checking]]
             [com.wotbrew.cinq.lmdb-kv :as kv]
             [com.wotbrew.cinq.nio-codec :as codec])
-  (:import (clojure.lang IDeref)
+  (:import (clojure.lang IDeref MapEntry Seqable)
            (java.io Closeable File)
-           (java.nio ByteBuffer ByteOrder)
-           (java.util Comparator)
+           (java.nio ByteBuffer)
            (org.lmdbjava DbiFlags Env EnvFlags)))
 
 (defn closeable [x close-fn]
@@ -45,7 +44,8 @@
               :val-buffer val-buffer
               :mat mat
               :put put
-              :del del}))))))
+              :del del
+              :del-all #(run! del (map first (mat)))}))))))
 
 (deftest simple-rt-test
   (with-tmp-cursor
@@ -97,7 +97,7 @@
 
 (def primitive-gen
   (gen/one-of [gen/small-integer
-               ;; TODO re-enable NaN when we scan binary instead
+               ;; NaN and = do not play well, consider .equals in tests?
                (gen/double* {:NaN? false})
                gen/string
                gen/keyword
@@ -118,3 +118,36 @@
         (run! #(put % %) x)
         (is (= (sort-by (memoize #(codec/encode-heap % nil false)) codec/lex-comparator (distinct x))
                (map first (mat))))))))
+
+(defn fake-map [coll]
+  (reify java.util.Map
+    (size [_] (count coll))
+    Seqable
+    (seq [_] (map #(MapEntry/create (nth % 0) (nth % 1)) coll))))
+
+(deftest different-map-orderings-collide-test
+  (with-tmp-cursor
+    (fn [{:keys [mat put del-all]}]
+      (put (fake-map [[:a 0] [:b 1]]) nil)
+      (put (fake-map [[:b 1] [:a 0]]) nil)
+      (is (= [{:a 0, :b 1}] (map first (mat))))
+      (del-all)
+      (let [m (zipmap (range 1000) (range 1000))]
+        (put (fake-map m) nil)
+        (put (fake-map (reverse m)) nil)
+        (is (= [m] (map first (mat))))))))
+
+(defn fake-set [coll]
+  (reify java.util.Set
+    (size [_] (count coll))
+    (iterator [_] (.iterator (vec coll)))
+    (toArray [_] (object-array coll))
+    Seqable
+    (seq [_] (seq coll))))
+
+(deftest different-set-orderings-collide-test
+  (with-tmp-cursor
+    (fn [{:keys [mat put]}]
+      (put (fake-set [:a :b :c]) nil)
+      (put (fake-set [:c :b :a]) nil)
+      (is (= [#{:a :b :c}] (map first (mat)))))))

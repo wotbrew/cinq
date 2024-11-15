@@ -120,20 +120,30 @@
        (.putInt ~buffer-sym ipos# size#)
        ret#)))
 
+(declare encode-heap lex-comparator)
+
+(defn- sort-lex-keys [kvs]
+  ;; when key-encoding unsorted structures, subcomponents could in theory still use the symbol table
+  ;; and save space but there is no way to convey this right now
+  ;; examples would be e.g maps as keys in an index {:foo 42, :bar 43} :foo and :bar can use integers.
+  (if (every? keyword? kvs)
+    (sort-by key kvs)
+    (sort-by (memoize #(encode-heap (key %) nil false)) lex-comparator (seq kvs))))
+
 (defn encode-big-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
     (.putLong buffer t-big-map)
     (record-byte-size-after-write buffer
       (.putInt buffer len)
-      (reduce-kv
-        (fn [_ k v]
+      (reduce
+        (fn [_ [k v]]
           (some-> (or (when-not (buffer-min-remaining? buffer) ::not-enough-space)
                       (encode-object k buffer symbol-table intern-flag)
                       (when-not (buffer-min-remaining? buffer) ::not-enough-space)
                       (encode-object v buffer symbol-table intern-flag))
                   reduced))
         nil
-        m))))
+        (if symbol-table m (sort-lex-keys m))))))
 
 (defn encode-small-map [^Map m ^ByteBuffer buffer symbol-table intern-flag]
   (let [len (.size m)]
@@ -151,7 +161,7 @@
               ctr (int-array 1)]
           (if-not (< offset-table-size (.remaining buffer))
             ::not-enough-space
-            (let [kvs m]
+            (let [kvs (if symbol-table m (sort-lex-keys m))] ; tune this later if it matters
               (.position buffer (unchecked-add-int offset-table-pos offset-table-size))
               (or
                 ;; two loops provide the best encoding
@@ -193,65 +203,6 @@
                           vals-size (unchecked-subtract-int end-vals-pos begin-vals-pos)]
                       (.putInt buffer vals-size-pos vals-size)
                       nil)))))))))))
-
-(defn encode-map [^Map map ^ByteBuffer buffer symbol-table intern-flag]
-  ;; sort keys (interned rep)
-  ;; * NaN sorting is screwed
-  ;; if not sortable in memory, render out to buffer and sort memory
-  ;; maybe best to pre-write the keys so we can sort as mem
-  ;; symbolic keys can get a short-cut (as it'll be sorted the same as in-memory longs)
-
-  ;; count
-  ;; key, val-pos *
-  ;; val *
-  (let [opos (.position buffer)
-        key-array (object-array (keys map))
-        key-bufs (object-array (alength key-array))
-        val-slots (int-array (alength key-array))]
-    (or (loop [i 0]
-          (when-not (= i (alength key-array))
-            (let [k (aget key-array i)
-                  pos (.position buffer)
-                  encode-ret (encode-object k buffer symbol-table intern-flag)
-                  new-pos (.position buffer)]
-              (or encode-ret
-                  (do (aset key-bufs i (doto (.duplicate buffer) (.position pos) (.limit new-pos)))
-                      (recur (unchecked-inc i)))))))
-
-
-        )
-
-    )
-
-
-  (let [key-array (object-array (keys map))
-        val-slots (int-array (alength key-array))
-        sorted (try (Arrays/sort key-array) true (catch Throwable _ false))]
-    (.putInt buffer (alength key-array))
-    (cond
-      (not (buffer-min-remaining? buffer)) ::not-enough-space
-      sorted
-      (or (loop [i 0]
-            (if (= i (alength key-array))
-              nil
-              (let [k (aget key-array i)]
-                (or (encode-object k buffer symbol-table intern-flag)
-                    (when-not (buffer-min-remaining? buffer) ::not-enough-space)
-                    (do
-                      (aset val-slots i (.position buffer))
-                      (.position buffer (unchecked-add (.position buffer) 4))
-                      (recur (unchecked-inc i)))))))
-          (loop [i 0]
-            (if (= i (alength key-array))
-              nil
-              (let [k (aget key-array i)
-                    v (.get map k)]
-                (.putInt buffer (aget val-slots i) (.position buffer))
-                (or
-                  (encode-object v buffer symbol-table intern-flag)
-                  (recur (unchecked-inc i)))))))
-      :else
-      (throw (Exception. "Not implemented")))))
 
 (extend-protocol Encode
   nil
@@ -367,7 +318,7 @@
             (reduced ::not-enough-space)
             (some-> (encode-object x buffer symbol-table intern-flag) reduced)))
         nil
-        s)))
+        (if symbol-table s (sort-by #(encode-heap % nil false) s)))))
   Date
   (encode-object [d buffer _symbol-table intern-flag]
     (let [^ByteBuffer buffer buffer]
@@ -485,36 +436,6 @@
 (defn empty-symbol-table []
   (->SymbolTable (ConcurrentHashMap.) (object-array 32) (ArrayList.)))
 
-(defn encode
-  ^ByteBuffer [o & {:keys [direct]}]
-  (let [symbol-table (empty-symbol-table)]
-    (loop [content-buf (ByteBuffer/allocate 16)]
-      (if-not (encode-object o content-buf symbol-table true)
-        (loop [symbol-buf (ByteBuffer/allocate 16)]
-          (if-not (encode-object (vec (symbol-list symbol-table)) symbol-buf nil true)
-            (let [_ (do (.flip content-buf)
-                        (.flip symbol-buf))
-                  cap (+ (.remaining content-buf) (.remaining symbol-buf))
-                  buf (if direct (ByteBuffer/allocateDirect cap) (ByteBuffer/allocate cap))]
-              (.put buf symbol-buf)
-              (.put buf content-buf)
-              (.flip buf))
-            (recur (ByteBuffer/allocate (* 2 (.capacity symbol-buf))))))
-        (recur (ByteBuffer/allocate (* 2 (.capacity content-buf))))))))
-
-(defn decode [^ByteBuffer buf]
-  (decode-object buf (object-array (decode-object buf (object-array 0)))))
-
-(comment
-
-  (-> (encode {:foo 42})
-      (decode))
-
-  (-> (encode {:foo [true nil false 42 42.3 "hello, world"]})
-      (decode))
-
-  )
-
 (defn list-adds [^SymbolTable symbol-table]
   (.-adds symbol-table))
 
@@ -597,50 +518,6 @@
 
 (defn compare-bufs [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
   (compare-bufs* (.getLong buf (.position buf)) buf valbuf symbol-list))
-
-(defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym symbol-list]
-  (let [tid (.getLong valbuf)
-        buf-tid (.getLong buf (.position buf))]
-    (cond
-      (= buf-tid t-nil) nil
-      (= t-small-map tid)
-      (let [_ (skip-len valbuf)
-            len (.getInt valbuf)
-            key-size (.getInt valbuf)
-            _val-size (.getInt valbuf)
-            offset-pos (.position valbuf)
-            offset-table-size (unchecked-multiply-int len 4)
-            key-start-pos (unchecked-add-int offset-pos offset-table-size)
-            val-start-pos (unchecked-add-int key-start-pos key-size)]
-        (if (= 0 len)
-          nil
-          (do
-            (.position valbuf (+ (.position valbuf) (* len 4)))
-            (loop [i 0]
-              (if (= i len)
-                nil
-                (let [k (.getLong valbuf)]
-                  ;; is a kw
-                  (if (<= t-max k)
-                    ;; is a kw, equal to sym int
-                    (if (= keysym k)
-                      ;; hit
-                      (let [start (unchecked-add-int val-start-pos (.getInt valbuf (+ offset-pos (* i 4))))
-                            end (if (< (inc i) len)
-                                  (unchecked-add-int val-start-pos (.getInt valbuf (+ offset-pos (* (inc i) 4))))
-                                  (.limit valbuf))]
-                        (.position valbuf start)
-                        (.limit valbuf end)
-                        (compare-bufs* buf-tid buf valbuf symbol-list))
-                      ;; miss, kw is already read - move to next key
-                      (recur (inc i)))
-                    ;; not a kw, move backwards, skip
-                    (do (.position valbuf (dec (.position valbuf)))
-                        ;; skip key
-                        (decode valbuf)
-                        (recur (inc i))))))))))
-      :else
-      nil)))
 
 (defn next-object-size
   "Return the size of the next object in the buffer, does not advance the position."
@@ -729,3 +606,47 @@
                       (skip-object buf)
                       (recur (unchecked-inc i))))))))))
       :else false)))
+
+(defn bufcmp-ksv [^ByteBuffer buf ^ByteBuffer valbuf ^long keysym symbol-list]
+  (let [tid (.getLong valbuf)
+        buf-tid (.getLong buf (.position buf))]
+    (cond
+      (= buf-tid t-nil) nil
+      (= t-small-map tid)
+      (let [_ (skip-len valbuf)
+            len (.getInt valbuf)
+            key-size (.getInt valbuf)
+            _val-size (.getInt valbuf)
+            offset-pos (.position valbuf)
+            offset-table-size (unchecked-multiply-int len 4)
+            key-start-pos (unchecked-add-int offset-pos offset-table-size)
+            val-start-pos (unchecked-add-int key-start-pos key-size)]
+        (if (= 0 len)
+          nil
+          (do
+            (.position valbuf (+ (.position valbuf) (* len 4)))
+            (loop [i 0]
+              (if (= i len)
+                nil
+                (let [k (.getLong valbuf)]
+                  ;; is a kw
+                  (if (<= t-max k)
+                    ;; is a kw, equal to sym int
+                    (if (= keysym k)
+                      ;; hit
+                      (let [start (unchecked-add-int val-start-pos (.getInt valbuf (+ offset-pos (* i 4))))
+                            end (if (< (inc i) len)
+                                  (unchecked-add-int val-start-pos (.getInt valbuf (+ offset-pos (* (inc i) 4))))
+                                  (.limit valbuf))]
+                        (.position valbuf start)
+                        (.limit valbuf end)
+                        (compare-bufs* buf-tid buf valbuf symbol-list))
+                      ;; miss, kw is already read - move to next key
+                      (recur (inc i)))
+                    ;; not a kw, move backwards, skip
+                    (do (.position valbuf (dec (.position valbuf)))
+                        ;; skip key
+                        (skip-object valbuf)
+                        (recur (inc i))))))))))
+      :else
+      nil)))

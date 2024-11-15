@@ -220,28 +220,30 @@
            i 0]
       (if (= i n-pairs)
         acc
-        (let [key (codec/decode-object val-buf symbol-list)
-              val (codec/decode-object val-buf symbol-list)
-              ret (f acc index key val)]
+        (let [kb (.duplicate val-buf)
+              _ (codec/skip-object val-buf)
+              vb (.duplicate val-buf)
+              _ (codec/skip-object val-buf)
+              ret (f acc index kb vb)]
           (if (reduced? ret)
             ret
             (recur ret (unchecked-inc i))))))
     ;; todo, tune this if it matters - slow path is probably ok
-    (let [d (walk-collision val-buf symbol-list n-pairs index (fn [acc i k v] (conj acc [i k v])) [] true)]
+    (let [d (walk-collision val-buf symbol-list n-pairs index (fn [acc _i k v] (conj acc [k v])) [] true)]
       (loop [acc init
              i (count d)]
         (if (= i 0)
           acc
-          (let [[index key val] (nth d i)
+          (let [[key val] (nth d i)
                 ret (f acc index key val)]
             (if (reduced? ret)
               ret
               (recur ret (unchecked-dec i)))))))))
 
-(defn scan-all [^Cursor cursor symbol-table f init fwd]
+(defn scan [^Cursor cursor symbol-table f init ^ByteBuffer start fwd]
   (let [symbol-list (codec/symbol-list symbol-table)]
     (loop [acc init
-           hit (if fwd (.first cursor) (.last cursor))]
+           hit (if start (.get cursor start GetOp/MDB_SET_RANGE) (if fwd (.first cursor) (.last cursor)))]
       (if-not hit
         acc
         (if (codec/truncated? (.key cursor))
@@ -253,9 +255,7 @@
               @ret
               (recur ret (if fwd (.next cursor) (.prev cursor)))))
           (let [index (codec/decode-object (.key cursor) symbol-list)
-                key (codec/decode-object (.key cursor) symbol-list)
-                val (codec/decode-object (.val cursor) symbol-list)
-                ret (f acc index key val)]
+                ret (f acc index (.key cursor) (.val cursor))]
             (if (reduced? ret)
               ret
               (recur ret (if fwd (.next cursor) (.prev cursor))))))))))
@@ -263,9 +263,11 @@
 (defrecord Entry [index key val])
 
 (defn materialize-all [^Cursor cursor symbol-table]
-  (persistent!
-    (scan-all cursor
-              symbol-table
-              (fn [acc index key val] (conj! acc (->Entry index key val)))
-              (transient [])
-              true)))
+  (let [symbol-list (codec/symbol-list symbol-table)]
+    (persistent!
+      (scan cursor
+            symbol-table
+            (fn [acc index key val] (conj! acc (->Entry index (codec/decode-object key symbol-list) (codec/decode-object val symbol-list))))
+            (transient [])
+            nil
+            true))))
