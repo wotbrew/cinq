@@ -95,6 +95,11 @@
 (def ^:const t-uuid 14)
 (def ^:const t-big-map 15)
 
+(def ^:const t-interned 16)
+
+(def ^:const t-single-key-index 17)
+(def ^:const t-multi-key-index 18)
+
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   ;; 16 min for type + payload, 4 min for byte count dynamic types
   (<= 24 (.remaining buffer)))
@@ -204,6 +209,38 @@
                       (.putInt buffer vals-size-pos vals-size)
                       nil)))))))))))
 
+(defn- maybe-encode-symbol [x ^ByteBuffer buffer symbol-table intern-flag]
+  (let [n (intern-symbol symbol-table x intern-flag)]
+    (if n
+      (do
+        (.putLong buffer n)
+        nil)
+      (encode-object x buffer nil intern-flag))))
+
+(defn encode-interned
+  [o buffer symbol-table intern-flag]
+  (if symbol-table
+    (maybe-encode-symbol o buffer symbol-table intern-flag)
+    (do
+      (.putLong ^ByteBuffer buffer t-interned)
+      (if-not (buffer-min-remaining? buffer)
+        ::not-enough-space
+        (encode-object o buffer symbol-table intern-flag)))))
+
+(defprotocol Index
+  (get-indexed-key [index record])
+  (get-indexed-val [index primary-key record]))
+
+(defrecord SingleKeyIndex [table-id kind key]
+  Index
+  (get-indexed-key [index record] (get record key))
+  (get-indexed-val [index primary-key record] (if (identical? :secondary kind) primary-key record)))
+
+(defrecord MultikeyIndex [table-id kind keys]
+  Index
+  (get-indexed-key [index record] (mapv #(get record %) keys))
+  (get-indexed-val [index primary-key record] (if (identical? :secondary kind) primary-key record)))
+
 (extend-protocol Encode
   nil
   (encode-object [_ buffer symbol-table intern-flag]
@@ -258,13 +295,7 @@
   Keyword
   (encode-object [s buffer symbol-table intern-flag]
     (if symbol-table
-      (let [^ByteBuffer buffer buffer
-            n (intern-symbol symbol-table s intern-flag)]
-        (if n
-          (do
-            (.putLong buffer n)
-            nil)
-          (recur s buffer nil intern-flag)))
+      (maybe-encode-symbol s buffer symbol-table intern-flag)
       (let [^ByteBuffer buffer buffer]
         (if (< (.remaining buffer) (+ 32 8))
           ::not-enough-space
@@ -274,13 +305,7 @@
   Symbol
   (encode-object [s buffer symbol-table intern-flag]
     (if symbol-table
-      (let [^ByteBuffer buffer buffer
-            n (intern-symbol symbol-table s intern-flag)]
-        (if n
-          (do
-            (.putLong buffer n)
-            nil)
-          (recur s buffer nil intern-flag)))
+      (maybe-encode-symbol s buffer symbol-table intern-flag)
       (let [^ByteBuffer buffer buffer]
         (if (< (.remaining buffer) (+ 32 8))
           ::not-enough-space
@@ -332,7 +357,19 @@
       (.putLong buffer t-uuid)
       (.putLong buffer (.getMostSignificantBits uuid))
       (.putLong buffer (.getLeastSignificantBits uuid))
-      nil)))
+      nil))
+  SingleKeyIndex
+  (encode-object [i buffer symbol-table intern-flag]
+    (.putLong buffer t-multi-key-index)
+    (if-not (buffer-min-remaining? buffer)
+      ::not-enough-space
+      (encode-small-map i buffer symbol-table intern-flag)))
+  MultikeyIndex
+  (encode-object [i buffer symbol-table intern-flag]
+    (.putLong buffer t-multi-key-index)
+    (if-not (buffer-min-remaining? buffer)
+      ::not-enough-space
+      (encode-small-map i buffer symbol-table intern-flag))))
 
 (declare decode-object)
 
@@ -412,6 +449,9 @@
       t-keyword (decode-keyword buffer)
       t-uuid (decode-uuid buffer)
       t-big-map (decode-big-map buffer symbol-list)
+      t-interned (decode-object buffer symbol-list)
+      t-single-key-index (map->SingleKeyIndex (decode-small-map buffer symbol-list))
+      t-multi-key-index (map->MultikeyIndex (decode-small-map buffer symbol-list))
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn decode-root-unsafe [^CinqUnsafeDynamicMap mut-record ^ByteBuffer buffer ^objects symbol-list]
@@ -468,6 +508,15 @@
         (recur (ByteBuffer/allocate (* 2 (.capacity buf)))))
       (.flip buf))))
 
+(defn encode-interned-heap ^ByteBuffer
+  [o symbol-table intern-flag]
+  (loop [buf (ByteBuffer/allocate 16)]
+    (if-some [err (encode-interned o buf symbol-table intern-flag)]
+      (case err
+        ::not-enough-space
+        (recur (ByteBuffer/allocate (* 2 (.capacity buf)))))
+      (.flip buf))))
+
 (defn- compare-mixed-type-nums [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
   (let [a-pos (.position buf)
         a (decode-object buf symbol-list)
@@ -476,17 +525,6 @@
     (.position buf a-pos)
     (.position valbuf b-pos)
     (compare a b)))
-
-;; very slow for now, will look to speed up for maps sharing key orderings
-(defn- compare-maps [^ByteBuffer buf ^ByteBuffer valbuf symbol-list]
-  (let [a-pos (.position buf)
-        a (decode-object buf symbol-list)
-        b-pos (.position valbuf)
-        b (decode-object valbuf symbol-list)]
-    (.position buf a-pos)
-    (.position valbuf b-pos)
-    (when (= a b)
-      0)))
 
 (defn compare-lex-bufs ^long [^ByteBuffer buf1 ^ByteBuffer buf2]
   (let [mis (.mismatch buf1 buf2)]
@@ -507,7 +545,6 @@
         (if (= 0 bin-ret)
           0
           (case2 tid
-            (t-big-map t-small-map) (compare-maps buf valbuf symbol-list)
             (t-long-neg t-long t-double)
             (if (= val-tid tid)
               bin-ret
@@ -547,6 +584,12 @@
 
     t-instant 16
     t-uuid 24
+    t-interned
+    (let [opos (.position buf)
+          _ (.position buf (+ opos 8))
+          m-size (next-object-size buf)]
+      (.position buf opos)
+      (+ 8 m-size))
 
     ;; assume symbolic
     8

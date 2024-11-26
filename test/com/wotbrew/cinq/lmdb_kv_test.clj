@@ -36,8 +36,8 @@
       (with-open [txn (.txnWrite env)
                   cursor (.openCursor dbi txn)]
         (let [mat (fn [] (vec (keep (fn [{:keys [index key val]}] (when (= :default index) [key val])) (kv/materialize-all cursor symbol-table))))
-              put (fn [k v] (kv/put-clustered cursor key-buffer val-buffer symbol-table :default k v))
-              del (fn [k] (kv/del-clustered cursor key-buffer val-buffer symbol-table :default k))]
+              put (fn [k v] (kv/put cursor key-buffer val-buffer symbol-table :default k v true))
+              del (fn [k] (kv/del cursor key-buffer val-buffer symbol-table :default k true))]
           (f {:cursor cursor
               :symbol-table symbol-table
               :key-buffer key-buffer
@@ -45,30 +45,37 @@
               :mat mat
               :put put
               :del del
-              :del-all #(run! del (map first (mat)))}))))))
+              :del-all #(run! del (map first (mat)))
+              :decode #(codec/decode-object % (codec/symbol-list symbol-table))}))))))
 
 (deftest simple-rt-test
   (with-tmp-cursor
-    (fn [{:keys [mat put del]}]
+    (fn [{:keys [mat put del decode]}]
       (is (= [] (mat)))
       (is (nil? (put :greeting "Hello, world")))
       (is (= [[:greeting "Hello, world"]] (mat)))
+      ;; put could return the previous value memory so we can reindex or decide what to do
+      (let [collision-ret (put :greeting "Hello, world")]
+        (is (instance? ByteBuffer collision-ret))
+        (is (= "Hello, world" (decode collision-ret))))
+      (is (= [[:greeting "Hello, world"]] (mat)))
       (is (nil? (put :greeting2 "Bonjour!")))
       (is (= [[:greeting "Hello, world"] [:greeting2 "Bonjour!"]] (mat)))
-      (is (true? (del :greeting)))
-      (is (false? (del :greeting)))
+      (is (= "Hello, world" (decode (del :greeting))))
+      (is (nil? (del :greeting)))
       (is (= [[:greeting2 "Bonjour!"]] (mat)))
-      (is (true? (del :greeting2)))
+      (is (= "Bonjour!" (decode (put :greeting2 "Ola!"))))
+      (is (= "Ola!" (decode (del :greeting2))))
       (is (= [] (mat))))))
 
 (deftest long-string-test
   (with-tmp-cursor
-    (fn [{:keys [mat put del]}]
+    (fn [{:keys [mat put del decode]}]
       (let [prefix (apply str (repeat 512 "a"))
             s #(str prefix %)]
-        (put (s "a") 0)
-        (is (= [[(s "a") 0]] (mat)))
-        (put (s "a") 0)
+        (is (nil? (put (s "a") -1)))
+        (is (= [[(s "a") -1]] (mat)))
+        (is (= -1 (decode (put (s "a") 0))))
         (is (= [[(s "a") 0]] (mat)))
         (put (s "c") 2)
         (is (= [[(s "a") 0] [(s "c") 2]] (mat)))
@@ -76,7 +83,7 @@
         (is (= [[(s "a") 0] [(s "b") 1] [(s "c") 2]] (mat)))
         (put "" -1)
         (is (= [["" -1] [(s "a") 0] [(s "b") 1] [(s "c") 2]]))
-        (del (s "a"))
+        (is (= 0 (decode (del (s "a")))))
         (is (= [["" -1] [(s "b") 1] [(s "c") 2]] (mat)))))))
 
 (deftest numeric-test
