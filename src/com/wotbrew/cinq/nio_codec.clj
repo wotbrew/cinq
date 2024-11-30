@@ -95,10 +95,9 @@
 (def ^:const t-uuid 14)
 (def ^:const t-big-map 15)
 
-(def ^:const t-interned 16)
-
-(def ^:const t-single-key-index 17)
-(def ^:const t-multi-key-index 18)
+(def ^:const t-single-key-index 16)
+(def ^:const t-multi-key-index 17)
+(def ^:const t-rsn-index 18)
 
 (defn buffer-min-remaining? [^ByteBuffer buffer]
   ;; 16 min for type + payload, 4 min for byte count dynamic types
@@ -221,25 +220,28 @@
   [o buffer symbol-table intern-flag]
   (if symbol-table
     (maybe-encode-symbol o buffer symbol-table intern-flag)
-    (do
-      (.putLong ^ByteBuffer buffer t-interned)
-      (if-not (buffer-min-remaining? buffer)
-        ::not-enough-space
-        (encode-object o buffer symbol-table intern-flag)))))
+    (if-not (buffer-min-remaining? buffer)
+      ::not-enough-space
+      (encode-object o buffer symbol-table intern-flag))))
 
 (defprotocol Index
-  (get-indexed-key [index record])
+  (get-indexed-key [index primary-key record])
   (get-indexed-val [index primary-key record]))
 
 (defrecord SingleKeyIndex [table-id kind key]
   Index
-  (get-indexed-key [index record] (get record key))
-  (get-indexed-val [index primary-key record] (if (identical? :secondary kind) primary-key record)))
+  (get-indexed-key [_index primary-key record] (if (identical? :primary kind) (get record key) [(get record key) primary-key]))
+  (get-indexed-val [_index primary-key record] (if (identical? :secondary kind) primary-key record)))
 
 (defrecord MultikeyIndex [table-id kind keys]
   Index
-  (get-indexed-key [index record] (mapv #(get record %) keys))
-  (get-indexed-val [index primary-key record] (if (identical? :secondary kind) primary-key record)))
+  (get-indexed-key [_index primary-key record] (if (identical? :primary kind) (mapv #(get record %) keys) [(mapv #(get record %) keys) primary-key]))
+  (get-indexed-val [_index primary-key record] (if (identical? :secondary kind) primary-key record)))
+
+(defrecord RsnIndex [table-id kind]
+  Index
+  (get-indexed-key [_ rsn _] rsn)
+  (get-indexed-val [_ _ record] record))
 
 (extend-protocol Encode
   nil
@@ -360,13 +362,19 @@
       nil))
   SingleKeyIndex
   (encode-object [i buffer symbol-table intern-flag]
-    (.putLong buffer t-multi-key-index)
+    (.putLong ^ByteBuffer buffer t-single-key-index)
     (if-not (buffer-min-remaining? buffer)
       ::not-enough-space
       (encode-small-map i buffer symbol-table intern-flag)))
   MultikeyIndex
   (encode-object [i buffer symbol-table intern-flag]
-    (.putLong buffer t-multi-key-index)
+    (.putLong ^ByteBuffer buffer t-multi-key-index)
+    (if-not (buffer-min-remaining? buffer)
+      ::not-enough-space
+      (encode-small-map i buffer symbol-table intern-flag)))
+  RsnIndex
+  (encode-object [i buffer symbol-table intern-flag]
+    (.putLong ^ByteBuffer buffer t-rsn-index)
     (if-not (buffer-min-remaining? buffer)
       ::not-enough-space
       (encode-small-map i buffer symbol-table intern-flag))))
@@ -449,9 +457,9 @@
       t-keyword (decode-keyword buffer)
       t-uuid (decode-uuid buffer)
       t-big-map (decode-big-map buffer symbol-list)
-      t-interned (decode-object buffer symbol-list)
-      t-single-key-index (map->SingleKeyIndex (decode-small-map buffer symbol-list))
-      t-multi-key-index (map->MultikeyIndex (decode-small-map buffer symbol-list))
+      t-single-key-index (map->SingleKeyIndex (decode-object buffer symbol-list))
+      t-multi-key-index (map->MultikeyIndex (decode-object buffer symbol-list))
+      t-rsn-index (map->RsnIndex (decode-object buffer symbol-list))
       (aget symbol-list (unchecked-subtract tid t-max)))))
 
 (defn decode-root-unsafe [^CinqUnsafeDynamicMap mut-record ^ByteBuffer buffer ^objects symbol-list]
@@ -584,12 +592,12 @@
 
     t-instant 16
     t-uuid 24
-    t-interned
+    (t-single-key-index t-multi-key-index t-rsn-index)
     (let [opos (.position buf)
           _ (.position buf (+ opos 8))
-          m-size (next-object-size buf)]
+          ret (next-object-size buf)]
       (.position buf opos)
-      (+ 8 m-size))
+      ret)
 
     ;; assume symbolic
     8

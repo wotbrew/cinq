@@ -16,6 +16,7 @@
   (big-count [relvar]))
 
 (defprotocol IncrementalRelvar
+  ;; todo put vs insert semantics?
   (insert [relvar record])
   (delete [relvar rsn]))
 
@@ -34,3 +35,6 @@
 
 (defprotocol AutoIncrementing
   (set-auto-increment [relvar key]))
+
+(defprotocol Indexed
+  (reindex [relvar f]))

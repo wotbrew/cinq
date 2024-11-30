@@ -3,33 +3,6 @@
   (:import (java.nio ByteBuffer)
            (org.lmdbjava Cursor GetOp PutFlags)))
 
-;; 1 dbi
-;; 'index' prefix on keys
-;; index is a keyword or other interned object (symbol-table) guaranteed to fit in the key.
-;; no DUPSORT otherwise vals have to have a max-key size
-;; on collision we write the whole val by comparing as we go and inserting once we are binary < or = to the existing key.
-;; layout will be optimised for a simple linear loop rather than binary search (small number of keys under collision, usually 1).
-;; this is because long key collisions are gonna be, you know "a bad thing".
-
-;; secondary vs primary
-;; a secondary index includes the val (primary) with the key. This is because a value can map to multiple primary keys
-;; we can then use the same scan algs
-
-;; TODO refactor the walks, put/del in terms of buffer inputs.
-;; avoid code/decode here other than checking for truncation
-;; scan works in terms of raw bufs:
-;; (scan-forward index lmdb-key f init)
-;; (scan-backward index lmdb-key f init)
-
-;; (put index lmdb-key full-key value truncated) (on collision, reserve the new buffer (space requirements can be calculated) and sort)
-;; (del index lmdb-key full-key)
-
-;; RANDOM: map-buf sort will be needed for start-key lookups to work
-;; RANDOM: should we change our mind on nil? how does nil behave in scans, can it be different
-;; from top-level cinq, or should a different poison value be preferred?!,
-
-;; (= 42 a) (clojure semantics)
-
 (def ^:private ^"[Lorg.lmdbjava.PutFlags;" put-flags
   (into-array PutFlags []))
 
@@ -279,13 +252,16 @@
   (let [symbol-list (codec/symbol-list symbol-table)]
     (loop [acc init
            hit (if start (.get cursor start GetOp/MDB_SET_RANGE) (if fwd (.first cursor) (.last cursor)))]
+      ;; todo interrupt
       (if-not hit
         acc
         (if (codec/truncated? (.key cursor))
           (let [index (codec/decode-object (.key cursor) symbol-list)
                 ^ByteBuffer val-buf (.val cursor)
                 n-pairs (.getInt val-buf)
-                ret (walk-collision val-buf symbol-list n-pairs index f init fwd)]
+                ;; copy is required to ensure memory remains valid for the entire walk
+                ;; (e.g you might delete or replace the entry in (f))
+                ret (walk-collision (copy val-buf) symbol-list n-pairs index f init fwd)]
             (if (reduced? ret)
               @ret
               (recur ret (if fwd (.next cursor) (.prev cursor)))))
@@ -294,6 +270,18 @@
             (if (reduced? ret)
               ret
               (recur ret (if fwd (.next cursor) (.prev cursor))))))))))
+
+(defn drop-index [^Cursor cursor ^ByteBuffer lmdb-key-buffer symbol-table index]
+  (let [_ (.clear lmdb-key-buffer)
+        _ (codec/encode-interned index lmdb-key-buffer symbol-table false)
+        sl (codec/symbol-list symbol-table)]
+    (when (.get cursor lmdb-key-buffer GetOp/MDB_SET_RANGE)
+      (loop []
+        ;; todo interrupt
+        (when (identical? index (codec/decode-object (.key cursor) sl))
+          (.delete cursor put-flags)
+          (when (.next cursor)
+            (recur)))))))
 
 (defrecord Entry [index key val])
 
