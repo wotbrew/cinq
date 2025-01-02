@@ -15,7 +15,7 @@
   - Queries inherit the local clojure environment (no parameter placeholders, feels like a `for` loop).
   - Relations are first-class, printable, support reduce so you can use them with core collection functions
   
-> **note** cinq is highly experimental at this stage and will receive breaking API changes. SNAPSHOT only, use at your own risk.
+> **note** cinq is under development, many basic things do not work - and it will receive breaking API changes. SNAPSHOT only, use at your own risk.
 
 ```clojure 
 ;; project.clj
